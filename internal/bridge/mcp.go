@@ -1,0 +1,72 @@
+package bridge
+
+import (
+	"context"
+	"encoding/base64"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"storagehost/internal/broker"
+	"storagehost/internal/remote"
+)
+
+type ReadOutput struct {
+	JobID        string `json:"job_id"`
+	Stdout       string `json:"stdout"`
+	Stderr       string `json:"stderr"`
+	StdoutBase64 string `json:"stdout_base64,omitempty"`
+	StderrBase64 string `json:"stderr_base64,omitempty"`
+	StdoutOffset int64  `json:"stdout_offset"`
+	StderrOffset int64  `json:"stderr_offset"`
+	StdoutLost   bool   `json:"stdout_lost"`
+	StderrLost   bool   `json:"stderr_lost"`
+	StdoutMore   bool   `json:"stdout_more"`
+	StderrMore   bool   `json:"stderr_more"`
+	Done         bool   `json:"done"`
+	ExitCode     int    `json:"exit_code"`
+	Error        string `json:"error,omitempty"`
+}
+
+func NewServer(client *broker.Client) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: "dev"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, remote.TargetsOutput, error) {
+			var out remote.TargetsOutput
+			err := client.Call(ctx, "targets", struct{}{}, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_exec", Description: "Start a noninteractive shell command on an approved target. Returns job_id; read output through remote_read. The command has the configured SSH user privileges."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.StartInput) (*mcp.CallToolResult, remote.StartOutput, error) {
+			var out remote.StartOutput
+			err := client.Call(ctx, "start", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_read", Description: "Read stdout/stderr chunks using returned offsets. done indicates command completion; drain remaining output while *_more is true. *_lost indicates buffer overflow. Invalid UTF-8 is replaced and the original chunk is also returned in *_base64. Offsets count original bytes."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
+			var raw remote.ReadOutput
+			err := client.Call(ctx, "read", input, &raw)
+			out := ReadOutput{
+				JobID: raw.JobID, Stdout: strings.ToValidUTF8(string(raw.Stdout), "�"), Stderr: strings.ToValidUTF8(string(raw.Stderr), "�"),
+				StdoutOffset: raw.StdoutOffset, StderrOffset: raw.StderrOffset,
+				StdoutLost: raw.StdoutLost, StderrLost: raw.StderrLost,
+				StdoutMore: raw.StdoutMore, StderrMore: raw.StderrMore,
+				Done: raw.Done, ExitCode: raw.ExitCode, Error: raw.Error,
+			}
+			if !utf8.Valid(raw.Stdout) {
+				out.StdoutBase64 = base64.StdEncoding.EncodeToString(raw.Stdout)
+			}
+			if !utf8.Valid(raw.Stderr) {
+				out.StderrBase64 = base64.StdEncoding.EncodeToString(raw.Stderr)
+			}
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_cancel", Description: "Cancel an operation and close its SSH connection. Detached remote processes may continue running."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.JobInput) (*mcp.CallToolResult, remote.CancelOutput, error) {
+			var out remote.CancelOutput
+			err := client.Call(ctx, "cancel", input, &out)
+			return nil, out, err
+		})
+	return server
+}

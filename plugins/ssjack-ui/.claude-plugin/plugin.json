@@ -1,0 +1,5 @@
+{
+  "name": "ssjack-ui",
+  "version": "0.1.0",
+  "description": "Separate SSH command and result cards for ssjack MCP tools."
+}

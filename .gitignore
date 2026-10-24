@@ -1,0 +1,17 @@
+/.ssh/*
+!/.ssh/config.example
+!/.ssh/ssjack.example.ktav
+/.claude/settings.local.json
+/.claude/ssjack-ui/
+/build/
+/sshpiper/
+/.mcp.json
+**/.claude-plugin/types/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.exe
+*.test
+*.p12
+*.pfx

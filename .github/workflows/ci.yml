@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test -mod=readonly -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+      - name: Check Bash syntax
+        shell: bash
+        run: bash -n ssh.sh ssjack.sh update-ssjack.sh
+
+  race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test with race detector
+        env:
+          CGO_ENABLED: '1'
+        run: go test -mod=readonly -race -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui

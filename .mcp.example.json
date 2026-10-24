@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ssjack": {
+      "type": "stdio",
+      "command": "ssjack",
+      "args": ["mcp"]
+    }
+  }
+}
