@@ -25,9 +25,6 @@ func TestLicenseTextIncludesProjectAndPinnedDependencyNotices(t *testing.T) {
 			t.Fatalf("missing distribution notice %q", required)
 		}
 	}
-	if strings.Count(text, "Copyright (c) 2009 The Go Authors.") != 1 {
-		t.Fatal("identical Go Authors license must be retained once")
-	}
 }
 
 func normalizeLicense(data []byte) string {
@@ -77,7 +74,7 @@ func TestNoticesMatchLinkedModuleLicenses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(thirdPartyNotices, normalizeLicense(content)) {
-		t.Fatal("Go runtime license is missing")
+	if strings.Count(thirdPartyNotices, normalizeLicense(content)) != 1 {
+		t.Fatal("actual Go runtime license must appear exactly once")
 	}
 }
