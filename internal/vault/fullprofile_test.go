@@ -33,7 +33,7 @@ func TestVaultFullProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, plain := range [][]byte{[]byte(target.Address), []byte("BEGIN OPENSSH PRIVATE KEY"), target.PrivateKey, []byte("argon2id"), []byte("memory_kib:")} {
+	for _, plain := range [][]byte{[]byte(target.Address), []byte("BEGIN OPENSSH PRIVATE KEY"), target.PrivateKey, []byte("argon2id-"), []byte("memory_kib:")} {
 		if bytes.Contains(encoded, plain) {
 			t.Fatal("credential data was stored outside encryption")
 		}

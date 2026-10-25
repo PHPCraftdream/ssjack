@@ -26,7 +26,15 @@ func TestKeyfileFullProfile(t *testing.T) {
 		t.Fatalf("recovery round trip: %v", err)
 	}
 	defer clear(opened)
-	signer, err := ssh.ParsePrivateKey(opened)
+	if needed, err := RequiresPassphrase(encoded); err != nil || !needed {
+		t.Fatal("opaque key did not reach the encrypted import path")
+	}
+	imported, err := ImportSSH(encoded, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(imported)
+	signer, err := ssh.ParsePrivateKey(imported)
 	if err != nil || !bytes.Equal(ssh.MarshalAuthorizedKey(signer.PublicKey()), public) {
 		t.Fatal("recovery public/private binding failed")
 	}

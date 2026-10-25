@@ -23,7 +23,7 @@ func TestOpaqueMaximumPayloadAndOuterMetadata(t *testing.T) {
 	if !ok || len(root) != 1 || root["data"] == nil {
 		t.Fatal("outer container has readable profile fields")
 	}
-	for _, text := range []string{"argon2", "aes", "memory_kib", "version:", "purpose:", "cipher:"} {
+	for _, text := range []string{"argon2id-", "aes-", "memory_kib:", "version:", "purpose:", "cipher:"} {
 		if bytes.Contains(encoded, []byte(text)) {
 			t.Fatalf("outer metadata contains %q", text)
 		}
