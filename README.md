@@ -72,15 +72,15 @@ This custom composition is **not independently audited**. The outermost GCM tag 
 
 ## Installation and compatibility
 
-[Global installers and the release contract](docs/RELEASES.md) are provided as source. They require a real published GitHub Release; writing a workflow does not publish one. No binary release or installed executable update is implied by source changes.
+[Global installers](docs/INSTALL.md) accept a real published GitHub Release or a verified local CI artifact with an explicit SHA-256. Writing a workflow does not publish a release, and source changes alone do not update an installed executable. See the [release contract](docs/RELEASES.md) for asset naming and publisher trust.
 
-CI builds the CLI with the Go version in `go.mod` and embeds build identity. From a compiled checkout, `./ssjack.sh` or `.\ssjack.cmd` locates the local `build/ssjack` executable without building automatically. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
+CI builds the CLI with the Go version in `go.mod` and embeds build identity. Run the globally installed `ssjack` from the desired application working directory; source checkout launchers and local-build update wrappers are no longer needed. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
 
 The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Normal startup never reads plaintext target metadata; explicit `vault migrate FILE` is the only legacy import path. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
 
 ## Security boundaries
 
-This is not isolation from a targeted process running as the same OS user. Administrators, debuggers, memory dumps, swap, and internal Go copies remain relevant. Accessible buffers are cleared best-effort; unlocked signers remain in keeper memory for the session. A process stealing both bootstrap secrets before attachment can race the bridge.
+This is not isolation from a targeted process running as the same OS user. Administrators, debuggers, memory dumps, swap, and internal Go copies remain relevant. Accessible buffers are cleared best-effort; unlocked signers remain in keeper memory for the session. A process stealing the full child bootstrap environment before attachment can race the bridge; bootstrap now uses one environment capability, not separate environment/file channels.
 
 IPC is restricted to canonical `127.0.0.1`/`tcp4`, with numeric-port and loopback-peer checks before authentication, pinned TLS 1.3, and atomic single-use capabilities. SSH outbound is performed only by the keeper for the selected approved credentials. These controls are not an OS firewall.
 

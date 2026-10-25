@@ -1,6 +1,6 @@
 # Verified installation and live-process updates
 
-The official `install.sh` and `install.ps1` handle both release downloads and reviewed local candidates. The development `update-ssjack` wrappers delegate replacement to them instead of maintaining another replacement algorithm. No installer stops or restarts existing processes, elevates itself, changes vault contents, or creates a release.
+The official `install.sh` and `install.ps1` handle both release downloads and reviewed local candidates. Use them directly for global or explicitly selected development destinations; there is no separate local-build update wrapper or second replacement algorithm. No installer stops or restarts existing processes, elevates itself, changes vault contents, or creates a release.
 
 ## Local CI artifact
 

@@ -2,35 +2,26 @@
 
 A cross-platform Go SSH client, encrypted credential manager, key utility, and MCP server. Agent access uses two roles in the same executable:
 
-- `ssjack <harness> [arguments...]` prompts for a passphrase, keeps decrypted SSH keys in memory, and runs the selected harness.
+- `ssjack run <harness> [arguments...]` prompts for a passphrase, keeps decrypted SSH keys in memory, and runs the selected harness.
 - `ssjack mcp` is the stdio bridge started by that harness. Starting another bridge does not grant access by itself.
 
 ```text
-ssjack claude -c
+ssjack run claude -c
 ssjack -p work --bootstrap-timeout 5m run claude -c
 ```
 
 Options belonging to ssjack precede the harness name. The remaining arguments belong to the harness. Native executables are launched without a shell. Windows batch launchers require `cmd.exe`; ambiguous quoting and shell expansion arguments are rejected rather than guessed.
 
-## Build and launch
+## Install and launch
 
-Use the Go version declared in `go.mod`. No automatic build occurs in the launch scripts.
-
-Windows:
+Use the globally installed executable or the explicit path to a verified CI artifact. Source checkout wrappers and local-build updater scripts are no longer provided. Install or update with the official [installers](docs/INSTALL.md); they handle release downloads and verified local candidates without stopping running processes.
 
 ```text
-go build -mod=readonly -trimpath -o build/ssjack.exe ./cmd/ssjack
-.\ssjack.cmd claude -c
+ssjack run claude -c
+ssjack -p work run claude -c
 ```
 
-Linux/macOS:
-
-```sh
-go build -mod=readonly -trimpath -o build/ssjack ./cmd/ssjack
-./ssjack.sh claude -c
-```
-
-Launch from the project directory: the encrypted credentials database and project MCP settings are relative to the current working directory. The wrapper finds the binary next to itself without changing that directory. The binary directory is prepended to PATH only for the child harness so it can start `ssjack mcp`.
+Launch from your application working directory: the encrypted database and MCP settings are relative to that directory. The executable directory is prepended to PATH only for the child harness so it starts the matching `ssjack mcp`. No automatic compilation occurs at launch.
 
 Use an interactive terminal for the passphrase. On Windows, mintty may not provide a usable console handle; use CMD/PowerShell or a suitable `winpty`. Passphrases from environment variables, command arguments, pipes, or chat are not accepted.
 
@@ -92,7 +83,7 @@ Other harnesses may use a different registration format. Configure the same stdi
 Launch normally:
 
 ```text
-ssjack claude -c
+ssjack run claude -c
 ```
 
 The executable embeds the project-local `plugins/ssjack-ui` runtime assets. At startup it installs an immutable, content-addressed copy in `.claude/ssjack-ui/<hash>` and appends that directory to `CLAUDE_CODE_PLUGIN_DIRS` only in the child harness environment. Existing plugin directories are preserved. No manual `--plugin-dir`, global installation, or settings change is required to register the UI plugin. Claude Code's own project trust and plugin policies still apply.
@@ -138,25 +129,11 @@ The old OpenSSH wrappers are retired and unused by the native client and MCP pat
 
 ## Updating an installed executable
 
-Windows:
+Use `install.ps1` on Windows or `install.sh` on Linux/macOS, with a reviewed release or an explicit local candidate and independently verified SHA-256. There is no separate project-local update path. See [INSTALL.md](docs/INSTALL.md) for commands and platform requirements.
 
-```text
-.\update-ssjack.cmd
-```
+The installer stages and verifies the candidate, renames the previous executable, publishes under the original name, and checks the installed hash/help. It attempts rollback on verification failure, never kills a process, and removes only safely identified unused installer-owned previous files after success. Busy or uncertain images are retained. Old inactive copies are not guaranteed to remain available for later rollback.
 
-Git Bash, Linux, or macOS:
-
-```sh
-./update-ssjack.sh
-```
-
-The default candidate is `build/ui-next/ssjack.exe` on Windows and `build/ui-next/ssjack` on Linux/macOS. An optional candidate path may be supplied as the first argument. The target is always the main executable in this project's `build` directory.
-
-The updater stages a copy, checks SHA-256 consistency, and runs the candidate's `--help` before changing the installed path. It renames the previous executable to a unique `ssjack.previous-*` backup and installs the staged version under the original name. It verifies the installed hash and help again. A failed installation attempts to restore the old name without stopping any process. Backups and failed candidates are retained rather than silently deleted.
-
-Running processes keep their old executable image. Restart ssjack normally to use the installed version; the updater never kills processes or restarts the harness. If Windows refuses to rename a running image, the update fails rather than forcing termination.
-
-A project-local lock serializes updater invocations. On POSIX, a hard crash can leave the lock directory behind; confirm no updater is running before removing a stale lock. Checksums verify copy consistency, not publisher identity: only use a trusted candidate, because its help command is executed.
+Running processes continue their old code until explicitly restarted. After an incompatible bootstrap change, restart the launcher and bridge together. Installers do not migrate the encrypted database or alter SSH credentials.
 
 ## Tests
 

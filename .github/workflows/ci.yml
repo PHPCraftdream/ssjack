@@ -76,7 +76,7 @@ jobs:
         run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
       - name: Check Bash syntax
         shell: bash
-        run: bash -n ssjack.sh update-ssjack.sh install.sh tests/installers.sh
+        run: bash -n install.sh tests/installers.sh tests/installers-local.sh
       - name: Retain verified native CLI
         uses: actions/upload-artifact@v4
         with:

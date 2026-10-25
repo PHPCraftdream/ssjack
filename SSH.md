@@ -7,7 +7,7 @@ ssjack -p storage ssh
 ssjack -p storage run claude -c
 ```
 
-The former `ssh.sh` and `ssh.cmd` OpenSSH wrappers and their configuration template have been removed. Use the native client rather than an alternate credential path. The checkout/application launchers are `ssjack.sh` and `ssjack.cmd`.
+The former `ssh.sh` and `ssh.cmd` OpenSSH wrappers and their configuration template have been removed. Use the native client rather than an alternate credential path. Run the installed `ssjack` executable directly; no checkout/application wrappers are required.
 
 ## Host trust
 
