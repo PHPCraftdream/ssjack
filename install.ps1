@@ -1,7 +1,9 @@
 param(
     [string]$Version = '',
     [string]$InstallDir = '',
-    [switch]$NoPathUpdate
+    [switch]$NoPathUpdate,
+    [string]$CandidatePath = '',
+    [string]$SHA256 = ''
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +19,27 @@ function Assert-RegularFile([string]$Path) {
 
 function Get-Hash([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Remove-InactiveBackups([string]$Directory) {
+    try { $items = @(Get-ChildItem -LiteralPath $Directory -Filter 'ssjack.previous-*.exe' -File) }
+    catch { Write-Host 'Previous executable cleanup skipped: directory could not be inspected.'; return }
+    foreach ($item in $items) {
+        if ($item.Name -cnotmatch '^ssjack\.previous-[0-9]{8}T[0-9]{9}Z-[a-f0-9]{32}\.exe$') { continue }
+        $probe = $null
+        try {
+            Assert-RegularFile $item.FullName
+            $probe = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            $probe.Dispose()
+            $probe = $null
+            [IO.File]::Delete($item.FullName)
+            Write-Host "Removed unused previous executable: $($item.FullName)"
+        } catch {
+            Write-Host "Previous executable retained (in use or inaccessible): $($item.FullName)"
+        } finally {
+            if ($probe) { $probe.Dispose() }
+        }
+    }
 }
 
 function Get-ReleaseFile([string]$Uri, [string]$OutFile = '') {
@@ -149,13 +172,25 @@ $oldProtocol = [Net.ServicePointManager]::SecurityProtocol
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        $response = Get-ReleaseFile "https://api.github.com/repos/$repository/releases/latest"
-        if ($response.Content.Length -gt 65536) { throw 'Release metadata is too large.' }
-        $Version = [string](($response.Content | ConvertFrom-Json).tag_name)
-    }
-    if ($Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$') {
-        throw 'Invalid version tag.'
+    $localCandidate = -not [string]::IsNullOrWhiteSpace($CandidatePath)
+    if ($localCandidate) {
+        if ($Version -ne '') { throw 'CandidatePath cannot be combined with Version.' }
+        if ($SHA256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'A verified SHA256 is required for CandidatePath.' }
+        $CandidatePath = [IO.Path]::GetFullPath($CandidatePath)
+        Assert-RegularFile $CandidatePath
+        if ([string]::Equals($CandidatePath, $target, [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate and installed executable must differ.' }
+        if ((Get-Item -LiteralPath $CandidatePath).Length -gt 134217728) { throw 'Candidate is too large.' }
+        $Version = 'verified-local'
+    } else {
+        if ($SHA256 -ne '') { throw 'SHA256 requires CandidatePath.' }
+        if ([string]::IsNullOrWhiteSpace($Version)) {
+            $response = Get-ReleaseFile "https://api.github.com/repos/$repository/releases/latest"
+            if ($response.Content.Length -gt 65536) { throw 'Release metadata is too large.' }
+            $Version = [string](($response.Content | ConvertFrom-Json).tag_name)
+        }
+        if ($Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$') {
+            throw 'Invalid version tag.'
+        }
     }
     if (Test-Path -LiteralPath $InstallDir) {
         $directory = Get-Item -LiteralPath $InstallDir -Force
@@ -175,26 +210,32 @@ try {
     [IO.Directory]::CreateDirectory($stage) | Out-Null
     $candidate = Join-Path $stage 'ssjack.exe'
     $manifest = Join-Path $stage 'SHA256SUMS'
-    $asset = "ssjack_windows_$arch.exe"
-    $base = "https://github.com/$repository/releases/download/$Version"
-    Get-ReleaseFile "$base/$asset" $candidate | Out-Null
-    Get-ReleaseFile "$base/SHA256SUMS" $manifest | Out-Null
-    Assert-RegularFile $candidate
-    Assert-RegularFile $manifest
-    if ((Get-Item -LiteralPath $candidate).Length -gt 134217728 -or (Get-Item -LiteralPath $manifest).Length -gt 65536) {
-        throw 'Downloaded binary or checksum manifest is too large.'
-    }
-    $checksums = @()
-    foreach ($line in [IO.File]::ReadAllLines($manifest)) {
-        $parts = @($line.Trim() -split '\s+')
-        if ($parts.Length -eq 2 -and ($parts[1] -replace '^\*', '') -ceq $asset) {
-            $checksums += $parts[0]
+    if ($localCandidate) {
+        [IO.File]::Copy($CandidatePath, $candidate, $false)
+        $expected = $SHA256.ToLowerInvariant()
+    } else {
+        $asset = "ssjack_windows_$arch.exe"
+        $base = "https://github.com/$repository/releases/download/$Version"
+        Get-ReleaseFile "$base/$asset" $candidate | Out-Null
+        Get-ReleaseFile "$base/SHA256SUMS" $manifest | Out-Null
+        Assert-RegularFile $candidate
+        Assert-RegularFile $manifest
+        if ((Get-Item -LiteralPath $candidate).Length -gt 134217728 -or (Get-Item -LiteralPath $manifest).Length -gt 65536) {
+            throw 'Downloaded binary or checksum manifest is too large.'
         }
+        $checksums = @()
+        foreach ($line in [IO.File]::ReadAllLines($manifest)) {
+            $parts = @($line.Trim() -split '\s+')
+            if ($parts.Length -eq 2 -and ($parts[1] -replace '^\*', '') -ceq $asset) {
+                $checksums += $parts[0]
+            }
+        }
+        if ($checksums.Count -ne 1 -or $checksums[0] -cnotmatch '^[0-9A-Fa-f]{64}$') {
+            throw 'The checksum manifest must contain exactly one valid entry for this binary.'
+        }
+        $expected = $checksums[0].ToLowerInvariant()
     }
-    if ($checksums.Count -ne 1 -or $checksums[0] -cnotmatch '^[0-9A-Fa-f]{64}$') {
-        throw 'The checksum manifest must contain exactly one valid entry for this binary.'
-    }
-    $expected = $checksums[0].ToLowerInvariant()
+    Assert-RegularFile $candidate
     if ((Get-Hash $candidate) -ne $expected) { throw 'SHA-256 mismatch; refusing to execute or install the download.' }
     Assert-Ssjack $candidate
     if ((Get-Hash $candidate) -ne $expected) { throw 'Candidate changed during verification.' }
@@ -216,9 +257,10 @@ try {
         Write-Host "Installed: $target"
         Write-Host "Version: $Version"
         Write-Host "SHA256: $expected"
-        if ($oldMoved) { Write-Host "Previous executable retained: $backup" }
+        if ($oldMoved) { Write-Host "Previous executable renamed: $backup" }
     }
     if (-not $NoPathUpdate) { Add-UserPath $InstallDir }
+    Remove-InactiveBackups $InstallDir
     Write-Host 'No process was stopped. Restart ssjack to use the installed executable.'
 } catch {
     $failure = $_.Exception.Message

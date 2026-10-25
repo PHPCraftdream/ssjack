@@ -3,10 +3,12 @@ set -eu
 
 repository='PHPCraftdream/ssjack'
 version=''
+candidate_path=''
+local_sha256=''
 install_dir='/usr/local/bin'
 
 usage() {
-    printf '%s\n' 'Usage: sh install.sh [--version <tag>] [--install-dir <absolute-directory>]'
+    printf '%s\n' 'Usage: sh install.sh [--version <tag>] [--install-dir <absolute-directory>] [--candidate <absolute-file> --sha256 <digest>]'
 }
 
 fail() {
@@ -24,6 +26,16 @@ while [ "$#" -gt 0 ]; do
         --install-dir)
             [ "$#" -ge 2 ] || fail 'Missing installation directory.'
             install_dir=$2
+            shift 2
+            ;;
+        --candidate)
+            [ "$#" -ge 2 ] || fail 'Missing local candidate.'
+            candidate_path=$2
+            shift 2
+            ;;
+        --sha256)
+            [ "$#" -ge 2 ] || fail 'Missing candidate SHA-256.'
+            local_sha256=$2
             shift 2
             ;;
         --help|-h) usage; exit 0 ;;
@@ -45,20 +57,30 @@ case "$install_dir" in
     /*) ;;
     *) fail 'The installation directory must be absolute.' ;;
 esac
-command -v curl >/dev/null 2>&1 || fail 'curl is required.'
+if [ -n "$candidate_path" ]; then
+    [ -z "$version" ] || fail 'Candidate cannot be combined with version.'
+    case "$candidate_path" in /*) ;; *) fail 'Candidate path must be absolute.' ;; esac
+    [ -f "$candidate_path" ] && [ ! -L "$candidate_path" ] || fail 'Candidate must be a regular file, not a symlink.'
+    [ "$(wc -c < "$candidate_path")" -le 134217728 ] || fail 'Candidate is too large.'
+    printf '%s\n' "$local_sha256" | grep -Eq '^[0-9A-Fa-f]{64}$' || fail 'A verified SHA-256 is required for candidate.'
+    version='verified-local'
+else
+    [ -z "$local_sha256" ] || fail 'SHA-256 requires candidate.'
+    command -v curl >/dev/null 2>&1 || fail 'curl is required.'
 
-if [ -z "$version" ]; then
-    resolved=$(curl --fail --silent --show-error --location --head \
-        --proto '=https' --proto-redir '=https' --tlsv1.2 \
-        --connect-timeout 15 --max-time 180 --output /dev/null --write-out '%{url_effective}' \
-        "https://github.com/$repository/releases/latest") || fail 'Could not resolve the latest release.'
-    prefix="https://github.com/$repository/releases/tag/"
-    case "$resolved" in
-        "$prefix"*) version=${resolved#"$prefix"} ;;
-        *) fail 'Latest release did not resolve to the expected repository.' ;;
-    esac
+    if [ -z "$version" ]; then
+        resolved=$(curl --fail --silent --show-error --location --head \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 180 --output /dev/null --write-out '%{url_effective}' \
+            "https://github.com/$repository/releases/latest") || fail 'Could not resolve the latest release.'
+        prefix="https://github.com/$repository/releases/tag/"
+        case "$resolved" in
+            "$prefix"*) version=${resolved#"$prefix"} ;;
+            *) fail 'Latest release did not resolve to the expected repository.' ;;
+        esac
+    fi
+    printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$' || fail 'Invalid version tag.'
 fi
-printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$' || fail 'Invalid version tag.'
 
 hash_file() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -78,6 +100,35 @@ probe() {
         *'Usage: ssjack '*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+backup_is_unused() {
+    # Without full process visibility, preserve rather than guess.
+    [ "$(id -u)" = 0 ] || return 2
+    command -v lsof >/dev/null 2>&1 || return 2
+    if users=$(lsof -t -- "$1" 2> "$stage/cleanup.stderr"); then
+        return 1
+    else
+        result=$?
+        [ "$result" -eq 1 ] && [ -z "$users" ] && [ ! -s "$stage/cleanup.stderr" ] || return 2
+        return 0
+    fi
+}
+
+remove_inactive_backups() {
+    for previous in "$install_dir"/ssjack.previous-*; do
+        [ -f "$previous" ] && [ ! -L "$previous" ] || continue
+        printf '%s\n' "${previous##*/}" | grep -Eq '^ssjack\.previous-[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9]{8}$' || continue
+        if backup_is_unused "$previous"; then
+            if rm -f -- "$previous"; then
+                printf 'Removed unused previous executable: %s\n' "$previous"
+            else
+                printf 'Previous executable retained (removal failed): %s\n' "$previous" >&2
+            fi
+        else
+            printf 'Previous executable retained (in use or inspection uncertain): %s\n' "$previous"
+        fi
+    done
 }
 
 [ ! -L "$install_dir" ] || fail 'The installation directory must not be a symlink.'
@@ -119,7 +170,7 @@ cleanup() {
         fi
     fi
     if [ -n "$stage" ]; then
-        rm -f "$stage/$asset" "$stage/SHA256SUMS" || code=1
+        rm -f "$stage/$asset" "$stage/SHA256SUMS" "$stage/cleanup.stderr" || code=1
         rmdir "$stage" || code=1
     fi
     rmdir "$lock" || code=1
@@ -130,25 +181,32 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 stage=$(mktemp -d "$install_dir/.ssjack-install.XXXXXXXX")
-base="https://github.com/$repository/releases/download/$version"
-for file in "$asset" SHA256SUMS; do
-    curl --fail --silent --show-error --location \
-        --proto '=https' --proto-redir '=https' --tlsv1.2 \
-        --connect-timeout 15 --max-time 180 --max-filesize 134217728 \
-        --output "$stage/$file" "$base/$file" || fail 'Release download failed; the installed executable was not replaced.'
-done
-[ "$(wc -c < "$stage/SHA256SUMS")" -le 65536 ] || fail 'Checksum manifest is too large.'
-expected=$(awk -v name="$asset" '
-    NF == 2 && ($2 == name || $2 == "*" name) { count++; hash = $1 }
-    END { if (count != 1) exit 1; print hash }
-' "$stage/SHA256SUMS") || fail 'The checksum manifest must contain exactly one entry for the binary.'
-printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || fail 'Invalid SHA-256 checksum.'
-expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
+if [ -n "$candidate_path" ]; then
+    cp "$candidate_path" "$stage/$asset"
+    expected=$(printf '%s' "$local_sha256" | tr 'A-F' 'a-f')
+else
+    base="https://github.com/$repository/releases/download/$version"
+    for file in "$asset" SHA256SUMS; do
+        curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 180 --max-filesize 134217728 \
+            --output "$stage/$file" "$base/$file" || fail 'Release download failed; the installed executable was not replaced.'
+    done
+    [ "$(wc -c < "$stage/SHA256SUMS")" -le 65536 ] || fail 'Checksum manifest is too large.'
+    expected=$(awk -v name="$asset" '
+        NF == 2 && ($2 == name || $2 == "*" name) { count++; hash = $1 }
+        END { if (count != 1) exit 1; print hash }
+    ' "$stage/SHA256SUMS") || fail 'The checksum manifest must contain exactly one entry for the binary.'
+    printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || fail 'Invalid SHA-256 checksum.'
+    expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
+fi
 [ "$(hash_file "$stage/$asset")" = "$expected" ] || fail 'SHA-256 mismatch; refusing to execute or install the download.'
 chmod 0755 "$stage/$asset"
 probe "$stage/$asset" || fail 'The verified download failed the ssjack --help check.'
 [ "$(hash_file "$stage/$asset")" = "$expected" ] || fail 'Candidate changed during verification.'
 if [ -f "$target" ] && [ "$(hash_file "$target")" = "$expected" ]; then
+    committed=true
+    remove_inactive_backups
     printf 'Already installed: %s (%s)\n' "$target" "$version"
     exit 0
 fi
@@ -166,7 +224,8 @@ new_installed=true
 probe "$target" || fail 'Installed executable failed its help check.'
 committed=true
 printf 'Installed: %s\nVersion: %s\nSHA256: %s\n' "$target" "$version" "$expected"
-if $old_moved; then printf 'Previous executable retained: %s\n' "$backup"; fi
+if $old_moved; then printf 'Previous executable renamed: %s\n' "$backup"; fi
+remove_inactive_backups
 printf 'No process was stopped. Restart ssjack to use the installed executable.\n'
 case ":$PATH:" in
     *":$install_dir:"*) ;;

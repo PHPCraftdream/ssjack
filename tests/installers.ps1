@@ -95,8 +95,8 @@ try {
     $before = Hash $target
     Install $update
     $backups = @(Get-ChildItem -LiteralPath $update -Filter 'ssjack.previous-*.exe')
-    Assert ($backups.Count -eq 1) 'Update did not retain exactly one backup.'
-    Assert ((Hash $backups[0].FullName) -eq $before) 'Backup bytes changed.'
+    Assert ($backups.Count -eq 0) 'Inactive previous executable was not removed.'
+    Assert ((Hash $target) -eq (Hash $Fixture)) 'Update did not install the candidate.'
 
     foreach ($mode in @('badsum', 'duplicate', 'missing', 'download-error', 'redirect-http')) {
         $destination = Join-Path $temporary $mode
@@ -132,6 +132,10 @@ try {
     $latest = Join-Path $temporary 'latest'
     Install $latest -Latest
     Assert ((Hash (Join-Path $latest 'ssjack.exe')) -eq (Hash $Fixture)) 'Latest release fixture was not installed.'
+
+    $localRequests = $fixtureState.Requests
+    & (Join-Path $PSScriptRoot 'installers-local.ps1') -Installer $installer -Fixture $Fixture -Directory $temporary
+    Assert ($fixtureState.Requests -eq $localRequests) 'Local candidate tests made network requests.'
 
     $beforeRequests = $fixtureState.Requests
     $originalArch = $env:PROCESSOR_ARCHITECTURE

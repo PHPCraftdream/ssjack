@@ -56,6 +56,13 @@ else
     cp "$SSJACK_FIXTURE_BINARY" "$out"
 fi
 MOCK
+export SSJACK_REAL_ID="$(command -v id)"
+export SSJACK_EFFECTIVE_UID=1000
+cat > "$temporary/tools/id" <<'MOCK'
+#!/bin/sh
+if [ "$1" = '-u' ]; then printf '%s\n' "$SSJACK_EFFECTIVE_UID"; else exec "$SSJACK_REAL_ID" "$@"; fi
+MOCK
+chmod +x "$temporary/tools/id"
 chmod +x "$temporary/tools/uname" "$temporary/tools/curl"
 export PATH="$temporary/tools:$PATH"
 
@@ -109,6 +116,8 @@ unset SSJACK_INSTALL_TEST_FAIL_INSTALLED
 latest="$temporary/latest"
 sh "$root/install.sh" --install-dir "$latest"
 [[ "$(hash_file "$latest/ssjack")" == "$(hash_file "$fixture")" ]]
+
+bash "$root/tests/installers-local.sh" "$root" "$fixture" "$temporary"
 
 before="$(wc -l < "$SSJACK_CURL_CALLS")"
 saved_arch="$SSJACK_FAKE_ARCH"
