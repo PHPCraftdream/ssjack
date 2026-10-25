@@ -50,6 +50,8 @@ jobs:
           "$binary" --help
       - name: Test
         run: go test -mod=readonly -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+      - name: Repeat SSH cancellation regression
+        run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build installer fixture
         shell: bash
         run: |

@@ -46,14 +46,14 @@ func Shell(ctx context.Context, opts ShellOptions) (int, error) {
 	defer closeClient()
 	session, err := client.NewSession()
 	if err != nil {
-		return -1, errors.New("failed to open an interactive SSH session")
+		return -1, sshStageError(ctx, "failed to open an interactive SSH session")
 	}
 	defer session.Close()
 	session.Stdin, session.Stdout, session.Stderr = opts.Stdin, opts.Stdout, opts.Stderr
 	if err := session.RequestPty(opts.Term, opts.Size.Height, opts.Size.Width, ssh.TerminalModes{
 		ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 38400, ssh.TTY_OP_OSPEED: 38400,
 	}); err != nil {
-		return -1, errors.New("server refused the interactive SSH terminal")
+		return -1, sshStageError(ctx, "server refused the interactive SSH terminal")
 	}
 	if opts.Ready != nil {
 		if err := opts.Ready(); err != nil {
@@ -61,7 +61,7 @@ func Shell(ctx context.Context, opts ShellOptions) (int, error) {
 		}
 	}
 	if err := session.Shell(); err != nil {
-		return -1, errors.New("server refused the SSH shell")
+		return -1, sshStageError(ctx, "server refused the SSH shell")
 	}
 	done := make(chan struct{})
 	resizeDone := make(chan struct{})

@@ -10,11 +10,18 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func sshStageError(ctx context.Context, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New(message)
+}
+
 func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, func(), error) {
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return nil, nil, errors.New("failed to connect to the SSH target")
+		return nil, nil, sshStageError(ctx, "failed to connect to the SSH target")
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
@@ -22,7 +29,7 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 	if err != nil {
 		stop()
 		conn.Close()
-		return nil, nil, errors.New("SSH authentication or host key verification failed")
+		return nil, nil, sshStageError(ctx, "SSH authentication or host key verification failed")
 	}
 	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, channels, requests)
@@ -49,7 +56,7 @@ func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, comma
 	defer closeClient()
 	session, err := client.NewSession()
 	if err != nil {
-		return -1, errors.New("failed to open an SSH session")
+		return -1, sshStageError(ctx, "failed to open an SSH session")
 	}
 	defer session.Close()
 	session.Stdout, session.Stderr = stdout, stderr

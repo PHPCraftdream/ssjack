@@ -1,0 +1,21 @@
+# Keep source checkouts canonical across platforms.
+* text=auto eol=lf
+
+*.go text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+
+# Preserve binary payloads and fixtures byte-for-byte.
+*.min.js binary
+*.min.css binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.snap binary
+*.der binary
