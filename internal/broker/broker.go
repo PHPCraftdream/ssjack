@@ -16,15 +16,14 @@ import (
 type Handler func(context.Context, wire.Request) wire.Reply
 
 type Server struct {
-	listener net.Listener
-	pin      string
-	session  string
-	envHash  [32]byte
-	diskHash [32]byte
-	expires  time.Time
-	handler  Handler
-	ctx      context.Context
-	cancel   context.CancelFunc
+	listener  net.Listener
+	pin       string
+	session   string
+	tokenHash [32]byte
+	expires   time.Time
+	handler   Handler
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	mu       sync.Mutex
 	consumed bool
@@ -35,8 +34,8 @@ type Server struct {
 	done     chan struct{}
 }
 
-func Listen(parent context.Context, session, envToken, diskToken string, ttl time.Duration, handler Handler) (*Server, error) {
-	if len(session) != 64 || len(envToken) != 64 || len(diskToken) != 64 || ttl <= 0 || handler == nil {
+func Listen(parent context.Context, session, token string, ttl time.Duration, handler Handler) (*Server, error) {
+	if !validToken(session) || !validToken(token) || ttl <= 0 || handler == nil {
 		return nil, errors.New("invalid session parameters")
 	}
 	config, pin, err := wire.ServerTLS()
@@ -50,8 +49,8 @@ func Listen(parent context.Context, session, envToken, diskToken string, ttl tim
 	ctx, cancel := context.WithCancel(parent)
 	s := &Server{
 		listener: listener, pin: pin, session: session,
-		envHash: sha256.Sum256([]byte(envToken)), diskHash: sha256.Sum256([]byte(diskToken)),
-		expires: time.Now().Add(ttl), handler: handler, ctx: ctx, cancel: cancel,
+		tokenHash: sha256.Sum256([]byte(token)),
+		expires:   time.Now().Add(ttl), handler: handler, ctx: ctx, cancel: cancel,
 		conns: make(map[net.Conn]struct{}), attached: make(chan struct{}), done: make(chan struct{}),
 	}
 	go s.accept()
@@ -135,13 +134,11 @@ func (s *Server) accept() {
 }
 
 func (s *Server) claim(auth wire.Auth) bool {
-	envHash := sha256.Sum256([]byte(auth.EnvToken))
-	diskHash := sha256.Sum256([]byte(auth.DiskToken))
-	envOK := subtle.ConstantTimeCompare(s.envHash[:], envHash[:])
-	diskOK := subtle.ConstantTimeCompare(s.diskHash[:], diskHash[:])
+	tokenHash := sha256.Sum256([]byte(auth.Token))
+	tokenOK := subtle.ConstantTimeCompare(s.tokenHash[:], tokenHash[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.consumed || s.ctx.Err() != nil || !time.Now().Before(s.expires) || auth.Session != s.session || envOK&diskOK != 1 {
+	if s.consumed || s.ctx.Err() != nil || !time.Now().Before(s.expires) || auth.Version != 2 || auth.Session != s.session || tokenOK != 1 {
 		return false
 	}
 	s.consumed = true

@@ -15,7 +15,7 @@ The historical v1 profile below remains readable. New containers use opaque v2 w
 - `internal/keyfile/generate.go`: secret-derived Ed25519 seed, domain separation, temporary private-buffer ownership.
 - `internal/keyfile/openssh.go`: supported key conversion, no empty-passphrase private export.
 - `internal/vault`: encrypted payload schema, strict optional usage field, file writes, locks, revision checks, backup/restore.
-- `internal/broker`: canonical loopback-only endpoint, TLS pinning, two-part single-use capability, session cancellation.
+- `internal/broker`: canonical loopback-only endpoint, TLS pinning, memory-only single-use environment capability, session cancellation.
 - `internal/remote`: SSH server trust, native sessions, command-free verification, fixed authorized_keys update script.
 - `internal/rotation`: required recovery/confirmation/add/verify/commit ordering and failure boundaries.
 - `cmd/ssjack`: terminal-only secrets, per-invocation authorization, usage gating, explicit confirmations, CLI help, diagnostics, export-secret separation.
@@ -52,7 +52,7 @@ Generation for rotation returns an owned plaintext payload only to the local CLI
 - Old inputs, backups, recovery containers, snapshots, and copied exports retain their previous protection. File deletion is not secure erasure.
 - Go strings, parsed SSH objects, expanded AES schedules, runtime/OS copies, swap, dumps, debuggers, and administrators are not guaranteed to be erased or isolated. Clearing accessible byte slices is best-effort.
 - Full-profile allocation can fail under memory pressure. Garbage collection between KDF calls is not an exact RSS bound or proof of memory wiping. No universal 0.5-second latency is promised.
-- Loopback, encrypted storage, and cooperative filesystem locks are not isolation from a targeted same-user process. A process stealing both live bootstrap secrets before attachment can race the intended bridge.
+- Loopback, encrypted storage, and cooperative filesystem locks are not isolation from a targeted same-user process. A process stealing the full child bootstrap environment before attachment can race the intended bridge; the former independent file/environment requirement was explicitly removed.
 - Client usage labels are not remote authorization. Remote accounts, authorized-key options, filesystem permissions, and VM/container boundaries enforce real privileges.
 
 ## Data compatibility and rollback
@@ -81,3 +81,7 @@ Record the reviewer's identity, scope, source commit, environment, findings, rem
 ## Opaque v2 review delta
 
 Review the complete [v2 specification](OPAQUE-FORMAT-PROPOSAL.md) and its implementation separately from prior AI findings. Fixed-profile master extraction retains its v1 HKDF label; v2 layer keys and AAD have distinct versioned domains. All public bootstrap bytes and exact fixed costs are bound into every layer. Canonical authenticated inner metadata is checked only after all layers verify. Maximum user payload remains 64 KiB; envelope overhead is bounded separately. No security claim depends on algorithm names remaining secret. CI reference vectors and production tests are regression evidence, not an independent audit.
+
+## Memory-only bootstrap and cached-key delta
+
+The source now uses version-2 token authentication over the existing pinned-loopback TLS connection, without filesystem bootstrap. This is a one-channel capability, not the previous two-channel model. Normal vault writes retain an owned master after four Argon2id calls and execute all 1000 layers with fresh random nonces; password changes replace the retained context only after commit. Review [BOOTSTRAP.md](BOOTSTRAP.md), `internal/keyfile/unlocked.go`, the vault store, launcher environment, and broker together. The earlier audit does not certify this change. OS swap, dumps, environment capture, and same-user inspection remain separate limits.

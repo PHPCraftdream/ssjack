@@ -40,7 +40,7 @@ func TestKtavPreservesCommandBytesAndIntegers(t *testing.T) {
 
 func TestFrameContainsKtavRatherThanJSON(t *testing.T) {
 	var framed bytes.Buffer
-	if err := Write(&framed, Auth{Session: "session", EnvToken: "a", DiskToken: "b"}); err != nil {
+	if err := Write(&framed, Auth{Version: 2, Session: "session", Token: "a"}); err != nil {
 		t.Fatal(err)
 	}
 	body := framed.Bytes()[4:]

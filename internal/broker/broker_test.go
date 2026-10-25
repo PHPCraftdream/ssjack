@@ -2,8 +2,6 @@ package broker
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,8 +12,8 @@ import (
 
 func fixture(t *testing.T) (*Server, wire.Auth) {
 	t.Helper()
-	auth := wire.Auth{Session: strings.Repeat("1", 64), EnvToken: strings.Repeat("2", 64), DiskToken: strings.Repeat("3", 64)}
-	s, err := Listen(context.Background(), auth.Session, auth.EnvToken, auth.DiskToken, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("1", 64), Token: strings.Repeat("2", 64)}
+	s, err := Listen(context.Background(), auth.Session, auth.Token, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
 		return wire.Reply{OK: true, Data: req.Data}
 	})
 	if err != nil {
@@ -25,15 +23,15 @@ func fixture(t *testing.T) (*Server, wire.Auth) {
 	return s, auth
 }
 
-func TestRequiresBothTokensAndSession(t *testing.T) {
+func TestRequiresTokenSessionAndProtocolVersion(t *testing.T) {
 	s, auth := fixture(t)
-	for _, field := range []string{"env", "disk", "session"} {
+	for _, field := range []string{"token", "version", "session"} {
 		bad := auth
 		switch field {
-		case "env":
-			bad.EnvToken = strings.Repeat("0", 64)
-		case "disk":
-			bad.DiskToken = strings.Repeat("0", 64)
+		case "token":
+			bad.Token = strings.Repeat("0", 64)
+		case "version":
+			bad.Version = 1
 		case "session":
 			bad.Session = strings.Repeat("0", 64)
 		}
@@ -109,8 +107,8 @@ func TestExactlyOneConcurrentAttachAndNoReplay(t *testing.T) {
 }
 
 func TestAttachedSessionOutlivesBootstrapDeadline(t *testing.T) {
-	auth := wire.Auth{Session: strings.Repeat("1", 64), EnvToken: strings.Repeat("2", 64), DiskToken: strings.Repeat("3", 64)}
-	s, err := Listen(context.Background(), auth.Session, auth.EnvToken, auth.DiskToken, 2*time.Second, func(_ context.Context, req wire.Request) wire.Reply {
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("1", 64), Token: strings.Repeat("2", 64)}
+	s, err := Listen(context.Background(), auth.Session, auth.Token, 2*time.Second, func(_ context.Context, req wire.Request) wire.Reply {
 		return wire.Reply{OK: true, Data: req.Data}
 	})
 	if err != nil {
@@ -134,35 +132,27 @@ func TestAttachedSessionOutlivesBootstrapDeadline(t *testing.T) {
 	}
 }
 
-func TestBootstrapFileConsumption(t *testing.T) {
+func TestMemoryBootstrap(t *testing.T) {
 	s, auth := fixture(t)
-	path, cleanup, err := WriteBootstrap(t.TempDir(), Bootstrap{Version: 1, Session: auth.Session, Endpoint: s.Endpoint(), Pin: s.Pin(), DiskToken: auth.DiskToken})
-	if err != nil {
-		t.Fatal(err)
+	bootstrap := Bootstrap{Session: auth.Session, Endpoint: s.Endpoint(), Pin: s.Pin(), Token: auth.Token}
+	bad := bootstrap
+	bad.Token = strings.Repeat("0", 64)
+	if client, err := ConnectBootstrap(context.Background(), bad); err == nil {
+		client.Close()
+		t.Fatal("wrong token accepted")
 	}
-	defer cleanup()
-	data, err := os.ReadFile(path)
-	if err != nil || strings.Contains(string(data), auth.EnvToken) {
-		t.Fatal("environment token must not be written to disk")
-	}
-	if _, err := ConnectFile(context.Background(), path, strings.Repeat("0", 64)); err == nil {
-		t.Fatal("incorrect environment token was accepted")
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal("file was removed before confirmed attachment")
-	}
-	client, err := ConnectFile(context.Background(), path, auth.EnvToken)
+	client, err := ConnectBootstrap(context.Background(), bootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("consumed file was not removed")
+	if err := client.Call(context.Background(), "echo", struct{}{}, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestExpiryAndRejectedFiles(t *testing.T) {
-	s, err := Listen(context.Background(), strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64), time.Millisecond, func(context.Context, wire.Request) wire.Reply { return wire.Reply{OK: true} })
+func TestExpiryAndRejectedMemoryBootstrap(t *testing.T) {
+	s, err := Listen(context.Background(), strings.Repeat("1", 64), strings.Repeat("2", 64), time.Millisecond, func(context.Context, wire.Request) wire.Reply { return wire.Reply{OK: true} })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,14 +162,10 @@ func TestExpiryAndRejectedFiles(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("bootstrap did not expire")
 	}
-	path := filepath.Join(t.TempDir(), "bad.ktav")
-	if err := os.WriteFile(path, []byte(`version: 1
-disk_token: secret
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ConnectFile(context.Background(), path, strings.Repeat("1", 64)); err == nil || strings.Contains(err.Error(), "secret") {
-		t.Fatal("error must reject the file without exposing secrets")
+	for _, token := range []string{"", "secret", strings.Repeat("z", 64)} {
+		if _, err := ConnectBootstrap(context.Background(), Bootstrap{Session: strings.Repeat("1", 64), Token: token}); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatal("invalid token accepted or exposed")
+		}
 	}
 }
 

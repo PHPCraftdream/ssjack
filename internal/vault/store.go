@@ -37,15 +37,17 @@ func Load(path string, password []byte) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := keyfile.Open(encoded, password)
+	plaintext, unlocked, err := keyfile.Unlock(encoded, password)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(plaintext)
 	v, err := unmarshal(plaintext)
 	if err != nil {
+		unlocked.Close()
 		return nil, err
 	}
+	v.unlocked = unlocked
 	v.revision = sha256.Sum256(encoded)
 	v.format, err = keyfile.Format(encoded)
 	if err != nil {
@@ -100,7 +102,47 @@ func SaveContext(ctx context.Context, path string, v *Vault, password []byte) er
 		return err
 	}
 	defer clear(plaintext)
-	encoded, err := keyfile.SealVersion(plaintext, password, v.format)
+	unlocked, err := keyfile.NewUnlocked(password, v.format)
+	if err != nil {
+		return err
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			unlocked.Close()
+		}
+	}()
+	encoded, err := unlocked.Seal(plaintext)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := commit(path, encoded, &v.revision); err != nil {
+		return err
+	}
+	v.revision = sha256.Sum256(encoded)
+	v.unlocked.Close()
+	v.unlocked = unlocked
+	retained = true
+	return nil
+}
+
+// SaveUnlocked uses only the master retained by Load, never the password again.
+func SaveUnlocked(ctx context.Context, path string, v *Vault) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if v.unlocked == nil {
+		return errors.New("vault has no unlocked encryption context")
+	}
+	plaintext, err := marshal(v)
+	if err != nil {
+		return err
+	}
+	defer clear(plaintext)
+	encoded, err := v.unlocked.Seal(plaintext)
 	if err != nil {
 		return err
 	}

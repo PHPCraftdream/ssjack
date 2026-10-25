@@ -32,6 +32,7 @@ type Vault struct {
 	Targets  map[string]Target `json:"targets"`
 	revision [sha256.Size]byte
 	format   int
+	unlocked *keyfile.Unlocked
 }
 
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -41,6 +42,8 @@ func New() *Vault {
 }
 
 func (v *Vault) Close() {
+	v.unlocked.Close()
+	v.unlocked = nil
 	for name, target := range v.Targets {
 		clear(target.PrivateKey)
 		delete(v.Targets, name)

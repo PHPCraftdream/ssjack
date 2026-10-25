@@ -109,7 +109,7 @@ func runRotation(ctx context.Context, path, name string) (int, error) {
 			if err := v.ReplaceKey(name, replacement.PrivateKey); err != nil {
 				return err
 			}
-			return vault.SaveContext(ctx, path, v, secret)
+			return vault.SaveUnlocked(ctx, path, v)
 		},
 	})
 	if err != nil {

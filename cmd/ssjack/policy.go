@@ -80,7 +80,7 @@ func runPolicy(ctx context.Context, path, profile string, args []string) (int, e
 	if err := confirmValue("Type the profile name to save this encrypted policy: ", profile); err != nil {
 		return 1, err
 	}
-	if err := vault.SaveContext(ctx, path, v, secret); err != nil {
+	if err := vault.SaveUnlocked(ctx, path, v); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Saved SSH algorithm preferences inside the encrypted profile. Server pins and private key were not changed.")

@@ -197,14 +197,18 @@ func runHook(args []string) (int, error) {
 }
 
 func runMCP(ctx context.Context) (int, error) {
-	path, token := os.Getenv(broker.EnvFile), os.Getenv(broker.EnvToken)
-	os.Unsetenv(broker.EnvFile)
-	os.Unsetenv(broker.EnvToken)
-	if path == "" || token == "" {
+	bootstrap := broker.Bootstrap{
+		Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint),
+		Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken),
+	}
+	for _, name := range []string{broker.EnvFile, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin} {
+		os.Unsetenv(name)
+	}
+	if bootstrap.Endpoint == "" || bootstrap.Pin == "" || bootstrap.Session == "" || bootstrap.Token == "" {
 		return 1, errors.New("start the MCP bridge through an ssjack session")
 	}
-	client, err := broker.ConnectFile(ctx, path, token)
-	token = ""
+	client, err := broker.ConnectBootstrap(ctx, bootstrap)
+	bootstrap.Token = ""
 	if err != nil {
 		return 1, err
 	}

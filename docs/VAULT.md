@@ -142,7 +142,7 @@ Even after success, **old remote keys are not retired automatically**. Verify ev
 
 Stored data uses four sequential Argon2id operations at 1 GiB each, followed by 1000 nested AES-256-GCM **data encryptions**. This custom composition is not independently audited and does not imply 1000-fold password resistance: the outer GCM tag supplies a candidate-secret check. Go/OS memory copies, swap, dumps, debuggers, and same-user process inspection remain outside strong isolation guarantees.
 
-Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, aliases, other IPs, and invalid ports before TLS/dial. TCP peers must be loopback before authentication. TLS pinning and single-use two-part capabilities remain mandatory. This does not block keeper SSH to approved servers and is not an OS firewall.
+Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, aliases, other IPs, and invalid ports before TLS/dial. TCP peers must be loopback before authentication. TLS pinning and a single-use environment capability remain mandatory; bootstrap files are no longer created. This intentionally replaces two independent bootstrap channels with one. See [BOOTSTRAP.md](BOOTSTRAP.md) for the environment-theft boundary and matching-version requirement. This does not block keeper SSH to approved servers and is not an OS firewall.
 
 Unit tests, synthetic SSH servers, transaction failure fixtures, POSIX script tests, installer tests, race checks, and the dedicated real-1-GiB profile run belong in GitHub CI. Defining or writing a test is not a passed result. See [AUDIT.md](AUDIT.md) for the external-review boundary.
 
@@ -167,3 +167,7 @@ Source metadata, source private-key files, and old copies are never silently del
 The pinned SSH library's `SupportedAlgorithms()` lists define accepted algorithms; unknown, duplicate, and insecure choices are rejected rather than silently ignored by ssh.Config. Default connections use those supported lists explicitly. Host-key pinning remains mandatory and independent of the chosen negotiation algorithms. This changes SSH negotiation preferences, not the four-Argon2id/1000-data-layer storage profile.
 
 The optional known `ssh_policy` object is a payload extension. Older strict readers reject it rather than ignoring it. Original records without usage/policy fields retain safe compiled defaults. Always preserve an encrypted backup before saving extended metadata. Supported algorithm names are not secrets cryptographically; traffic observers can see parts of SSH negotiation, and hiding a filename cannot hide the destination IP from the OS/network.
+
+## Memory-only derived key lifetime
+
+Normal edits reuse the master retained by the authenticated `Load` within that CLI invocation, rather than running four Argon2id calls again for the save. The master and public salts remain in memory only and are cleared on close. Every write still executes all 1000 data-encryption layers with a fresh nonce base before writing ciphertext. Password changes deliberately derive a new master and update the retained context only after successful publication. See [BOOTSTRAP.md](BOOTSTRAP.md) for lifetime, nonce, and OS-copy limits.

@@ -20,7 +20,7 @@ func TestHarnessProcess(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_HELPER") != "1" {
 		return
 	}
-	if len(os.Getenv(broker.EnvToken)) != 64 || os.Getenv(broker.EnvFile) == "" {
+	if len(os.Getenv(broker.EnvToken)) != 64 || os.Getenv(broker.EnvEndpoint) == "" || os.Getenv(broker.EnvFile) != "" {
 		os.Exit(90)
 	}
 	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "arg with spaces" || os.Args[len(os.Args)-1] != "--flag=value" {
@@ -35,7 +35,7 @@ func TestHarnessProcess(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client, err := broker.ConnectFile(ctx, os.Getenv(broker.EnvFile), os.Getenv(broker.EnvToken))
+	client, err := broker.ConnectBootstrap(ctx, broker.Bootstrap{Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint), Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken)})
 	if err != nil {
 		os.Exit(91)
 	}
@@ -51,6 +51,7 @@ func TestHarnessProcess(t *testing.T) {
 func TestLaunchPassesOnlyChildCredentialsAndPreservesExit(t *testing.T) {
 	t.Setenv("SSJACK_TEST_HELPER", "1")
 	t.Setenv(broker.EnvToken, "parent-value")
+	t.Setenv(broker.EnvFile, "stale-file")
 	t.Setenv(uiplugin.EnvDirectories, "parent-plugin")
 	root := t.TempDir()
 	if err := hooks.Install(root, filepath.Join(root, "ssjack.exe")); err != nil {
@@ -74,16 +75,15 @@ func TestLaunchPassesOnlyChildCredentialsAndPreservesExit(t *testing.T) {
 	if err != nil || code != 7 || strings.TrimSpace(stdout.String()) != "attached" {
 		t.Fatalf("harness: %d %v %q %q", code, err, stdout.String(), stderr.String())
 	}
-	if os.Getenv(broker.EnvToken) != "parent-value" || os.Getenv(uiplugin.EnvDirectories) != "parent-plugin" {
+	if os.Getenv(broker.EnvFile) != "stale-file" || os.Getenv(broker.EnvToken) != "parent-value" || os.Getenv(uiplugin.EnvDirectories) != "parent-plugin" {
 		t.Fatal("parent environment was changed")
 	}
 	localSettings, err := os.ReadFile(filepath.Join(root, ".claude", "settings.local.json"))
 	if err != nil || bytes.Contains(localSettings, []byte("PreToolUse")) {
 		t.Fatal("obsolete display hooks were not removed at startup")
 	}
-	files, err := filepath.Glob(filepath.Join(root, ".ssh", "runtime", "session-*"))
-	if err != nil || len(files) != 0 {
-		t.Fatal("bootstrap files were not cleaned up")
+	if _, err := os.Stat(filepath.Join(root, ".ssh", "runtime")); !os.IsNotExist(err) {
+		t.Fatal("memory-only bootstrap created a runtime directory")
 	}
 	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
 	if err != nil || strings.Contains(string(data), "token") || strings.Contains(string(data), "parent-value") {
@@ -115,9 +115,9 @@ func TestExistingMCPIsNotOverwritten(t *testing.T) {
 }
 
 func TestEnvironmentAndFailedLaunchCleanup(t *testing.T) {
-	env := Environment([]string{"PATH=original", "ssjack_env_token=stale", "SSJACK_BOOTSTRAP_FILE=stale", "KEEP=value"}, "new", "file", filepath.Join("bin", "ssjack"))
+	env := Environment([]string{"PATH=original", "ssjack_env_token=stale", "SSJACK_BOOTSTRAP_FILE=stale", "ssjack_session=stale", "SSJACK_ENDPOINT=stale", "SSJACK_CERTIFICATE_SHA256=stale", "KEEP=value"}, broker.Bootstrap{Token: "new", Session: "session", Endpoint: "endpoint", Pin: "pin"}, filepath.Join("bin", "ssjack"))
 	joined := strings.Join(env, "\n")
-	if strings.Contains(joined, "stale") || !strings.Contains(joined, "KEEP=value") || !strings.Contains(joined, "SSJACK_ENV_TOKEN=new") {
+	if strings.Contains(joined, "stale") || strings.Contains(joined, broker.EnvFile+"=") || !strings.Contains(joined, "KEEP=value") || !strings.Contains(joined, "SSJACK_ENV_TOKEN=new") {
 		t.Fatal("incorrect environment")
 	}
 	root := t.TempDir()
@@ -128,8 +128,7 @@ func TestEnvironmentAndFailedLaunchCleanup(t *testing.T) {
 	if err == nil {
 		t.Fatal("nonexistent harness was started")
 	}
-	files, err := filepath.Glob(filepath.Join(root, ".ssh", "runtime", "session-*"))
-	if err != nil || len(files) != 0 {
-		t.Fatal("bootstrap was not cleaned up after launch failure")
+	if _, err := os.Stat(filepath.Join(root, ".ssh", "runtime")); !os.IsNotExist(err) {
+		t.Fatal("failed launch created a runtime directory")
 	}
 }

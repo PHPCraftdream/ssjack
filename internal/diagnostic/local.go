@@ -97,7 +97,7 @@ func inspectMCP(path, executable string) Finding {
 	if entry.Command != "ssjack" && !sameFile(entry.Command, executable) {
 		return Finding{"FAIL", "MCP registration", "entry points to a different executable"}
 	}
-	for _, key := range []string{"SSJACK_ENV_TOKEN", "SSJACK_BOOTSTRAP_FILE"} {
+	for _, key := range []string{"SSJACK_ENV_TOKEN", "SSJACK_BOOTSTRAP_FILE", "SSJACK_SESSION", "SSJACK_ENDPOINT", "SSJACK_CERTIFICATE_SHA256"} {
 		if _, exists := entry.Env[key]; exists {
 			return Finding{"FAIL", "MCP registration", "bootstrap capabilities must not be persisted in MCP settings"}
 		}

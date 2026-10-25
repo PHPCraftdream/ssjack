@@ -19,7 +19,7 @@ func (w *shortWriter) Write(p []byte) (int, error) {
 
 func TestFraming(t *testing.T) {
 	var out shortWriter
-	want := Auth{Session: "session", EnvToken: "a", DiskToken: "b"}
+	want := Auth{Version: 2, Session: "session", Token: "a"}
 	if err := Write(&out, want); err != nil {
 		t.Fatal(err)
 	}

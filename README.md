@@ -14,7 +14,7 @@ ssjack -p home ssh
 ssjack -p home run claude -c
 ```
 
-The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use two-part capability. Human SSH behaves like a normal PTY session after login.
+The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use environment capability without bootstrap files. Human SSH behaves like a normal PTY session after login.
 
 Help is deliberately detailed:
 

@@ -17,8 +17,8 @@ func TestDisconnectCancelsRemoteOperations(t *testing.T) {
 		return -1, ctx.Err()
 	})
 	defer manager.Close()
-	auth := wire.Auth{Session: strings.Repeat("a", 64), EnvToken: strings.Repeat("b", 64), DiskToken: strings.Repeat("c", 64)}
-	keeper, err := broker.Listen(context.Background(), auth.Session, auth.EnvToken, auth.DiskToken, time.Minute, manager.Handle)
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("a", 64), Token: strings.Repeat("b", 64)}
+	keeper, err := broker.Listen(context.Background(), auth.Session, auth.Token, time.Minute, manager.Handle)
 	if err != nil {
 		t.Fatal(err)
 	}

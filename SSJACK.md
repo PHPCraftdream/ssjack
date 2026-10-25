@@ -34,7 +34,7 @@ Launch from the project directory: the encrypted credentials database and projec
 
 Use an interactive terminal for the passphrase. On Windows, mintty may not provide a usable console handle; use CMD/PowerShell or a suitable `winpty`. Passphrases from environment variables, command arguments, pipes, or chat are not accepted.
 
-Keep the launcher in the foreground. A harness that daemonizes and immediately exits its initial process is not supported: the keeper closes when that process exits.
+Keep the launcher in the foreground. A harness that detaches into an angel (background process) and immediately exits its initial process is not supported: the keeper closes when that process exits.
 
 ## Named credentials and legacy configuration: Ktav 0.8.1, pure Go
 
@@ -44,7 +44,6 @@ The following ssjack-owned formats use Ktav:
 
 - SSH configuration: `.ssh/ssjack.ktav`;
 - protected key containers and the encrypted interactive credentials vault;
-- temporary bootstrap file: `bootstrap.ktav`;
 - framed request/response bodies on the internal TLS connection.
 
 JSON remains only at required external interfaces: MCP JSON-RPC, `.mcp.json`, Claude Code settings, and hook event input/output. Existing `json` struct tags are also used by the Ktav library to map Go field names; they do not make the stored documents JSON.
@@ -72,23 +71,13 @@ The passphrase buffer is cleared after unlocking, but Go and the OS cannot guara
 
 This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 
-## Bootstrap: two secrets, one connection
+## Bootstrap: memory only, one connection
 
-Each launch creates independent random 256-bit credentials:
+Each launch creates a random 256-bit capability and passes the endpoint, TLS certificate pin, session identifier, and token only through the child harness environment. No bootstrap file or `.ssh/runtime` directory is created. The parent shell's environment and persistent MCP settings do not receive credentials.
 
-- Token A is passed only in the child harness environment as `SSJACK_ENV_TOKEN`.
-- Token B is written to `.ssh/runtime/session-*/bootstrap.ktav` with the public endpoint, session identifier, and certificate fingerprint.
-- `SSJACK_BOOTSTRAP_FILE` tells the bridge where that file is located.
+The bridge connects only to literal `127.0.0.1` using pinned TLS 1.3. Protocol-v2 authentication atomically consumes the token and binds access to the established connection; the listener then closes. Replay, expiry, disconnect, or a lost acknowledgement requires a new launcher session. The initial attachment deadline remains two minutes by default, at most ten minutes.
 
-The parent shell's environment is not changed. Token A is not written into the bootstrap file, MCP configuration, or command arguments.
-
-The bridge connects only to `127.0.0.1` using TLS 1.3, verifies the pinned certificate, and presents both tokens. The first successful authentication atomically consumes the pair and binds access to that live connection. The listening port then closes. After the acknowledgement, the bridge removes the bootstrap file. Failure to remove it closes the connection.
-
-An acknowledgement lost in transit does not permit another authentication attempt. Reconnection requires a new launcher session and new credentials. The bridge removes bootstrap variables from its own environment, but cannot remove them from the parent harness environment; the old token is no longer valid after attachment.
-
-The initial attachment deadline defaults to two minutes and can be increased up to ten minutes. Bootstrap data is cleaned up on expiry, normal exit, or launch failure. A hard crash can leave a file behind, but without its live keeper it grants no access. Deletion is not guaranteed secure erasure from disks or backups.
-
-Someone who obtains only the file or only the environment token cannot authenticate. Someone who obtains both before consumption can race the legitimate bridge. Child programs of the selected harness can inherit its token. Processes sharing one harness MCP connection are not individually distinguished.
+This intentionally replaces the former independent environment/file channels with one channel. Theft of the full child bootstrap environment before attachment can win the connection race. Same-user processes and children of the selected harness are not strongly isolated. Old and new bridge/keeper versions cannot attach to each other; restart the launcher after updating. See [the bootstrap and memory-key specification](docs/BOOTSTRAP.md).
 
 ## MCP registration
 

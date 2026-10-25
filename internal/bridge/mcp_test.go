@@ -17,8 +17,8 @@ import (
 func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	auth := wire.Auth{Session: strings.Repeat("1", 64), EnvToken: strings.Repeat("2", 64), DiskToken: strings.Repeat("3", 64)}
-	keeper, err := broker.Listen(ctx, auth.Session, auth.EnvToken, auth.DiskToken, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("1", 64), Token: strings.Repeat("2", 64)}
+	keeper, err := broker.Listen(ctx, auth.Session, auth.Token, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
 		switch req.Operation {
 		case "targets":
 			return broker.Result(remote.TargetsOutput{Targets: []string{"allowed"}}, nil)
@@ -76,7 +76,7 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 			t.Fatalf("%s: %+v, %v", call.name, result, err)
 		}
 		data, err := json.Marshal(result)
-		if err != nil || !strings.Contains(string(data), call.text) || strings.Contains(string(data), auth.EnvToken) || strings.Contains(string(data), auth.DiskToken) {
+		if err != nil || !strings.Contains(string(data), call.text) || strings.Contains(string(data), auth.Token) {
 			t.Fatalf("unexpected response for %s", call.name)
 		}
 	}

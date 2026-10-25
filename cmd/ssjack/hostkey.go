@@ -73,7 +73,7 @@ func runHostKey(ctx context.Context, path string, args []string) (int, error) {
 	if err := v.ReplaceHostKeys(args[1], []string{string(ssh.MarshalAuthorizedKey(key))}); err != nil {
 		return 1, err
 	}
-	if err := vault.SaveContext(ctx, path, v, secret); err != nil {
+	if err := vault.SaveUnlocked(ctx, path, v); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Updated encrypted server pins only; connection identity and usage were preserved.")

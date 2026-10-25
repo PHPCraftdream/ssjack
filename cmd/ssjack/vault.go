@@ -134,7 +134,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	if err := vault.SaveContext(ctx, path, v, secret); err != nil {
+	if err := vault.SaveUnlocked(ctx, path, v); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Encrypted vault updated. Imported source files were not changed or removed.")

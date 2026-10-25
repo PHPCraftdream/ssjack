@@ -24,9 +24,9 @@ import (
 const MaxFrame = 256 * 1024
 
 type Auth struct {
-	Session   string `json:"session"`
-	EnvToken  string `json:"env_token"`
-	DiskToken string `json:"disk_token"`
+	Version int    `json:"version"`
+	Session string `json:"session"`
+	Token   string `json:"token"`
 }
 
 type Reply struct {

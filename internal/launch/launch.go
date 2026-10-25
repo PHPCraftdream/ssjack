@@ -29,8 +29,8 @@ type Options struct {
 	Stderr       io.Writer
 }
 
-func Environment(base []string, token, file, executable string) []string {
-	out := make([]string, 0, len(base)+3)
+func Environment(base []string, bootstrap broker.Bootstrap, executable string) []string {
+	out := make([]string, 0, len(base)+5)
 	path := ""
 	for _, item := range base {
 		name, value, ok := strings.Cut(item, "=")
@@ -38,7 +38,8 @@ func Environment(base []string, token, file, executable string) []string {
 			continue
 		}
 		switch {
-		case strings.EqualFold(name, broker.EnvToken), strings.EqualFold(name, broker.EnvFile):
+		case strings.EqualFold(name, broker.EnvToken), strings.EqualFold(name, broker.EnvFile),
+			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin):
 			continue
 		case strings.EqualFold(name, "PATH"):
 			path = value
@@ -47,7 +48,8 @@ func Environment(base []string, token, file, executable string) []string {
 		}
 	}
 	out = append(out, "PATH="+filepath.Dir(executable)+string(os.PathListSeparator)+path)
-	return append(out, broker.EnvToken+"="+token, broker.EnvFile+"="+file)
+	return append(out, broker.EnvToken+"="+bootstrap.Token, broker.EnvSession+"="+bootstrap.Session,
+		broker.EnvEndpoint+"="+bootstrap.Endpoint, broker.EnvPin+"="+bootstrap.Pin)
 }
 
 func EnsureMCP(root string) error {
@@ -112,42 +114,22 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	diskToken, err := wire.RandomToken()
-	if err != nil {
-		return 1, err
-	}
-	keeper, err := broker.Listen(ctx, session, envToken, diskToken, opts.BootstrapTTL, opts.Handler)
+	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, opts.Handler)
 	if err != nil {
 		return 1, err
 	}
 	defer keeper.Close()
-	file, cleanup, err := broker.WriteBootstrap(filepath.Join(root, ".ssh", "runtime"), broker.Bootstrap{
-		Version: 1, Session: session, Endpoint: keeper.Endpoint(), Pin: keeper.Pin(), DiskToken: diskToken,
-	})
-	if err != nil {
-		return 1, err
-	}
-	defer cleanup()
+	bootstrap := broker.Bootstrap{Session: session, Endpoint: keeper.Endpoint(), Pin: keeper.Pin(), Token: envToken}
 	command, err := harnessCommand(ctx, opts.Command)
 	if err != nil {
 		return 1, err
 	}
 	command.Dir = root
-	command.Env = uiplugin.Environment(Environment(os.Environ(), envToken, file, opts.Executable), pluginDirectory)
+	command.Env = uiplugin.Environment(Environment(os.Environ(), bootstrap, opts.Executable), pluginDirectory)
 	command.Stdin, command.Stdout, command.Stderr = opts.Stdin, opts.Stdout, opts.Stderr
 	if err := command.Start(); err != nil {
 		return 1, fmt.Errorf("failed to start harness: %w", err)
 	}
-	// Remove bootstrap data on expiry even while the harness is still running.
-	finished := make(chan struct{})
-	defer close(finished)
-	go func() {
-		select {
-		case <-keeper.Done():
-			cleanup()
-		case <-finished:
-		}
-	}()
 	err = command.Wait()
 	if err == nil {
 		return 0, nil

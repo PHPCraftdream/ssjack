@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"storagehost/internal/legacy"
 	"storagehost/internal/remote"
@@ -72,10 +73,15 @@ func runLegacyMigration(ctx context.Context, destination, profile, source string
 		return 1, err
 	}
 	defer clear(private)
-	usage, err := credentialField("Usage both/human/agent", "both", true)
+	usageInput, err := readVisibleInput("Usage both/human/agent (Enter for both): ", true)
 	if err != nil {
 		return 1, err
 	}
+	usage := "both"
+	if len(usageInput) != 0 {
+		usage = strings.TrimSpace(string(usageInput))
+	}
+	clear(usageInput)
 	target := vault.Target{Address: old.Address, User: old.User, PrivateKey: private, HostKeys: pins, Usage: usage}
 	if err := target.Validate(); err != nil {
 		return 1, err
@@ -85,7 +91,7 @@ func runLegacyMigration(ctx context.Context, destination, profile, source string
 	}
 	fmt.Fprintln(os.Stderr, "Importing connection settings, private key bytes, and already trusted server pins into encrypted profile:", profile)
 	fmt.Fprintln(os.Stderr, "No source file will be deleted. Old plaintext metadata and weaker key copies remain until separately retired.")
-	if err := confirmValue("Type the destination profile name to confirm: ", profile); err != nil {
+	if err := confirmVisibleValue("Type the destination profile name to confirm: ", profile); err != nil {
 		return 1, err
 	}
 	if !fresh {
@@ -99,7 +105,7 @@ func runLegacyMigration(ctx context.Context, destination, profile, source string
 	if fresh {
 		err = vault.CreateWithRecords(ctx, destination, v, secret)
 	} else {
-		err = vault.SaveContext(ctx, destination, v, secret)
+		err = vault.SaveUnlocked(ctx, destination, v)
 	}
 	if err != nil {
 		return 1, err
