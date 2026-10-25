@@ -34,7 +34,12 @@ func TestContainerRoundTripAndLayerGrowth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ciphertext) != len(plaintext)+1000*16 || d.Layers != 1000 || d.MemoryKiB != 1024*1024 {
+	envelope, err := wrapPayload(d, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(envelope)
+	if len(ciphertext) != len(envelope)+1000*16 || d.Layers != 1000 || d.MemoryKiB != 1024*1024 {
 		t.Fatal("incorrect layer growth or production parameters")
 	}
 	header, salts, nonce, err := d.header()
@@ -53,11 +58,11 @@ func TestContainerRoundTripAndLayerGrowth(t *testing.T) {
 			t.Fatal(err)
 		}
 		peeled, err = aead.Open(peeled[:0], layerNonce, peeled, aad)
-		if err != nil || len(peeled) != len(plaintext)+index*16 {
+		if err != nil || len(peeled) != len(envelope)+index*16 {
 			t.Fatalf("layer %d: %v", index, err)
 		}
 	}
-	if !bytes.Equal(peeled, plaintext) {
+	if !bytes.Equal(peeled, envelope) {
 		t.Fatal("layers did not encrypt the original data")
 	}
 	opened, err := open(encoded, password, derive)
@@ -82,7 +87,7 @@ func marshalDocument(t *testing.T, d document) []byte {
 }
 
 func TestInvalidDocumentsRejectedBeforeKDF(t *testing.T) {
-	encoded, err := seal([]byte("key"), []byte("secret"), testDerive)
+	encoded, err := sealLegacy(t, []byte("key"), []byte("secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +162,11 @@ func TestCiphertextAndMetadataAuthentication(t *testing.T) {
 	}
 	nonce[0] ^= 1
 	changed.Nonce = base64.StdEncoding.EncodeToString(nonce)
-	if _, err := open(marshalDocument(t, changed), []byte("secret"), testDerive); err == nil {
+	bad, err := encode(changed, ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open(bad, []byte("secret"), testDerive); err == nil {
 		t.Fatal("modified header was accepted")
 	}
 }
@@ -274,4 +283,13 @@ func TestInputBounds(t *testing.T) {
 			t.Fatal("invalid secret was accepted")
 		}
 	}
+}
+
+func sealLegacy(t *testing.T, plaintext, password []byte) ([]byte, error) {
+	t.Helper()
+	d, err := newDocument()
+	if err != nil {
+		return nil, err
+	}
+	return sealDocument(d, plaintext, password, testDerive)
 }

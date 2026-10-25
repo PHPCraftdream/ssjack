@@ -47,6 +47,11 @@ func Load(path string, password []byte) (*Vault, error) {
 		return nil, err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.format, err = keyfile.Format(encoded)
+	if err != nil {
+		v.Close()
+		return nil, err
+	}
 	return v, nil
 }
 
@@ -95,7 +100,7 @@ func SaveContext(ctx context.Context, path string, v *Vault, password []byte) er
 		return err
 	}
 	defer clear(plaintext)
-	encoded, err := keyfile.Seal(plaintext, password)
+	encoded, err := keyfile.SealVersion(plaintext, password, v.format)
 	if err != nil {
 		return err
 	}

@@ -104,7 +104,7 @@ jobs:
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -117,4 +117,4 @@ jobs:
         env:
           CGO_ENABLED: '0'
           SSJACK_TEST_FULL_KDF: '1'
-        run: go test -mod=readonly -run '^TestVaultFullProfile$' -count=1 -timeout 300s ./internal/vault
+        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile

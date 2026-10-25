@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"storagehost/internal/keyfile"
 )
 
 func TestVaultFullProfile(t *testing.T) {
@@ -31,7 +33,7 @@ func TestVaultFullProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, plain := range [][]byte{[]byte(target.Address), []byte("BEGIN OPENSSH PRIVATE KEY"), target.PrivateKey} {
+	for _, plain := range [][]byte{[]byte(target.Address), []byte("BEGIN OPENSSH PRIVATE KEY"), target.PrivateKey, []byte("argon2id"), []byte("memory_kib:")} {
 		if bytes.Contains(encoded, plain) {
 			t.Fatal("credential data was stored outside encryption")
 		}
@@ -69,5 +71,85 @@ func TestVaultFullProfile(t *testing.T) {
 	defer restored.Close()
 	if restored.Targets["selected"].User != target.User {
 		t.Fatal("production restore did not recover the original record")
+	}
+}
+
+func TestVaultUpgradeFullProfile(t *testing.T) {
+	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
+		t.Skip("production KDF runs only in GitHub CI")
+	}
+	path := filepath.Join(t.TempDir(), "legacy")
+	password := []byte("production upgrade fixture secret")
+	v := New()
+	defer v.Close()
+	v.Targets["main"] = testTarget(t)
+	plaintext, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(plaintext)
+	legacy, err := keyfile.SealVersion(plaintext, password, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(path, legacy, nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if err := Save(path, loaded, password); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = readEncoded(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version, err := keyfile.Format(legacy); err != nil || version != 1 {
+		t.Fatal("ordinary save silently upgraded v1")
+	}
+	oldBackup := filepath.Join(filepath.Dir(path), "v1-backup")
+	if err := Backup(context.Background(), path, oldBackup, password); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(oldBackup); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatal("backup rewrote v1 bytes")
+	}
+	if _, err := PrepareUpgrade(context.Background(), path, []byte("wrong")); err == nil {
+		t.Fatal("wrong secret accepted")
+	}
+	plan, err := PrepareUpgrade(context.Background(), path, password)
+	if err != nil || !plan.Needed() {
+		t.Fatalf("prepare upgrade: %v", err)
+	}
+	backup, err := plan.Commit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(backup); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatal("original v1 not preserved exactly")
+	}
+	upgraded, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	if upgraded.format != 2 || !bytes.Equal(upgraded.Targets["main"].PrivateKey, loaded.Targets["main"].PrivateKey) {
+		t.Fatal("upgrade changed format or SSH identity")
+	}
+	again, err := PrepareUpgrade(context.Background(), path, password)
+	if err != nil || again.Needed() {
+		t.Fatalf("idempotent prepare: %v", err)
+	}
+	if _, err := again.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Restore(context.Background(), path, oldBackup, password, password); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readEncoded(path); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatal("rollback did not restore exact v1 bytes")
 	}
 }

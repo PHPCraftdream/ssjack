@@ -58,7 +58,15 @@ ssjack -p storage key public
 
 `vault public` outputs only the OpenSSH public key and can be redirected to a `.pub` file. Private bytes are never printed. Every command still requires interactive vault authorization. Importing a different key does not update the server's `authorized_keys`; install its public key through a trusted connection before relying on it.
 
-## Container version 1
+## Default opaque container v2
+
+New containers and databases use v2: one outer `data` field holding canonical base64 of four public salts, a nonce base, and ciphertext. Algorithm names and cost fields are inside an authenticated canonical Ktav envelope. The same four 1 GiB Argon2id calls and 1000 full-data AES-GCM layers remain; v2 uses distinct version-bound layer domains. The 64 KiB user-payload limit is unchanged, with an additional 96 KiB bound for the inner envelope and 256 KiB for the complete file. Each layer adds 16 bytes to the envelope, not directly to the raw user payload.
+
+Existing v1 files remain readable. Ordinary vault edits and password changes preserve the loaded container version. Use `ssjack vault upgrade` for an explicit authenticated v1-to-v2 transition, with exact `UPGRADE` confirmation, a retained encrypted v1 recovery copy, and revision-checked replacement. Backup/restore retain exact original bytes. To preserve a standalone old key while creating a v2 copy, use `--protect-key` with a new output path. Neither operation changes SSH identity or strengthens older copies.
+
+This conceals outer labels, not algorithms from public source, network destinations, file size, or timestamps. See [the v2 specification](OPAQUE-FORMAT-PROPOSAL.md) for exact domains, packet offsets, inner fields, bounds, and rollback.
+
+## Legacy container version 1
 
 The file starts with `# ssjack encrypted key v1` and contains a Ktav document emitted by `github.com/ktav-lang/golang/pure` v0.8.1. No private key payload is stored as JSON or unencrypted text.
 
@@ -90,7 +98,7 @@ The custom container is not an OpenSSH private-key file. External SSH clients ca
 
 ## Verification
 
-The source includes tests for all 1000 data layers, fixed profiles, tampering, wrong secrets, fresh salts/nonces, purpose separation, derived Ed25519 identity, legacy conversion, and exclusive output creation. Unit tests inject an unexported low-memory Argon2id implementation; production functions always use the fixed 1 GiB profile. These unit tests do not constitute a measurement of full-profile RAM or latency. A separate GitHub CI job runs `TestVaultFullProfile` with the real 1 GiB KDF to exercise vault creation, loading, modification, and reloading. The test-only environment gate does not alter the application's KDF or enable a cheaper production profile. No CI result is implied merely by defining the job.
+The source includes tests for all 1000 data layers, fixed profiles, tampering, wrong secrets, fresh salts/nonces, purpose separation, derived Ed25519 identity, legacy conversion, and exclusive output creation. Unit tests inject an unexported low-memory Argon2id implementation; production functions always use the fixed 1 GiB profile. These unit tests do not constitute a measurement of full-profile RAM or latency. A separate GitHub CI job runs production-profile tests for key generation/recovery, database creation/editing, v1-preserving saves/backups, explicit v2 upgrade, idempotent retry, and exact v1 rollback with the real 1 GiB KDF. Independent fixed-parameter reference constructions exercise both container versions without production header/envelope/layer helpers. The test-only environment gate does not alter the application's KDF or enable a cheaper production profile. No CI result is implied merely by defining the job.
 
 Real credentials are never needed for the tests. Heavy calibration or conversion of a real key is not performed automatically.
 

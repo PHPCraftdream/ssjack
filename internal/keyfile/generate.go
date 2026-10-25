@@ -14,7 +14,7 @@ func Generate(password []byte) ([]byte, []byte, error) {
 }
 
 func generate(password []byte, derive deriveFunc) ([]byte, []byte, error) {
-	d, err := newDocument()
+	d, err := newOpaqueDocument()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -23,7 +23,7 @@ func generate(password []byte, derive deriveFunc) ([]byte, []byte, error) {
 
 // GenerateRecovery also returns an owned plaintext payload for in-memory rotation.
 func GenerateRecovery(password []byte) ([]byte, []byte, []byte, error) {
-	d, err := newDocument()
+	d, err := newOpaqueDocument()
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -65,7 +65,12 @@ func generateMaterial(d document, password []byte, derive deriveFunc) ([]byte, [
 			clear(plaintext)
 		}
 	}()
-	ciphertext, err := encryptLayers(plaintext, master, nonce, header, "storage")
+	envelope, err := wrapPayload(d, plaintext)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer clear(envelope)
+	ciphertext, err := encryptLayers(envelope, master, nonce, header, "storage")
 	if err != nil {
 		return nil, nil, nil, err
 	}

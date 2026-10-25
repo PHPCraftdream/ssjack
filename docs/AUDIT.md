@@ -4,11 +4,13 @@
 
 **No independent external cryptographic audit has been completed.** Author review, regression tests, a second implementation, and successful CI would be useful evidence, but none alone is an independent security assessment. No auditor has been engaged or granted access to private credentials. Review the public source only unless the user separately authorizes other material.
 
-The format and cost profile below are intentionally unchanged by the CLI/recovery work. This document is a review inventory, not a claim that the custom construction is necessary, optimal, or proven secure.
+The historical v1 profile below remains readable. New containers use opaque v2 with unchanged KDF costs and layer count, but a new authenticated envelope and layer domain; see [the format delta](OPAQUE-FORMAT-PROPOSAL.md). This delta requires separate review. This document is a review inventory, not a claim that the custom construction is necessary, optimal, or proven secure.
 
 ## Review entry points
 
 - `internal/keyfile/container.go`: parsing, fixed parameters, public header, size limits.
+- `internal/keyfile/opaque.go`: one-field v2 parser, packet/envelope bounds, authenticated inner profile.
+- `internal/vault/upgrade.go`: verified format conversion, exact recovery copy, explicit publication.
 - `internal/keyfile/crypto.go`: four KDF calls, master derivation, layer keys/nonces/AAD, full-data encryption/decryption.
 - `internal/keyfile/generate.go`: secret-derived Ed25519 seed, domain separation, temporary private-buffer ownership.
 - `internal/keyfile/openssh.go`: supported key conversion, no empty-passphrase private export.
@@ -55,7 +57,7 @@ Generation for rotation returns an owned plaintext payload only to the local CLI
 
 ## Data compatibility and rollback
 
-The encrypted container profile is unchanged. The vault payload retains version 1 and accepts exactly the original four record fields plus the known optional usage field. Absent usage means `both`. Policy-bearing records are rejected by old strict readers, not silently downgraded. Existing files are not migrated until explicitly saved. Preserve an encrypted backup before adopting new metadata; do not erase the old copy as part of migration.
+New containers use v2, while ordinary saves preserve the loaded v1/v2 version. Explicit `vault upgrade` verifies the replacement and preserves exact v1 ciphertext before CAS publication. The vault payload retains version 1 and accepts the original four record fields plus known optional usage and SSH policy fields. Absent usage means `both`. Policy-bearing records are rejected by old strict readers, not silently downgraded. Existing files are not migrated until explicitly saved. Preserve an encrypted backup before adopting new metadata; do not erase the old copy as part of migration.
 
 Backup writes only ciphertext that has already authenticated and passed schema validation. Restore verifies both revisions before user confirmation and retains an encrypted previous copy before CAS publication. It restores the backup's password/profile, not an implicit re-encryption under the current password. Filesystem power-loss behavior remains platform-dependent.
 
@@ -75,3 +77,7 @@ An independent reviewer should assess at least:
 - CLI confirmations, output secrecy, build identity, downgrade/compatibility behavior, and signed-release/publisher trust assumptions.
 
 Record the reviewer's identity, scope, source commit, environment, findings, remediation, and retest evidence. Do not mark this document or the format independently audited before that work actually happens.
+
+## Opaque v2 review delta
+
+Review the complete [v2 specification](OPAQUE-FORMAT-PROPOSAL.md) and its implementation separately from prior AI findings. Fixed-profile master extraction retains its v1 HKDF label; v2 layer keys and AAD have distinct versioned domains. All public bootstrap bytes and exact fixed costs are bound into every layer. Canonical authenticated inner metadata is checked only after all layers verify. Maximum user payload remains 64 KiB; envelope overhead is bounded separately. No security claim depends on algorithm names remaining secret. CI reference vectors and production tests are regression evidence, not an independent audit.

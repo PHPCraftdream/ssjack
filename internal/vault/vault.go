@@ -31,6 +31,7 @@ type Vault struct {
 	Version  int               `json:"version"`
 	Targets  map[string]Target `json:"targets"`
 	revision [sha256.Size]byte
+	format   int
 }
 
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)

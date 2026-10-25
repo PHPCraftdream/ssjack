@@ -37,7 +37,7 @@ type document struct {
 }
 
 func IsContainer(data []byte) bool {
-	return bytes.HasPrefix(data, []byte(Magic))
+	return bytes.HasPrefix(data, []byte(Magic)) || bytes.HasPrefix(data, []byte("data:"))
 }
 
 func newDocument() (document, error) {
@@ -61,11 +61,11 @@ func newDocument() (document, error) {
 }
 
 func (d document) header() ([]byte, [][]byte, []byte, error) {
-	if d.Version != 1 || d.KDF != "argon2id-x4-hkdf-sha256" || d.MemoryKiB != MemoryKiB ||
+	if (d.Version != 1 && d.Version != 2) || d.KDF != "argon2id-x4-hkdf-sha256" || d.MemoryKiB != MemoryKiB ||
 		d.Passes != argonPasses || d.Parallelism != argonThreads || d.Layers != Layers || len(d.Salts) != 4 {
 		return nil, nil, nil, errors.New("unsupported encrypted key parameters")
 	}
-	header := []byte("ssjack-key/v1\x00argon2id-x4-hkdf-sha256\x00")
+	header := []byte(fmt.Sprintf("ssjack-key/v%d\x00argon2id-x4-hkdf-sha256\x00", d.Version))
 	for _, value := range []int{d.Version, d.MemoryKiB, d.Passes, d.Parallelism, d.Layers} {
 		header = binary.BigEndian.AppendUint32(header, uint32(value))
 	}
@@ -103,7 +103,10 @@ func decodeFixed(encoded string, size int) ([]byte, error) {
 }
 
 func decode(data []byte) (document, []byte, error) {
-	if len(data) > MaxSize || !IsContainer(data) {
+	if bytes.HasPrefix(data, []byte("data:")) {
+		return decodeOpaque(data)
+	}
+	if len(data) > MaxSize || !bytes.HasPrefix(data, []byte(Magic)) {
 		return document{}, nil, errors.New("invalid encrypted key document")
 	}
 	body := string(data[len(Magic):])
@@ -124,6 +127,9 @@ func decode(data []byte) (document, []byte, error) {
 	if err := pure.LoadsInto(body, &d); err != nil {
 		return document{}, nil, errors.New("invalid encrypted key field types")
 	}
+	if d.Version != 1 {
+		return document{}, nil, errors.New("unsupported legacy encrypted key version")
+	}
 	if _, _, _, err := d.header(); err != nil {
 		return document{}, nil, err
 	}
@@ -139,6 +145,9 @@ func decode(data []byte) (document, []byte, error) {
 }
 
 func encode(d document, ciphertext []byte) ([]byte, error) {
+	if d.Version == 2 {
+		return encodeOpaque(d, ciphertext)
+	}
 	d.Ciphertext = base64.StdEncoding.EncodeToString(ciphertext)
 	body, err := pure.EmitCanonical(d)
 	if err != nil {

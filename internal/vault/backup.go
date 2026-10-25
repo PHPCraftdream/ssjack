@@ -119,6 +119,10 @@ func PrepareRestore(destination, source string, sourcePassword, currentPassword 
 }
 
 func restoreVerified(ctx context.Context, destination string, replacement, previous []byte) (string, error) {
+	return replaceVerified(ctx, destination, replacement, previous, "before-restore")
+}
+
+func replaceVerified(ctx context.Context, destination string, replacement, previous []byte, label string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -130,7 +134,7 @@ func restoreVerified(ctx context.Context, destination string, replacement, previ
 	if err != nil || sha256.Sum256(current) != expected {
 		return "", errors.New("vault changed before restore; current file preserved")
 	}
-	backup, err := RecoveryPath(destination, "before-restore")
+	backup, err := RecoveryPath(destination, label)
 	if err != nil {
 		return "", err
 	}

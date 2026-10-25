@@ -29,11 +29,14 @@ func runVaultMaintenance(ctx context.Context, path, profile string, args []strin
 	if len(args) == 1 && args[0] == "init" {
 		return runInitProfile(ctx, path, profile)
 	}
+	if len(args) == 1 && args[0] == "upgrade" {
+		return runVaultUpgrade(ctx, path)
+	}
 	if len(args) == 1 && args[0] == "passwd" {
 		return runVaultCommand(ctx, path, args)
 	}
 	if len(args) != 2 || (args[0] != "backup" && args[0] != "check" && args[0] != "restore") {
-		return 1, errors.New("usage: ssjack vault init|passwd|backup FILE|check FILE|restore FILE; use ssjack help vault")
+		return 1, errors.New("usage: ssjack vault init|passwd|upgrade|backup FILE|check FILE|restore FILE; use ssjack help vault")
 	}
 	if args[0] == "backup" {
 		if err := requireNewPath(args[1]); err != nil {

@@ -82,6 +82,17 @@ ssjack -p home check
 
 `check` verifies the saved server pin, SSH authentication, and session opening without a remote command or PTY. Unknown/changed host keys fail. The native client never starts an external SSH executable or agent.
 
+## Explicit container format upgrade
+
+```text
+ssjack vault upgrade
+ssjack --vault .ssh/work.ssjack.ktav vault upgrade
+```
+
+New databases use opaque v2. Existing v1 databases remain readable and retain v1 during ordinary edits and password changes. Upgrade requests the vault secret, authenticates/schema-validates the original, generates a fresh v2 container, and decrypts it again to verify exact payload equality. Only after typing `UPGRADE` does it preserve the exact v1 ciphertext in an encrypted `before-upgrade` recovery file and perform revision-checked replacement. The secret, SSH keys, and records stay unchanged. Already-v2 invocations authenticate and check the revision without rewriting or creating another copy.
+
+The one-field v2 outer envelope removes readable algorithm/cost metadata, not algorithms from public source or observable network/file metadata. Backup/restore copy exact ciphertext and do not silently upgrade it. Keep the recovery copy for rollback; an old binary cannot read v2 and may also reject newer record fields. Other backups/exports retain their prior protection. No real database is upgraded merely by installing new source. See [the format specification](OPAQUE-FORMAT-PROPOSAL.md).
+
 ## Backup, verification, and restore
 
 ```text

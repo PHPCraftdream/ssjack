@@ -1,54 +1,70 @@
-# Minimal outer container proposal
+# Opaque container v2
 
-**Status: design only, not implemented.** Existing version-1 readers/writers remain unchanged. This is not a claim that readable version-1 KDF metadata has already disappeared, nor an independent cryptographic assessment.
+**Status: implemented in source; CI results must be checked separately.** This document supersedes the earlier design-only proposal. It is a format specification, not an independent cryptographic assessment.
 
 ## Goal and limits
 
-Profile labels, SSH addresses/users, private key bytes, server pins, intended usage, and SSH negotiation preferences belong inside the authenticated encrypted database. Normal launches must never consume plaintext target configuration. Explicit import/migration can read old inputs, but they remain outside protection until separately retired by the user.
+Profile labels, SSH addresses/users, private keys, server pins, usage, and SSH preferences are encrypted. Version 2 additionally removes readable container algorithm/cost fields from the outer document. This is metadata minimization, not added cryptographic strength: public source and the executable identify the algorithms. It does not hide IP traffic, SSH negotiation, file existence/size/timestamps, process arguments, or older copies. No padding or deletion is implied.
 
-The requested additional concealment is removal of readable algorithm names/cost fields from the outside of the encrypted file. This is metadata minimization, not increased cryptographic strength: the executable and public source still identify the algorithm and cost profile. It cannot hide destination IPs from the OS/network, the SSH negotiation from all observers, file presence, timestamps, shell/process arguments, or older copies. Padding would be a separate size-hiding feature, not implied by this proposal.
+## Public encoding
 
-## Current readers and writers
-
-- `keyfile.Seal` and `keyfile.Generate/GenerateRecovery` emit the current magic and version-1 Ktav fields.
-- `keyfile.Open/IsContainer` recognize that profile before passphrase derivation.
-- `vault.CreateWithRecords/SaveContext` encrypt the payload using keyfile and publish through the store transaction layer.
-- `vault.Load/Verify` and prepared restore authenticate/decode through keyfile.
-- Backup and recovery snapshots copy the exact already-authenticated ciphertext; they must not silently upgrade it.
-- OpenSSH import/export is a distinct interoperability format with its own visible standard metadata and KDF.
-- The legacy configuration reader is an explicit migration input, not a normal runtime credential source.
-
-## Candidate version-2 envelope
-
-Keep the owned serialization in pure-Go Ktav, with one externally visible data field:
+The pure-Go Ktav outer document has exactly one string field:
 
 ```text
-data: <canonical base64 packet>
+data: <canonical standard base64 packet>
 ```
 
-The packet contains four fixed-length random 32-byte salts, a fixed-length random 12-byte nonce base, and the nested authenticated ciphertext. There are no readable KDF names, SSH addresses/users, profile names, algorithm lists, or variable cost knobs outside it. These random bootstrap bytes are public inputs, not secrets. The schema selects the fixed compiled version-2 profile; placing an algorithm name inside encryption cannot make it necessary input for its own initial decryption.
+No magic comment, version field, algorithm identifier, or cost knob is emitted. Readers recognize the literal `data:` prefix, require one field, canonical padded standard base64, and a bounded packet. Public bootstrap bytes are not secrets:
 
-The encrypted inner envelope records its format version, complete algorithm identifiers and fixed cost values, purpose, and the actual private-key/database payload. After decryption, those values must match the compiled profile exactly. Version/domain and all public packet bytes must remain bound into associated data to prevent cross-format or purpose confusion.
+| Offset | Length | Meaning |
+| --- | --- | --- |
+| 0 | 128 | Four distinct 32-byte salts in order |
+| 128 | 12 | Random nonce base |
+| 140 | Remaining | Nested authenticated ciphertext |
 
-The product requirement remains four independent sequential Argon2id operations at 1 GiB each, followed by 1000 nested AES-256-GCM encryptions of the full preceding data. Distinct salts, layer keys, nonces, purposes, and authentication-before-use remain mandatory. This proposal does not replace the data-encryption loop with KDF iterations.
+The compiled profile is four sequential Argon2id v1.3 calls, each with memory 1048576 KiB, time 1, parallelism 1, and output 32 bytes. Outputs are concatenated in salt order. HKDF-SHA-256 with nil salt and info `ssjack-key/v1/master` derives the 32-byte master. This master-extraction label is deliberately retained across formats; format separation is enforced by distinct layer domains and authenticated headers. No alternative KDF trial or lower-cost production mode exists.
 
-Do not add trial decryption over arbitrary algorithms/profiles, DNS/network-based profile discovery, hidden low-cost defaults, or user-controlled unauthenticated memory/iteration values. Bound raw/encoded packet and decrypted-envelope sizes explicitly. Account for inner Ktav/base64 overhead instead of accidentally reducing the maximum supported user payload.
+## Layers and associated data
 
-## Compatibility and migration
+The binary header is the ASCII string `ssjack-key/v2`, NUL, `argon2id-x4-hkdf-sha256`, NUL; big-endian uint32 values 2, 1048576, 1, 1, 1000; then the exact 140 public bootstrap bytes.
 
-A new reader would accept existing exact version-1 documents and the new strict one-field envelope. Wrong encodings, extra fields, invalid lengths, unknown inner profiles, and unsupported algorithms fail closed. Old readers reject version 2 instead of interpreting it as a legacy SSH key or silently weakening parameters. `IsContainer` and every import/rotation/restore entry point need corresponding tests.
+Each of 1000 layers encrypts all preceding data including its tag using AES-256-GCM. The layer key is HKDF-SHA-256(master, nil salt, info=context), 32 bytes. Context is ASCII `ssjack-key/v2/<purpose>/layer/` followed by the big-endian uint32 layer index, starting at zero. Nonce is the public base with its final big-endian uint32 XORed with that index. AAD is the binary header followed by context. Decryption verifies layers in reverse order before interpreting private data.
 
-Initially expose an explicit authenticated format-upgrade operation rather than silently rewriting every old file. It must verify the original, preserve a complete encrypted recovery copy, create and verify a new version-2 output with fresh random parameters, and publish only after explicit confirmation and revision checking. Actual passwords stay in the user's terminal. Never delete the original to make replacement work.
+Storage uses purpose `storage`. Derived Ed25519 generation uses purpose `keygen`, the fixed message `ssjack derived Ed25519 seed v1`, and SHA-256 of the final 1000-layer ciphertext as the seed. Its versioned header and layer domain distinguish v2 generation from v1. Storage then encrypts the marshaled key using the same derived master but separate purpose keys.
 
-Existing raw backups, standard exports, and old plaintext metadata are not retroactively concealed by upgrading one database. Report these limits without silently enumerating or deleting unrelated user files. A rollback to an old binary requires its compatible preserved copy; do not promise that old software will read version 2.
+## Authenticated inner envelope
 
-## Required evidence before implementation rollout
+The plaintext of the storage cascade is canonical pure-Go Ktav with exactly these fields:
 
-- CI vectors for version/purpose/AAD/salt/nonce binding, wrong passwords, malformed packet limits, and type/format confusion.
-- Real-profile 1 GiB round trips for keys, derived recovery identities, databases, backups, and upgrade/restore.
-- Failure injection before/after recovery snapshot, after generation, at publication, on cancellation, and under revision conflicts.
-- Explicit tests that SSH profile metadata is absent from encoded outer documents, while intentional authenticated CLI display remains available.
-- Preserve current known limitations, including the visible outer GCM tag allowing candidate-master-secret checking without decrypting 999 inner layers.
-- Review the new format delta separately from the AI report for commit `0b183d6`; that report does not certify unreviewed future readers/writers.
+- `version`: 2
+- `kdf`: `argon2id-x4-hkdf-sha256`
+- `memory_kib`: 1048576
+- `passes`: 1
+- `parallelism`: 1
+- `layers`: 1000
+- `cipher`: `aes-256-gcm-hkdf-sha256`
+- `purpose`: `storage`
+- `payload`: canonical standard base64 of the actual private-key/database payload
 
-Until those changes exist and CI validates them, only encrypted profile contents and removal of plaintext runtime configuration can be claimed; the current public version-1 KDF fields remain public.
+After all tags verify, the reader checks every profile value and compares a canonical re-encoding against the decrypted envelope. Unknown/extra fields, duplicate or noncanonical representations, unsupported profiles/purposes, invalid payload encodings, and excess sizes fail closed. The envelope is not used to choose its own initial decryption algorithm.
+
+The payload remains 1..65536 bytes. The inner envelope limit is 98304 bytes, including base64/Ktav overhead. Ciphertext adds exactly 16000 bytes to the envelope. The packet is at most 114444 bytes; the entire outer file is limited to 262144 bytes. These limits do not reduce the existing maximum user payload. Memory reclamation, runtime copies, and latency caveats remain in [KEYS.md](KEYS.md).
+
+## Compatibility and explicit upgrade
+
+New containers and new databases use v2. Existing exact v1 documents remain readable; old readers reject the new outer schema. Ordinary edits, key replacement, policy changes, and password changes preserve the loaded database's container version. `SealVersion` is an internal-package compatibility API restricted to the two fixed profiles, not a CLI cost selector.
+
+```text
+ssjack vault upgrade
+ssjack --vault .ssh/work.ssjack.ktav vault upgrade
+```
+
+Upgrade authenticates the original, validates records, creates a fresh v2 replacement, decrypts it again, and compares the exact payload before requesting `UPGRADE` confirmation. It then preserves the exact verified v1 bytes under a unique encrypted `before-upgrade` recovery name and publishes through the existing lock/revision-check/rename transaction. No plaintext staging file is used. Failure before publication leaves the original unchanged; an already-created recovery copy is retained. Cancellation is checked between expensive stages and before publication; Argon2id itself is not interruptible. An already-v2 invocation authenticates/schema-validates and checks the revision without rewriting or making a backup.
+
+Backup, recovery snapshots, and restore copy exact authenticated ciphertext, retaining v1 or v2 as provided. Restoring the preserved v1 copy is the rollback path for an older binary. Older readers may still reject newer record fields, independently of container format. Existing other backups and standard OpenSSH exports are never silently rewritten or removed. The vault secret, SSH identities, and profile records do not change during format upgrade. Real credentials are not automatically migrated or exercised by CI.
+
+## Verification boundary
+
+Source tests cover fixed-parameter v1/v2 reference constructions independently of production header/envelope/layer helpers; all 1000 data layers; maximum payload; malformed packet bounds; salt/nonce/ciphertext and cross-format tampering; unsupported authenticated inner profiles; derived identities; cancellation; revision conflict; failed publication with preserved recovery; and idempotent v2 handling. A dedicated GitHub CI job exercises the production 1 GiB KDF for generated recovery keys, database creation/editing, v1-preserving saves/backups, explicit upgrade, and exact v1 restore. Tests run on synthetic fixtures only. Defining tests is not proof that CI has passed.
+
+The visible outer GCM tag still allows candidate-master-secret checking without decrypting 999 inner layers. Four Argon2id outputs do not add entropy to a weak input, and 1000 data encryptions do not provide 1000-fold overall security. The earlier AI audit does not certify this format delta. Independent crypto review remains outstanding.
