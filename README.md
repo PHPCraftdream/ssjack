@@ -1,18 +1,42 @@
 # ssjack
 
-A cross-platform Go SSH client, encrypted credential manager, key utility, and scoped MCP bridge for coding agents. SSH runs inside the keeper; private keys and vault secrets are not exported to an external SSH executable, agent, harness, or MCP bridge.
+[![CI](https://github.com/PHPCraftdream/ssjack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PHPCraftdream/ssjack/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/PHPCraftdream/ssjack?logo=go)](go.mod)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](docs/INSTALL.md)
+[![Status](https://img.shields.io/badge/status-experimental-orange)](#security-boundaries)
 
-## Main workflows
+**Native SSH for humans and coding agents, with encrypted profiles and explicit trust boundaries.**
+
+ssjack is a cross-platform Go SSH client, encrypted credential manager, key utility, and scoped MCP bridge. SSH runs inside the keeper; private keys and vault secrets are not exported to an external SSH executable, agent, harness, or MCP bridge.
+
+> **Experimental, security-sensitive software.** The custom encrypted container is not independently cryptographically audited. A green CI badge is regression evidence, not a security certification or a promise of production readiness.
+
+## Features
+
+- One encrypted profile database for native interactive SSH and coding-agent sessions.
+- Memory-only bootstrap with a single-use capability over pinned loopback TLS; no runtime credential files.
+- Local Ed25519 generation directly into a profile, plus public-key installation instructions with PTY enabled.
+- Verified backups, explicit restore/rotation, server pins, and human/agent usage guards.
+- Command/result cards for compatible Claude Code builds, with ordinary MCP support for other harnesses.
+- Windows, Linux, and macOS installers that replace running images without stopping processes.
+
+[Installation](docs/INSTALL.md) · [CLI guide](docs/VAULT.md) · [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+
+## Quick start
 
 Using an executable built from the current source, from your application directory:
 
 ```text
 ssjack --version
-ssjack vault init
-ssjack -p home add
+ssjack vault init --generate-key
+ssjack -p home add --generate-key
+ssjack -p home check
 ssjack -p home ssh
 ssjack -p home run claude -c
 ```
+
+Create the database's parent directory first. The wizard needs an existing remote account and an independently verified server public-key file; it does not automatically create a remote user or trust a scanned key. Generated private keys stay in the database. After save, copy the printed public-key installation command to the intended remote account through an already trusted connection. Omit `--generate-key` to import an existing key instead.
 
 The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use environment capability without bootstrap files. Human SSH behaves like a normal PTY session after login.
 
@@ -74,6 +98,16 @@ This custom composition is **not independently audited**. The outermost GCM tag 
 
 [Global installers](docs/INSTALL.md) accept a real published GitHub Release or a verified local CI artifact with an explicit SHA-256. Writing a workflow does not publish a release, and source changes alone do not update an installed executable. See the [release contract](docs/RELEASES.md) for asset naming and publisher trust.
 
+The canonical Go module is `github.com/PHPCraftdream/ssjack`; `go.mod` declares the minimum Go version and CI selects that declared toolchain. No stable binary release is implied by this development snapshot.
+
+If you explicitly prefer source installation, the following compiles locally using the declared Go toolchain:
+
+```sh
+go install github.com/PHPCraftdream/ssjack/cmd/ssjack@latest
+```
+
+`@latest` currently selects a development snapshot, not a stability promise; use a reviewed commit when you need a fixed source revision. CI artifacts embed the exact checkout SHA. Builds without those linker flags can identify themselves as `dev`/`unknown`.
+
 CI builds the CLI with the Go version in `go.mod` and embeds build identity. Run the globally installed `ssjack` from the desired application working directory; source checkout launchers and local-build update wrappers are no longer needed. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
 
 The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Normal startup never reads plaintext target metadata; explicit `vault migrate FILE` is the only legacy import path. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
@@ -88,7 +122,7 @@ Commands run with the remote account's permissions. Use least-privilege users an
 
 ## Verification and documentation
 
-All test and build execution belongs in GitHub CI, not local development. The matrix covers Linux/macOS/Windows, Linux race detection, native CLI/installer fixtures, a dedicated production-1-GiB encrypted-vault integration path, command/help regression tests, and synthetic SSH servers. Writing tests is not evidence of a passing run. UI tests require a compatible authoring environment and are not replaced by fake checks.
+Project validation builds and tests run in GitHub CI, not automatically on a contributor's machine. Local work normally needs only formatting; source installation is an explicit operator choice, not permission for an assistant to run local builds without approval. The matrix covers Linux/macOS/Windows, Linux race detection, native CLI/installer fixtures, a dedicated production-1-GiB encrypted-vault integration path, command/help regression tests, and synthetic SSH servers. Writing tests is not evidence of a passing run. UI tests require a compatible authoring environment and are not replaced by fake checks.
 
 - [Credential commands, recovery, and rotation](docs/VAULT.md)
 - [Key format and derivation details](docs/KEYS.md)
@@ -105,3 +139,17 @@ Normal startup accepts profiles only from the encrypted database. `--config` is 
 Migration asks for database authorization (or a confirmed new database secret), source key authorization when needed, and explicit destination-profile confirmation. It imports address/user/private key bytes and only raw server keys already trusted for the exact legacy address/port, including supported hashed known_hosts entries; revoked, unrelated, CA-only, or missing trust is not accepted. No network scan or connection supplies migration trust. Existing destination profiles are never overwritten. Existing databases receive encrypted recovery snapshots before the new profile is committed.
 
 Source metadata, source private-key files, and old copies are never silently deleted. They can still expose metadata until the user separately retires them after verifying the encrypted profile. The assistant cannot perform real migration without the user's terminal-only secrets and does not read real private keys through tools.
+
+## Community and support
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening an issue or pull request. Use the issue templates for redacted synthetic reproductions and focused proposals. Report vulnerabilities privately through [SECURITY.md](SECURITY.md); never attach real vaults, private keys, tokens, or private host details to a public issue.
+
+## License
+
+Project-owned code and documentation are dual-licensed under **MIT OR Apache-2.0**, at your option. See [LICENSE](LICENSE), [LICENSE-MIT](LICENSE-MIT), and [LICENSE-APACHE](LICENSE-APACHE).
+
+Dependencies retain their own terms in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The notices are embedded in distributed executables and can be printed without unlocking credentials:
+
+```text
+ssjack --licenses
+```

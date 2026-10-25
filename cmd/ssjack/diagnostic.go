@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/exec"
 
-	"storagehost/internal/buildinfo"
-	"storagehost/internal/diagnostic"
-	"storagehost/internal/keyfile"
-	"storagehost/internal/remote"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
+	"github.com/PHPCraftdream/ssjack/internal/diagnostic"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runSafetyCommand(ctx context.Context, path string, args []string) (int, error) {

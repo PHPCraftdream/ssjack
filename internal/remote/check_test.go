@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 )
 
 func TestCheckAuthenticatesWithoutRemoteRequests(t *testing.T) {

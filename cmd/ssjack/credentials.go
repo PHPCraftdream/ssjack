@@ -7,8 +7,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/remote"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func chooseCredential(v *vault.Vault, name string) (string, error) {

@@ -14,13 +14,14 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"storagehost/internal/bridge"
-	"storagehost/internal/broker"
-	"storagehost/internal/buildinfo"
-	"storagehost/internal/hooks"
-	"storagehost/internal/launch"
-	"storagehost/internal/remote"
-	"storagehost/internal/vault"
+	project "github.com/PHPCraftdream/ssjack"
+	"github.com/PHPCraftdream/ssjack/internal/bridge"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
+	"github.com/PHPCraftdream/ssjack/internal/hooks"
+	"github.com/PHPCraftdream/ssjack/internal/launch"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func main() {
@@ -71,6 +72,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
 	version := flags.Bool("version", false, "Print version, commit, and platform")
+	licenses := flags.Bool("licenses", false, "Print project licenses and third-party notices")
 	var profile string
 	flags.StringVar(&profile, "profile", "main", "Named encrypted profile (default main)")
 	flags.StringVar(&profile, "p", "main", "Short form of --profile")
@@ -83,6 +85,12 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	if *version {
 		fmt.Fprintln(os.Stdout, buildinfo.String())
+		return 0, nil
+	}
+	if *licenses {
+		if _, err := io.WriteString(os.Stdout, project.LicenseText()); err != nil {
+			return 1, err
+		}
 		return 0, nil
 	}
 	if handled, err := handleHelp(flags.Args(), os.Stdout); handled {

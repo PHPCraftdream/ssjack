@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"storagehost/internal/legacy"
-	"storagehost/internal/remote"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/legacy"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runLegacyMigration(ctx context.Context, destination, profile, source string) (int, error) {

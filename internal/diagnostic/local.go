@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"storagehost/internal/uiplugin"
+	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
 )
 
 type Finding struct {

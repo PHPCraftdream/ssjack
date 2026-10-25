@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runVaultUpgrade(ctx context.Context, path string) (int, error) {

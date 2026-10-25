@@ -9,9 +9,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"storagehost/internal/broker"
-	"storagehost/internal/remote"
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {

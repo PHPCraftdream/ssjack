@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 // UpgradePlan holds only authenticated encrypted bytes, never the vault secret.

@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func verifiedEncoded(path string, password []byte) ([]byte, error) {

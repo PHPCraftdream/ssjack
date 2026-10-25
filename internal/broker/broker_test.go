@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func fixture(t *testing.T) (*Server, wire.Auth) {

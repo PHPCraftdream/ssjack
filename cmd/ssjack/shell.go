@@ -9,8 +9,8 @@ import (
 
 	"golang.org/x/term"
 
-	"storagehost/internal/remote"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runVaultShell(ctx context.Context, path, name string) (int, error) {

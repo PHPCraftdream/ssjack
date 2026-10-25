@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func awaitJob(t *testing.T, m *Manager, id string) {

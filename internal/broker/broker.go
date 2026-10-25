@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 type Handler func(context.Context, wire.Request) wire.Reply

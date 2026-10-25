@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func TestDefaultProfileIsMainWithoutFallback(t *testing.T) {

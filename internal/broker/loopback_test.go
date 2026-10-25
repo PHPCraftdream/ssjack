@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func TestRejectNoncanonicalEndpointsBeforeTLSOrDial(t *testing.T) {

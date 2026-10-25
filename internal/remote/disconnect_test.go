@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"storagehost/internal/broker"
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func TestDisconnectCancelsRemoteOperations(t *testing.T) {

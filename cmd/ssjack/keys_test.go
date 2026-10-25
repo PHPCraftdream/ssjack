@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func TestKeyFlagValidation(t *testing.T) {

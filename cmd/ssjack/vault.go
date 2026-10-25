@@ -11,8 +11,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/keyfile"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func validateVaultArgs(args []string) error {

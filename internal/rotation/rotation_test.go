@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func rotationKey(t *testing.T) ([]byte, []byte) {

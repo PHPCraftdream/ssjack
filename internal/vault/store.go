@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func readEncoded(path string) ([]byte, error) {

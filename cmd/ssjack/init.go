@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runInitProfile(ctx context.Context, path, name string) (int, error) {

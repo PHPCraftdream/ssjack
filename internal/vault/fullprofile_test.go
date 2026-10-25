@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func TestVaultFullProfile(t *testing.T) {

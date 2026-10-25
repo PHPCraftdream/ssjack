@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"strings"
 
-	ssjackui "storagehost/plugins/ssjack-ui"
+	ssjackui "github.com/PHPCraftdream/ssjack/plugins/ssjack-ui"
 )
 
 const EnvDirectories = "CLAUDE_CODE_PLUGIN_DIRS"

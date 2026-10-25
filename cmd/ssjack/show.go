@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func writeProfileSummary(output io.Writer, name string, target vault.Target) error {

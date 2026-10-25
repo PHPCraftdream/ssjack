@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func confirmValue(prompt, expected string) error {

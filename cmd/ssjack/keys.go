@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/term"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func runKeyCommand(ctx context.Context, generatePath, protectPath, output string) (int, error) {

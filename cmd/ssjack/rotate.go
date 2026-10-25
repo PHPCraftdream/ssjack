@@ -9,10 +9,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/keyfile"
-	"storagehost/internal/remote"
-	"storagehost/internal/rotation"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/rotation"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runRotation(ctx context.Context, path, name string) (int, error) {

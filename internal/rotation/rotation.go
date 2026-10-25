@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"storagehost/internal/keyfile"
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 type Operations struct {

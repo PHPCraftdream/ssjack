@@ -8,9 +8,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"storagehost/internal/broker"
-	"storagehost/internal/buildinfo"
-	"storagehost/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 type ReadOutput struct {

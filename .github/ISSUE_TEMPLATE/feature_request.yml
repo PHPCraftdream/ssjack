@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a focused improvement with explicit trust boundaries.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe the need without private host details or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include an observable acceptance criterion and what is out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security and compatibility considerations
+      description: Identify affected formats, secret lifetimes, privileges, and recovery behavior if relevant.

@@ -1,0 +1,18 @@
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Copyright (c) 2026 ssjack contributors
+
+Except for separately identified third-party material, ssjack is licensed
+under either of the following licenses, at your option:
+
+  * The MIT License, in LICENSE-MIT
+  * The Apache License, Version 2.0, in LICENSE-APACHE
+
+You may choose either license; you do not need to comply with both.
+Third-party components retain their own licenses and notices, reproduced
+in THIRD_PARTY_NOTICES.md. This dual license does not relicense those
+components or remove their redistribution obligations.
+
+Contributions intentionally submitted for inclusion are accepted under
+these same dual-license terms unless explicitly agreed otherwise before
+submission. See CONTRIBUTING.md.

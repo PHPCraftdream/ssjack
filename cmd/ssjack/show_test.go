@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"storagehost/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func TestShowIncludesEffectiveUsageWithoutPrivateBytes(t *testing.T) {

@@ -35,7 +35,7 @@ jobs:
       - name: Check Go formatting
         shell: bash
         run: |
-          files="$(gofmt -l cmd internal plugins/ssjack-ui tests/fixtures)"
+          files="$(gofmt -l licenses.go licenses_test.go cmd internal plugins/ssjack-ui tests/fixtures)"
           if [ -n "$files" ]; then
             printf '%s\n' "$files"
             exit 1
@@ -47,13 +47,21 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
           binary="$RUNNER_TEMP/ssjack$suffix"
           revision="$(git rev-parse HEAD)"
-          go build -mod=readonly -trimpath -ldflags "-X storagehost/internal/buildinfo.Commit=$revision" -o "$binary" ./cmd/ssjack
+          go build -mod=readonly -trimpath -ldflags "-X github.com/PHPCraftdream/ssjack/internal/buildinfo.Commit=$revision" -o "$binary" ./cmd/ssjack
           "$binary" --help
           identity="$("$binary" --version)"
           echo "$identity"
           case "$identity" in *"$revision"*) ;; *) exit 1 ;; esac
+          "$binary" --licenses > "$RUNNER_TEMP/ssjack-licenses.txt"
+          grep -F 'MIT OR Apache-2.0' "$RUNNER_TEMP/ssjack-licenses.txt"
+          grep -F 'The Ktav contributors' "$RUNNER_TEMP/ssjack-licenses.txt"
+          grep -F 'The Go Authors' "$RUNNER_TEMP/ssjack-licenses.txt"
+          mkdir -p "$RUNNER_TEMP/source-install"
+          GOBIN="$RUNNER_TEMP/source-install" go install -mod=readonly ./cmd/ssjack
+          "$RUNNER_TEMP/source-install/ssjack$suffix" --licenses > "$RUNNER_TEMP/source-install-licenses.txt"
+          grep -F 'MIT OR Apache-2.0' "$RUNNER_TEMP/source-install-licenses.txt"
       - name: Test
-        run: go test -mod=readonly -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+        run: go test -mod=readonly -count=1 -timeout 180s . ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build installer fixture
@@ -99,7 +107,7 @@ jobs:
       - name: Test with race detector
         env:
           CGO_ENABLED: '1'
-        run: go test -mod=readonly -race -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+        run: go test -mod=readonly -race -count=1 -timeout 180s . ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
 
   full-profile:
     name: Encrypted vault with production 1 GiB KDF

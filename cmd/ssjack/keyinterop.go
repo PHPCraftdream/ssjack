@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func readImportedPrivate(path string) ([]byte, error) {

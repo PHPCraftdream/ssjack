@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 )
 
 func TestCheckRejectsNoneAuthEvenAfterPreviousKeySuccess(t *testing.T) {

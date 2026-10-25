@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 func TestUnlockRejectsMalformedContainer(t *testing.T) {

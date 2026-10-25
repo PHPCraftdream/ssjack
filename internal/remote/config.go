@@ -12,10 +12,10 @@ import (
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	"golang.org/x/crypto/ssh/knownhosts"
-	"storagehost/internal/sshauth"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 type Target struct {

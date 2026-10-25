@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible defect using synthetic, redacted data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use https://github.com/PHPCraftdream/ssjack/security/advisories/new instead.
+        Never attach real vaults, private keys, passwords, bootstrap tokens, environment dumps, or unredacted host/user details.
+  - type: input
+    id: version
+    attributes:
+      label: Build version
+      description: Output of ssjack --version.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and architecture
+      placeholder: Windows amd64, Linux amd64, or macOS arm64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide redacted command shapes and disposable fixture steps, not production credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and redacted errors
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, real vaults, and private host/user information.
+          required: true

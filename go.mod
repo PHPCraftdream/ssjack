@@ -1,4 +1,4 @@
-module storagehost
+module github.com/PHPCraftdream/ssjack
 
 go 1.26.0
 

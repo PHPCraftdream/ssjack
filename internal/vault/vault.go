@@ -13,9 +13,9 @@ import (
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 
-	"storagehost/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 
-	"storagehost/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 type Target struct {

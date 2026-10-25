@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"storagehost/internal/broker"
-	"storagehost/internal/hooks"
-	"storagehost/internal/uiplugin"
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/hooks"
+	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func TestHarnessProcess(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"storagehost/internal/wire"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 const (

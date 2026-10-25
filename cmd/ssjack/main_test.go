@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"storagehost/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
 )
 
 func TestHelpAndMissingCommand(t *testing.T) {
