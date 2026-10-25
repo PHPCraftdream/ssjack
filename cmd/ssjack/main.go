@@ -118,7 +118,15 @@ func run(ctx context.Context, args []string) (int, error) {
 			return 1, errors.New("usage: ssjack list")
 		}
 		return runVaultCommand(ctx, *vaultPath, command)
-	case "show", "add", "edit", "remove":
+	case "add":
+		args := []string{"add", profile}
+		if len(command) == 2 && command[1] == "--generate-key" {
+			args = append(args, "--generate-key")
+		} else if len(command) != 1 {
+			return 1, errors.New("usage: ssjack [-p PROFILE] add [--generate-key]")
+		}
+		return runVaultCommand(ctx, *vaultPath, args)
+	case "show", "edit", "remove":
 		if len(command) != 1 {
 			return 1, errors.New("select a profile with -p PROFILE before the command")
 		}

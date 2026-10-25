@@ -4,6 +4,10 @@ ssjack can store SSH private keys in its own versioned Ktav container and derive
 
 The container is a custom composition of established primitives, not an independently audited standard key format. Do not interpret its layer count as a quantified security guarantee.
 
+## Generate directly into a profile
+
+Use `ssjack -p NAME add --generate-key`, or `ssjack -p NAME vault init --generate-key` for a new database. These modes reuse the four-Argon2id memory-only vault master, derive the seed through 1000 `keygen` data layers with fresh parameters, and persist private bytes only through the database's 1000-layer storage cascade. They print the public identity and a `restrict,pty` remote installation command only after successful save. Unlike the separate file command below, they create no private-key or `.pub` output files. See [VAULT.md](VAULT.md) for remote account, host-pin, recovery, and instruction-output boundaries.
+
 ## Generate a derived Ed25519 key
 
 From the application working directory, using an executable built from the updated source:

@@ -26,6 +26,9 @@ func runVaultMaintenance(ctx context.Context, path, profile string, args []strin
 	if len(args) == 2 && args[0] == "migrate" {
 		return runLegacyMigration(ctx, path, profile, args[1])
 	}
+	if len(args) == 2 && args[0] == "init" && args[1] == "--generate-key" {
+		return runInitProfileWithKey(ctx, path, profile, true)
+	}
 	if len(args) == 1 && args[0] == "init" {
 		return runInitProfile(ctx, path, profile)
 	}

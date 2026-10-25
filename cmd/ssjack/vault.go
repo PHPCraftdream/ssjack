@@ -25,14 +25,20 @@ func validateVaultArgs(args []string) error {
 			return vault.ValidateName(args[1])
 		}
 	}
+	if len(args) == 3 && args[0] == "add" && args[2] == "--generate-key" {
+		return vault.ValidateName(args[1])
+	}
 	if len(args) == 3 && (args[0] == "import" || args[0] == "export") && args[2] != "" {
 		return vault.ValidateName(args[1])
 	}
-	return errors.New("usage: ssjack [--vault <file>] vault init|list|passwd|add <name>|edit <name>|show <name>|remove <name>|public <name>|import <name> <file>|export <name> <file>")
+	return errors.New("usage: ssjack [--vault <file>] vault init|list|passwd|add <name> [--generate-key]|edit <name>|show <name>|remove <name>|public <name>|import <name> <file>|export <name> <file>")
 }
 
 func runVaultCommand(ctx context.Context, path string, args []string) (int, error) {
 	if err := validateVaultArgs(args); err != nil {
+		return 1, err
+	}
+	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
 	if args[0] == "init" {
@@ -74,6 +80,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		fmt.Fprintln(os.Stderr, "Vault secret changed. Other copies retain their previous protection.")
 		return 0, nil
 	}
+	var generatedPublic []byte
 	name := args[1]
 	target, exists := v.Targets[name]
 	if args[0] != "add" && !exists {
@@ -112,7 +119,18 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		if args[0] == "add" && exists {
 			return 1, errors.New("target already exists; use vault edit")
 		}
-		updated, err := editVaultTarget(target, exists)
+		var generatedPrivate []byte
+		if args[0] == "add" && len(args) == 3 {
+			if err := ctx.Err(); err != nil {
+				return 1, err
+			}
+			generatedPublic, generatedPrivate, err = v.GenerateIdentity()
+			if err != nil {
+				return 1, err
+			}
+			defer clear(generatedPrivate)
+		}
+		updated, err := editVaultTargetWithPrivate(target, exists, generatedPrivate)
 		if err != nil {
 			return 1, err
 		}
@@ -134,7 +152,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	if err := vault.SaveUnlocked(ctx, path, v); err != nil {
+	if err := saveProfileWithInstructions(ctx, func() error { return vault.SaveUnlocked(ctx, path, v) }, os.Stdout, generatedPublic); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Encrypted vault updated. Imported source files were not changed or removed.")
@@ -171,6 +189,10 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 }
 
 func editVaultTarget(target vault.Target, editing bool) (vault.Target, error) {
+	return editVaultTargetWithPrivate(target, editing, nil)
+}
+
+func editVaultTargetWithPrivate(target vault.Target, editing bool, generated []byte) (vault.Target, error) {
 	fmt.Fprintln(os.Stderr, "Credential fields are entered without echo. The server public key must already be verified through a trusted channel.")
 	var err error
 	target.Address, err = credentialField("SSH address (host:port)", target.Address, editing)
@@ -181,16 +203,18 @@ func editVaultTarget(target vault.Target, editing bool) (vault.Target, error) {
 	if err != nil {
 		return vault.Target{}, err
 	}
-	keyPath, err := credentialField("SSH private key file (OpenSSH, PEM, or ssjack)", "", editing)
-	if err != nil {
-		return vault.Target{}, err
-	}
-	var imported []byte
+	imported := append([]byte(nil), generated...)
 	defer func() { clear(imported) }()
-	if keyPath != "" {
-		imported, err = readImportedPrivate(keyPath)
+	if len(generated) == 0 {
+		keyPath, err := credentialField("SSH private key file (OpenSSH, PEM, or ssjack)", "", editing)
 		if err != nil {
 			return vault.Target{}, err
+		}
+		if keyPath != "" {
+			imported, err = readImportedPrivate(keyPath)
+			if err != nil {
+				return vault.Target{}, err
+			}
 		}
 	}
 	hostPath, err := credentialField("Verified server public key file (.pub)", "", editing)

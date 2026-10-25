@@ -46,19 +46,10 @@ func generateMaterial(d document, password []byte, derive deriveFunc) ([]byte, [
 		return nil, nil, nil, err
 	}
 	defer clear(master)
-	seed, err := deriveSeed(master, nonce, header)
+	public, plaintext, err := generateIdentity(master, nonce, header)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer clear(seed)
-	private := ed25519.NewKeyFromSeed(seed)
-	defer clear(private)
-	block, err := ssh.MarshalPrivateKey(private, "ssjack derived Ed25519 key")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	defer clear(block.Bytes)
-	plaintext := pem.EncodeToMemory(block)
 	succeeded := false
 	defer func() {
 		if !succeeded {
@@ -79,12 +70,28 @@ func generateMaterial(d document, password []byte, derive deriveFunc) ([]byte, [
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	succeeded = true
+	return encoded, public, plaintext, nil
+}
+
+func generateIdentity(master, nonce, header []byte) ([]byte, []byte, error) {
+	seed, err := deriveSeed(master, nonce, header)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(seed)
+	private := ed25519.NewKeyFromSeed(seed)
+	defer clear(private)
 	public, err := ssh.NewPublicKey(private.Public())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	succeeded = true
-	return encoded, ssh.MarshalAuthorizedKey(public), plaintext, nil
+	block, err := ssh.MarshalPrivateKey(private, "ssjack derived Ed25519 key")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(block.Bytes)
+	return ssh.MarshalAuthorizedKey(public), pem.EncodeToMemory(block), nil
 }
 
 func deriveSeed(master, nonce, header []byte) ([]byte, error) {

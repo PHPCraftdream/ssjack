@@ -197,3 +197,46 @@ func TestVaultCachedRekeyFullProfile(t *testing.T) {
 		t.Fatal("vault Close retained master")
 	}
 }
+
+func TestVaultGeneratedProfileFullProfile(t *testing.T) {
+	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
+		t.Skip("production KDF runs only in GitHub CI")
+	}
+	directory := t.TempDir()
+	path := filepath.Join(directory, "generated.ssjack.ktav")
+	password := []byte("production generated profile fixture")
+	v, err := NewUnlocked(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	public, private, err := v.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(private)
+	target := testTarget(t)
+	clear(target.PrivateKey)
+	target.PrivateKey = append([]byte(nil), private...)
+	v.Targets["generated"] = target
+	if err := CreateUnlocked(context.Background(), path, v); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "generated.ssjack.ktav" {
+		t.Fatal("generation wrote extra key or public files")
+	}
+	reopened, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got, err := keyfile.PublicSSH(reopened.Targets["generated"].PrivateKey)
+	if err != nil || !bytes.Equal(got, public) {
+		t.Fatal("stored generated identity changed")
+	}
+	encoded, err := readEncoded(path)
+	if err != nil || bytes.Contains(encoded, private) || bytes.Contains(encoded, public) {
+		t.Fatal("key material appeared outside encryption")
+	}
+}

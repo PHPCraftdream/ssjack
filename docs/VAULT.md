@@ -39,6 +39,21 @@ Each invocation that accesses credentials requests the secret interactively. No 
 
 Labels use 1–64 ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit. The database supports up to 64 records within a 64 KiB plaintext payload limit. Private files use Unix mode `0600`; Windows users must protect the directory/file DACL separately.
 
+## Generate a key while creating a profile
+
+```text
+ssjack -p work add --generate-key
+ssjack -p work vault init --generate-key
+```
+
+The first command adds to an existing database; the second creates a new database with its first profile. Address, existing remote username, independently verified server public-key file, and usage are still required. There is no private-key source prompt in generated mode. The vault secret is entered only in the human terminal; no separate seed/password argument is accepted.
+
+The four fixed 1 GiB Argon2id outputs already used to unlock/create the database supply its memory-only master. A fresh nonce/header and the separate `keygen` domain drive all 1000 data-encryption layers; SHA-256 of the final ciphertext supplies an Ed25519 seed. The private payload is then stored inside the full 1000-layer encrypted database. No standalone private container or `.pub` file is written by this option. The same secret with fresh generation parameters produces a different identity. Recovery is from the encrypted database/backup, not the password alone.
+
+Only after the encrypted commit succeeds, stdout receives the client public key and a POSIX shell command. Run that command on the destination **as the intended existing SSH account**, not root unless root is that intended account. It installs a canonical `restrict,pty` entry, retains unrelated keys, handles a missing final newline, refuses linked paths, and is idempotent. An already-present same key with different or repeated options is rejected for manual review, never rewritten to drop restrictions. The server must independently permit PTY; key options cannot override a server-wide denial.
+
+The command does not create the remote user, grant sudo, replace server trust, contact a server, or restart anything. Public output can be recorded by terminal/history tools; private key bytes are never printed. A save error/cancellation produces no usable installation guide. If output fails after save, the error explicitly states that the profile was already saved; `key public` can retrieve the public identity later.
+
 ## Human and agent usage
 
 ```text

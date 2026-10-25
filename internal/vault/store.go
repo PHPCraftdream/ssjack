@@ -57,6 +57,51 @@ func Load(path string, password []byte) (*Vault, error) {
 	return v, nil
 }
 
+// NewUnlocked prepares one master for generation and initial database storage.
+func NewUnlocked(password []byte) (*Vault, error) {
+	unlocked, err := keyfile.NewUnlocked(password, 2)
+	if err != nil {
+		return nil, err
+	}
+	v := New()
+	v.unlocked = unlocked
+	v.format = 2
+	return v, nil
+}
+
+func (v *Vault) GenerateIdentity() ([]byte, []byte, error) {
+	if v.unlocked == nil {
+		return nil, nil, errors.New("vault has no unlocked encryption context")
+	}
+	return v.unlocked.GenerateIdentity()
+}
+
+func CreateUnlocked(ctx context.Context, path string, v *Vault) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if v.unlocked == nil {
+		return errors.New("vault has no unlocked encryption context")
+	}
+	plaintext, err := marshal(v)
+	if err != nil {
+		return err
+	}
+	defer clear(plaintext)
+	encoded, err := v.unlocked.Seal(plaintext)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := commit(path, encoded, nil); err != nil {
+		return err
+	}
+	v.revision = sha256.Sum256(encoded)
+	return nil
+}
+
 func Create(path string, password []byte) error {
 	return CreateContext(context.Background(), path, password)
 }

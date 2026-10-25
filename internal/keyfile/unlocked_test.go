@@ -3,6 +3,8 @@ package keyfile
 import (
 	"bytes"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestUnlockedWritesReuseFourDerivationsWithFreshNonces(t *testing.T) {
@@ -83,5 +85,45 @@ func TestUnlockedInputErrorsAndWrongPassword(t *testing.T) {
 	}
 	if _, context, err := unlock(encoded, []byte("wrong"), testDerive); err == nil || context != nil {
 		t.Fatal("wrong password produced an unlocked context")
+	}
+}
+
+func TestUnlockedGenerationReusesHeavyMasterAndBindsIdentity(t *testing.T) {
+	calls := 0
+	derive := func(password, salt []byte) []byte { calls++; return testDerive(password, salt) }
+	u, err := newUnlocked([]byte("typed vault secret"), 2, derive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	public, private, err := u.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(private)
+	signer, err := ssh.ParsePrivateKey(private)
+	if err != nil || !bytes.Equal(ssh.MarshalAuthorizedKey(signer.PublicKey()), public) {
+		t.Fatal("generated public/private identity differs")
+	}
+	if signer.PublicKey().Type() != "ssh-ed25519" || calls != 4 {
+		t.Fatal("generation changed algorithm or repeated KDF")
+	}
+	other, otherPrivate, err := u.GenerateIdentity()
+	clear(otherPrivate)
+	if err != nil || bytes.Equal(public, other) {
+		t.Fatal("fresh generation parameters reused an identity")
+	}
+	encoded, err := u.Seal(private)
+	if err != nil || calls != 4 {
+		t.Fatal("initial identity storage repeated KDF")
+	}
+	plaintext, err := open(encoded, []byte("typed vault secret"), testDerive)
+	if err != nil || !bytes.Equal(plaintext, private) {
+		t.Fatalf("encrypted identity round trip: %v", err)
+	}
+	clear(plaintext)
+	u.Close()
+	if _, _, err := u.GenerateIdentity(); err == nil {
+		t.Fatal("closed context generated a private key")
 	}
 }

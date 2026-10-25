@@ -108,3 +108,23 @@ func (u *Unlocked) Seal(plaintext []byte) ([]byte, error) {
 	defer clear(ciphertext)
 	return encode(d, ciphertext)
 }
+
+// GenerateIdentity returns owned public/private payloads, never files.
+func (u *Unlocked) GenerateIdentity() ([]byte, []byte, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.master) != 32 {
+		return nil, nil, errors.New("encrypted storage context is closed")
+	}
+	nonce := make([]byte, nonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, err
+	}
+	d := u.d
+	d.Nonce = base64.StdEncoding.EncodeToString(nonce)
+	header, _, _, err := d.header()
+	if err != nil {
+		return nil, nil, err
+	}
+	return generateIdentity(u.master, nonce, header)
+}
