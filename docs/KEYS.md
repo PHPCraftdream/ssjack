@@ -42,7 +42,7 @@ Without `--key-output`, the output defaults to the input path plus `.ssjack.ktav
 
 The key identity is preserved. No decrypted key is written to disk. The input is not overwritten, removed, or re-encrypted in place, and SSH configuration is not changed automatically. Older copies and backups retain their original, potentially weaker protection. Strengthening one copy does not strengthen the others; any retirement or deletion of old copies is a separate decision.
 
-For the normal encrypted-database workflow, import the new container with `ssjack vault add <name>` and select it with `ssjack ssh <name>` or `ssjack run <name> <harness> [arguments...]`.
+For the normal encrypted-database workflow, import the new container with `ssjack add <name>` and select it with `ssjack ssh <name>` or `ssjack run <name> <harness> [arguments...]`.
 
 For explicit legacy `--config` usage only, set the configured key path after generation or conversion succeeds:
 
@@ -55,9 +55,9 @@ Paths are relative to the configuration file's directory. All configured keys mu
 ## Standard-format interoperability
 
 ```text
-ssjack vault import storage existing-key.pem
-ssjack vault export storage exported-key
-ssjack vault public storage
+ssjack key import storage existing-key.pem
+ssjack key export storage exported-key
+ssjack key public storage
 ```
 
 `vault import` replaces only the private key of an existing named credential record. For a new record, `vault add` prompts for the connection settings and imports its key. Addresses, usernames, and server pins are not changed by key replacement. Plaintext sources, encrypted OpenSSH keys, supported PEM keys, and ssjack containers are accepted; the source file is never overwritten or deleted. Unsupported PEM encryption formats fail explicitly rather than being guessed.
@@ -101,3 +101,11 @@ The custom container is not an OpenSSH private-key file. External SSH clients ca
 The source includes tests for all 1000 data layers, fixed profiles, tampering, wrong secrets, fresh salts/nonces, purpose separation, derived Ed25519 identity, legacy conversion, and exclusive output creation. Unit tests inject an unexported low-memory Argon2id implementation; production functions always use the fixed 1 GiB profile. These unit tests do not constitute a measurement of full-profile RAM or latency. A separate GitHub CI job runs `TestVaultFullProfile` with the real 1 GiB KDF to exercise vault creation, loading, modification, and reloading. The test-only environment gate does not alter the application's KDF or enable a cheaper production profile. No CI result is implied merely by defining the job.
 
 Real credentials are never needed for the tests. Heavy calibration or conversion of a real key is not performed automatically.
+
+## Recovery and rotation entry points
+
+Use `ssjack vault backup FILE` for complete encrypted database recovery, not an OpenSSH export. `vault check FILE` authenticates a copy; `vault restore FILE` verifies first, retains the previous encrypted revision, and requires exact confirmation. The restored database uses the backup secret. Old snapshots and exported copies retain their own prior protection.
+
+`ssjack rotate NAME` preserves an encrypted database snapshot and an encrypted new-key recovery container before confirmed remote addition, verifies the new login, and only then switches the record. It does not delete old remote keys. Existing option-bearing authorized_keys entries are refused rather than having constraints silently stripped. The key-generation and storage profile above is unchanged.
+
+See [VAULT.md](VAULT.md) for the canonical short commands and [AUDIT.md](AUDIT.md) for the independent-review boundary. Use `ssjack help COMMAND` for descriptions, safety notes, and examples of every command.

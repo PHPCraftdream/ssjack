@@ -21,6 +21,7 @@ type Target struct {
 	User       string   `json:"user"`
 	PrivateKey []byte   `json:"private_key"`
 	HostKeys   []string `json:"host_keys"`
+	Usage      string   `json:"usage,omitempty"`
 }
 
 type Vault struct {
@@ -61,6 +62,20 @@ func (v *Vault) ReplaceKey(name string, private []byte) error {
 	return nil
 }
 
+func (v *Vault) ReplaceHostKeys(name string, pins []string) error {
+	target, exists := v.Targets[name]
+	if !exists {
+		return errors.New("credential record does not exist")
+	}
+	updated := target
+	updated.HostKeys = append([]string(nil), pins...)
+	if err := updated.Validate(); err != nil {
+		return err
+	}
+	v.Targets[name] = updated
+	return nil
+}
+
 func ValidateName(name string) error {
 	if !targetName.MatchString(name) {
 		return errors.New("target name must be 1 to 64 ASCII letters, digits, dots, underscores, or hyphens, starting with a letter or digit")
@@ -80,6 +95,9 @@ func ParseHostKey(data []byte) (ssh.PublicKey, error) {
 }
 
 func (t Target) Validate() error {
+	if t.Usage != "" && t.Usage != "both" && t.Usage != "human" && t.Usage != "agent" {
+		return errors.New("credential usage must be both, human, or agent")
+	}
 	host, port, err := net.SplitHostPort(t.Address)
 	if err != nil || host == "" || port == "" || len(t.Address) > 1024 || strings.ContainsAny(t.Address, "\r\n\x00") {
 		return errors.New("target address must use host:port form")
@@ -114,6 +132,23 @@ func (t Target) Validate() error {
 			return errors.New("duplicate server public key")
 		}
 		seen[identity] = true
+	}
+	return nil
+}
+
+func (t Target) EffectiveUsage() string {
+	if t.Usage == "" {
+		return "both"
+	}
+	return t.Usage
+}
+
+func (t Target) RequireUsage(mode string) error {
+	if mode != "human" && mode != "agent" {
+		return errors.New("unknown credential usage mode")
+	}
+	if usage := t.EffectiveUsage(); usage != "both" && usage != mode {
+		return fmt.Errorf("credential record permits %s usage, not %s", usage, mode)
 	}
 	return nil
 }
@@ -167,7 +202,15 @@ func marshal(v *Vault) ([]byte, error) {
 	if err := v.validate(); err != nil {
 		return nil, err
 	}
-	body, err := pure.EmitCanonical(map[string]any{"version": v.Version, "targets": v.Targets})
+	records := make(map[string]any, len(v.Targets))
+	for name, target := range v.Targets {
+		record := map[string]any{"address": target.Address, "user": target.User, "private_key": target.PrivateKey, "host_keys": target.HostKeys}
+		if target.Usage != "" {
+			record["usage"] = target.Usage
+		}
+		records[name] = record
+	}
+	body, err := pure.EmitCanonical(map[string]any{"version": v.Version, "targets": records})
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +238,15 @@ func unmarshal(data []byte) (*Vault, error) {
 	}
 	for _, value := range targets {
 		target, ok := value.(map[string]any)
-		if !ok || len(target) != 4 {
+		if !ok || (len(target) != 4 && len(target) != 5) {
 			return nil, errors.New("invalid vault target fields")
+		}
+		for field := range target {
+			switch field {
+			case "address", "user", "private_key", "host_keys", "usage":
+			default:
+				return nil, errors.New("unknown vault target field")
+			}
 		}
 		for _, field := range []string{"address", "user", "private_key", "host_keys"} {
 			if target[field] == nil {

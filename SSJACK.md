@@ -80,7 +80,7 @@ The passphrase buffer is cleared after unlocking, but Go and the OS cannot guara
 
 ## Interactive shell and encrypted credentials
 
-`ssjack ssh <name>` opens an interactive SSH session using the same encrypted database as `ssjack run <name> <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|list|passwd|add|edit|show|remove|import|export|public` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
+`ssjack ssh <name>` opens an interactive SSH session using the same encrypted database as `ssjack run <name> <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|passwd|backup|restore|check` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
 
 This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 

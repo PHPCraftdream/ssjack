@@ -1,81 +1,99 @@
 # ssjack
 
-A cross-platform Go SSH keeper, MCP bridge, and native interactive SSH client with encrypted credentials and separate command/result cards in Claude Code.
+A cross-platform Go SSH client, encrypted credential manager, key utility, and scoped MCP bridge for coding agents. SSH runs inside the keeper; private keys and vault secrets are not exported to an external SSH executable, agent, harness, or MCP bridge.
 
-The launcher prompts once for the encrypted vault secret, selects one named credential record, starts the chosen harness, and authenticates one MCP bridge using two independent bootstrap secrets: one in the child environment and one in a temporary file. The pair is consumed on first attachment. The bridge never receives the private SSH keys or vault secret, and can use only the selected record.
+## Main workflows
 
-## Quick start
-
-Build with the Go version declared in `go.mod`:
-
-```sh
-go build -mod=readonly -trimpath -o build/ssjack ./cmd/ssjack
-```
-
-On Windows, use `-o build/ssjack.exe` instead. Create an encrypted vault and add a named credential record as shown below, importing a private key and a verified server public key. Never commit real keys, vaults, host-specific settings, or bootstrap credentials. Legacy plaintext target configuration remains available only through explicit `--config <file>`.
-
-Run the desired harness:
+Using an executable built from the current source, from your application directory:
 
 ```text
-ssjack run storage claude -c
-```
-
-From a checkout, use `./ssjack.sh run storage claude -c` or `.\ssjack.cmd run storage claude -c`. When using the shorthand `ssjack <harness> [arguments...]`, the launcher unlocks the vault and offers a record selection (a single record is selected automatically). The launcher automatically installs its embedded, project-local UI plugin for Claude Code; it does not require a separate plugin installation. That UI requires a Claude Code build supporting function-hook render plugins. Other harnesses can use the MCP bridge but may need their own MCP registration format.
-
-## Encrypted credentials and interactive SSH
-
-Using an executable built from the updated source:
-
-```text
-ssjack --generate-key .ssh/derived-key.ssjack.ktav
+ssjack --version
 ssjack vault init
-ssjack vault add storage
-ssjack ssh storage
-ssjack run storage claude -c
+ssjack add home
+ssjack ssh home
+ssjack run home claude -c
 ```
 
-The generated Ed25519 key is derived from the typed secret and fresh public parameters, not a random replacement seed. Key containers use four sequential Argon2id operations at 1 GiB each and **1000 nested AES-256-GCM encryptions of the data**. Keep the container backed up: the secret alone does not recover its random public parameters. This custom construction is not independently audited, and 1000 layers do not imply 1000-fold password-guessing resistance.
+The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use two-part capability. Human SSH behaves like a normal PTY session after login.
 
-The interactive vault encrypts addresses, usernames, private keys, and trusted server keys. Each vault command and each `ssh` invocation requests the secret again; after login, the shell behaves normally. The Go client handles SSH itself without exporting keys to `ssh.exe`. The same named credentials are used for manual shell sessions and coding-agent/MCP sessions; the latter is restricted to the selected record. Existing legacy files are not migrated automatically. See [protected keys](docs/KEYS.md) and [vault commands and shell](docs/VAULT.md).
+Help is deliberately detailed:
 
-## Features
+```text
+ssjack help
+ssjack help key export
+ssjack vault restore --help
+```
 
-- Encrypted private keys on disk; decrypted signers remain in the keeper process.
-- Loopback TLS 1.3 with certificate pinning and single-use bootstrap authentication.
-- Preconfigured SSH targets with mandatory host-key verification.
-- Asynchronous command execution, bounded output, offsets, cancellation, and timeouts.
-- Automatic command/result cards and cleanup of obsolete ssjack display hooks.
-- Pure-Go Ktav 0.8.1 for owned configuration, bootstrap, and internal messages.
-- JSON only at required external boundaries such as MCP and Claude Code metadata.
-- Rename-based executable updates with retained backups and rollback attempts.
+Each command explains its arguments, trust boundaries, and examples. Global flags precede the command. Everything after the harness name belongs to the harness, including `--help`.
+
+## Records, keys, and diagnosis
+
+```text
+ssjack list
+ssjack show home
+ssjack edit home
+ssjack remove home
+ssjack key public home
+ssjack key import home existing-key.pem
+ssjack key export home home.openssh
+ssjack doctor
+ssjack check home
+```
+
+Records contain encrypted addresses, users, private keys, server pins, and optional `both`/`human`/`agent` usage. Usage gates prevent selecting the wrong record accidentally; real readonly/admin privileges require separate server accounts and isolation, not string filtering of shell commands.
+
+`doctor` is read-only and checks local readiness after vault authorization. `check` verifies server trust and SSH authentication without running a remote command or opening a PTY. OpenSSH private exports are encrypted, exclusive new files and require a passphrase different from the vault secret. Source keys are never overwritten or deleted by import.
+
+## Recovery and rotation
+
+```text
+ssjack vault backup backups/home.ssjack.ktav
+ssjack vault check backups/home.ssjack.ktav
+ssjack vault restore backups/home.ssjack.ktav
+ssjack hostkey show home
+ssjack hostkey replace home verified-server-key.pub
+ssjack rotate home
+```
+
+Create backup parent directories yourself. Backups stay encrypted; restore validates before confirmation, retains the previous encrypted copy, and refuses revision conflicts. Server pin replacement requires independent verification and exact fingerprint confirmation, never automatic acceptance of a mismatch.
+
+Rotation preserves recovery files, explicitly confirms remote addition, retains the old authorized key, verifies the new login, and only then switches the vault record. Option-bearing keys and nonstandard authorized-key locations require manual handling rather than silently losing restrictions. Old remote keys are never removed automatically.
+
+## Protected key generation
+
+```text
+ssjack --generate-key .ssh/derived.ssjack.ktav
+ssjack --protect-key existing-key --key-output .ssh/protected.ssjack.ktav
+```
+
+Stored data uses four sequential Argon2id operations at 1 GiB each and **1000 nested AES-256-GCM data encryptions**. Derived Ed25519 bytes depend on the typed secret and fresh public parameters; retain the encrypted container/database because the secret alone does not recover lost parameters.
+
+This custom composition is **not independently audited**. The outermost GCM tag is a candidate-secret oracle, so 1000 layers do not imply 1000-fold password resistance. Strong secret entropy remains essential. See [the audit review package](docs/AUDIT.md).
+
+## Installation and compatibility
+
+[Global installers and the release contract](docs/RELEASES.md) are provided as source. They require a real published GitHub Release; writing a workflow does not publish one. No binary release or installed executable update is implied by source changes.
+
+CI builds the CLI with the Go version in `go.mod` and embeds build identity. From a compiled checkout, `./ssjack.sh` or `.\ssjack.cmd` locates the local `build/ssjack` executable without building automatically. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
+
+The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Legacy plaintext target metadata requires explicit `--config FILE`; no automatic fallback occurs. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
 
 ## Security boundaries
 
-This is not isolation from a targeted process running as the same OS user. A process that steals both bootstrap secrets before attachment can race the intended bridge. Administrators, debuggers, memory dumps, swap, and inherited environment variables remain relevant threats. There is no guaranteed erasure of every in-memory copy of a key or passphrase.
+This is not isolation from a targeted process running as the same OS user. Administrators, debuggers, memory dumps, swap, and internal Go copies remain relevant. Accessible buffers are cleared best-effort; unlocked signers remain in keeper memory for the session. A process stealing both bootstrap secrets before attachment can race the bridge.
 
-Commands run with the configured SSH user's permissions. Use least-privilege accounts and VM/container isolation for independent services. Do not expose a host's administrative Incus socket to service agents. Closing SSH does not necessarily stop detached remote processes.
+IPC is restricted to canonical `127.0.0.1`/`tcp4`, with numeric-port and loopback-peer checks before authentication, pinned TLS 1.3, and atomic single-use capabilities. SSH outbound is performed only by the keeper for the selected approved credentials. These controls are not an OS firewall.
 
-The UI shows submitted commands and received chunks; it is not an immutable audit log. Remote output can contain secrets. The plugin does not alter model inputs, stored tool results, permissions, or SSH authentication.
+Commands run with the remote account's permissions. Use least-privilege users and VM/container boundaries. Do not expose administrative Incus sockets to service agents. Closing SSH does not necessarily terminate detached processes. Remote output and deliberately displayed metadata can contain sensitive information; cards are not an immutable audit log.
 
-## Documentation
+## Verification and documentation
 
-- [Setup, architecture, limits, and updates](SSJACK.md)
-- [Protected keys and secret-derived Ed25519 generation](docs/KEYS.md)
-- [Encrypted credentials CLI and interactive SSH](docs/VAULT.md)
-- [SSH compatibility and host trust](SSH.md)
+All test and build execution belongs in GitHub CI, not local development. The matrix covers Linux/macOS/Windows, Linux race detection, native CLI/installer fixtures, a dedicated production-1-GiB encrypted-vault integration path, command/help regression tests, and synthetic SSH servers. Writing tests is not evidence of a passing run. UI tests require a compatible authoring environment and are not replaced by fake checks.
+
+- [Credential commands, recovery, and rotation](docs/VAULT.md)
+- [Key format and derivation details](docs/KEYS.md)
+- [Cryptographic audit scope and known limitations](docs/AUDIT.md)
+- [Architecture, MCP bootstrap, and updates](SSJACK.md)
+- [SSH interoperability and server trust](SSH.md)
+- [Release assets and installers](docs/RELEASES.md)
 - [UI plugin development](plugins/ssjack-ui/README.md)
-
-[Global installers and the release-asset contract](docs/RELEASES.md) are provided as source. They require an actual GitHub Release; writing these scripts does not publish binary releases.
-
-## Verification
-
-Test runs and builds belong in GitHub CI, not local development. The Go jobs run these test commands; UI tests require a compatible authoring environment and separate authorization:
-
-```text
-go test -mod=readonly -count=1 -timeout 120s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
-go test -mod=readonly -race -count=1 -timeout 120s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
-claude plugin validate ./plugins/ssjack-ui
-claude plugin test ./plugins/ssjack-ui
-```
-
-Go tests use generated temporary keys and a local test SSH server. Plugin tests use Claude Code's testing API and do not connect to user SSH servers. The GitHub CI workflow runs Go tests on Linux, Windows, and macOS; UI tests require the compatible Claude Code authoring environment and are not silently substituted with fake CI checks.

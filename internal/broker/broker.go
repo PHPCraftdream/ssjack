@@ -106,6 +106,10 @@ func (s *Server) accept() {
 		if err != nil {
 			return
 		}
+		if !loopbackPeer(conn.RemoteAddr()) {
+			conn.Close()
+			continue
+		}
 		select {
 		case slots <- struct{}{}:
 		default:
@@ -193,9 +197,8 @@ type Client struct {
 }
 
 func Connect(ctx context.Context, endpoint, pin string, auth wire.Auth) (*Client, error) {
-	host, _, err := net.SplitHostPort(endpoint)
-	if err != nil || host != "127.0.0.1" {
-		return nil, errors.New("keeper endpoint must use 127.0.0.1")
+	if err := validateEndpoint(endpoint); err != nil {
+		return nil, err
 	}
 	config, err := wire.ClientTLS(pin)
 	if err != nil {
@@ -205,6 +208,10 @@ func Connect(ctx context.Context, endpoint, pin string, auth wire.Auth) (*Client
 	conn, err := dialer.DialContext(ctx, "tcp4", endpoint)
 	if err != nil {
 		return nil, errors.New("failed to establish a secure connection to the keeper")
+	}
+	if !loopbackPeer(conn.RemoteAddr()) {
+		conn.Close()
+		return nil, errors.New("keeper TCP peer is not loopback")
 	}
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	var reply wire.Reply

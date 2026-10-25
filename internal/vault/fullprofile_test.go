@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,5 +47,27 @@ func TestVaultFullProfile(t *testing.T) {
 	}
 	if _, err := got.ClientConfig(); err != nil {
 		t.Fatal(err)
+	}
+	backup := filepath.Join(filepath.Dir(path), "backup.ssjack.ktav")
+	if err := Backup(context.Background(), path, backup, password); err != nil {
+		t.Fatal(err)
+	}
+	changed := v.Targets["selected"]
+	changed.User = "changed-user"
+	v.Targets["selected"] = changed
+	if err := Save(path, v, password); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := Restore(context.Background(), path, backup, password, password)
+	if err != nil || previous == "" {
+		t.Fatalf("production restore: %q %v", previous, err)
+	}
+	restored, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if restored.Targets["selected"].User != target.User {
+		t.Fatal("production restore did not recover the original record")
 	}
 }

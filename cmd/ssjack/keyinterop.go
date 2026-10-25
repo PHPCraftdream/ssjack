@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"os"
 
@@ -30,7 +32,7 @@ func readImportedPrivate(path string) ([]byte, error) {
 	return keyfile.ImportSSH(data, password)
 }
 
-func exportVaultKey(path string, plaintext []byte) error {
+func exportVaultKey(path string, plaintext, vaultSecret []byte) error {
 	if err := requireNewPath(path); err != nil {
 		return err
 	}
@@ -40,6 +42,9 @@ func exportVaultKey(path string, plaintext []byte) error {
 		return err
 	}
 	defer clear(password)
+	if err := validateExportSecret(password, vaultSecret); err != nil {
+		return err
+	}
 	encoded, err := keyfile.ExportSSH(plaintext, password)
 	if err != nil {
 		return err
@@ -48,5 +53,15 @@ func exportVaultKey(path string, plaintext []byte) error {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Saved encrypted OpenSSH private key. Vault credentials were not changed.")
+	return nil
+}
+
+func validateExportSecret(password, vaultSecret []byte) error {
+	if len(password) == 0 || len(vaultSecret) == 0 {
+		return errors.New("export requires vault authorization and a nonempty export passphrase")
+	}
+	if subtle.ConstantTimeCompare(password, vaultSecret) == 1 {
+		return errors.New("OpenSSH export passphrase must differ from the vault secret")
+	}
 	return nil
 }

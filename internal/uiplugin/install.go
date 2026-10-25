@@ -37,20 +37,11 @@ func Install(root string) (string, error) {
 			return "", err
 		}
 	}
-	assets := make(map[string][]byte, len(assetNames))
-	hash := sha256.New()
-	for _, name := range assetNames {
-		data, err := fs.ReadFile(ssjackui.Files, name)
-		if err != nil {
-			return "", err
-		}
-		assets[name] = data
-		hash.Write([]byte(name))
-		hash.Write([]byte{0})
-		hash.Write(data)
-		hash.Write([]byte{0})
+	assets, digest, err := embeddedAssets()
+	if err != nil {
+		return "", err
 	}
-	destination := filepath.Join(parent, hex.EncodeToString(hash.Sum(nil)))
+	destination := filepath.Join(parent, digest)
 	if _, err := os.Lstat(destination); err == nil {
 		return destination, verify(destination, assets)
 	} else if !os.IsNotExist(err) {
@@ -77,6 +68,46 @@ func Install(root string) (string, error) {
 		}
 	}
 	return destination, nil
+}
+
+func embeddedAssets() (map[string][]byte, string, error) {
+	assets := make(map[string][]byte, len(assetNames))
+	hash := sha256.New()
+	for _, name := range assetNames {
+		data, err := fs.ReadFile(ssjackui.Files, name)
+		if err != nil {
+			return nil, "", err
+		}
+		assets[name] = data
+		hash.Write([]byte(name))
+		hash.Write([]byte{0})
+		hash.Write(data)
+		hash.Write([]byte{0})
+	}
+	return assets, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// Check validates managed assets without installing or changing anything.
+func Check(root string) error {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{".claude", "ssjack-ui"} {
+		root = filepath.Join(root, name)
+		info, err := os.Lstat(root)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("managed UI path is not a regular directory")
+		}
+	}
+	assets, digest, err := embeddedAssets()
+	if err != nil {
+		return err
+	}
+	return verify(filepath.Join(root, digest), assets)
 }
 
 func ensureDirectory(path string) error {

@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"storagehost/internal/broker"
+	"storagehost/internal/buildinfo"
 	"storagehost/internal/remote"
 )
 
@@ -30,7 +31,7 @@ type ReadOutput struct {
 }
 
 func NewServer(client *broker.Client) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: "dev"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, remote.TargetsOutput, error) {
 			var out remote.TargetsOutput

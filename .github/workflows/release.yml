@@ -62,9 +62,11 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           SUFFIX: ${{ matrix.suffix }}
+          RELEASE_VERSION: ${{ inputs.tag }}
         run: |
           mkdir -p dist
-          go build -mod=readonly -trimpath -o "dist/ssjack_${GOOS}_${GOARCH}${SUFFIX}" ./cmd/ssjack
+          revision="$(git rev-parse HEAD)"
+          go build -mod=readonly -trimpath -ldflags "-X storagehost/internal/buildinfo.Version=$RELEASE_VERSION -X storagehost/internal/buildinfo.Commit=$revision" -o "dist/ssjack_${GOOS}_${GOARCH}${SUFFIX}" ./cmd/ssjack
       - uses: actions/upload-artifact@v4
         with:
           name: ssjack-${{ matrix.os }}-${{ matrix.arch }}

@@ -46,8 +46,13 @@ jobs:
           suffix=''
           if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
           binary="$RUNNER_TEMP/ssjack$suffix"
-          go build -mod=readonly -trimpath -o "$binary" ./cmd/ssjack
+          revision="$(git rev-parse HEAD)"
+          go build -mod=readonly -trimpath -ldflags "-X storagehost/internal/buildinfo.Commit=$revision" -o "$binary" ./cmd/ssjack
           "$binary" --help
+          identity="$("$binary" --version)"
+          printf '%s
+' "$identity"
+          case "$identity" in *"$revision"*) ;; *) exit 1 ;; esac
       - name: Test
         run: go test -mod=readonly -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
       - name: Repeat SSH cancellation regression

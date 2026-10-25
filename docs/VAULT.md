@@ -1,127 +1,136 @@
-# Encrypted credentials and interactive SSH
+# Named credentials and recovery
 
-Manual SSH sessions and coding-agent sessions use one encrypted database of named credentials. `ssh <name>` uses a record directly; `run <name> <harness> [arguments...]` makes the keeper expose only that record through its authenticated MCP connection. Neither mode exports the private key to an external SSH executable or SSH agent, and vault editing does not start a plaintext editor.
+ssjack uses one encrypted database for human SSH sessions and coding-agent sessions. Addresses, users, private keys, server pins, record names, and intended usage are inside the encrypted payload. The default file is `.ssh/credentials.ssjack.ktav`, relative to the working directory. Its parent directory must exist.
 
-## Commands
+## Discover commands
 
-Use an executable built from the updated source. The default vault path is `.ssh/credentials.ssjack.ktav`, relative to the current working directory. The parent directory must exist.
+```text
+ssjack --version
+ssjack help
+ssjack help vault restore
+ssjack key export --help
+```
+
+Every command has a usage description, safety notes, and examples in built-in help. Global options such as `--vault FILE` precede the command. Arguments after the harness name belong to that harness, including `--help`:
+
+```text
+ssjack run home claude --help
+```
+
+This launches the harness after vault authorization; it does not show ssjack help.
+
+## Create and edit records
 
 ```text
 ssjack vault init
-ssjack vault add storage
-ssjack vault list
-ssjack vault show storage
-ssjack vault edit storage
-ssjack vault remove storage
+ssjack add home
+ssjack list
+ssjack show home
+ssjack edit home
+ssjack remove home
 ssjack vault passwd
-ssjack vault import storage existing-key.pem
-ssjack vault export storage exported-key
-ssjack vault public storage
-ssjack ssh storage
-ssjack run storage claude -c
 ```
 
-To select another vault, put the option before the command:
+Each invocation that accesses credentials requests the secret interactively. No secret is accepted from arguments, environment variables, stdin pipes, or a persistent password cache. Initialization and secret changes require confirmation. Invalid syntax, help, and build-version output do not unlock the database.
+
+`add` prompts without echo for SSH address (`host:port`, numeric port 1–65535), user, private-key source, verified server public-key file, and intended usage. Standard OpenSSH/PEM private keys and ssjack containers can be imported. Encrypted sources require their own passphrase. Plaintext sources are accepted only as explicitly selected inputs; the source remains plaintext until separately retired. The database copy is encrypted, never written through a plaintext editor or staging file.
+
+`edit` uses the same hidden prompts; Enter preserves existing values. `show` intentionally displays connection metadata, usage, and server fingerprints, never private bytes. `list` prints sorted labels only. `remove` requires typing the record name again and does not remove remote authorized keys or old backups.
+
+Labels use 1–64 ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit. The database supports up to 64 records within a 64 KiB plaintext payload limit. Private files use Unix mode `0600`; Windows users must protect the directory/file DACL separately.
+
+## Human and agent usage
 
 ```text
-ssjack --vault .ssh/other.ssjack.ktav vault list
-ssjack --vault .ssh/other.ssjack.ktav ssh storage
+ssjack ssh home
+ssjack run home claude -c
+ssjack --vault .ssh/work.ssjack.ktav run work claude -c
 ```
 
-**Every invocation that accesses the vault asks for its secret interactively.** There is no unlocked daemon, remembered password, environment override, pipe input, or cross-command password cache. Initialization asks for a new secret twice. `vault passwd` asks for the current secret and confirms the new secret. Invalid syntax or unavailable terminal input fails without opening credentials.
+The usage field is `both`, `human`, or `agent`. Human SSH rejects agent-only records; coding-agent launch rejects human-only records before connection or harness startup. Administrative CLI operations can inspect and maintain either kind after vault authorization.
 
-After `ssh` opens an authenticated SSH session, that session works like a normal interactive terminal; it does not ask for a vault secret before each remote shell command. The next ssjack invocation asks again. This is the selected per-CLI-invocation boundary, not per-keystroke or per-remote-command authorization.
+This is an accident-prevention policy, **not a server-side sandbox or readonly shell**. Separate remote SSH accounts, key restrictions, and container/VM isolation enforce actual privileges. A record named `readonly` does not make arbitrary shell commands safe. ssjack does not create remote accounts, grant sudo, or configure Incus on its own.
 
-## What is encrypted
+Older records without a usage field mean `both`. The reader accepts the original four fields and the known optional usage field, rejecting unknown fields. Writes preserve the old four-field representation when no explicit usage exists. An older strict reader rejects policy-bearing five-field records instead of silently ignoring the policy. Keep an encrypted backup before adopting new metadata; the key-container encryption profile is unchanged.
 
-Each vault target contains:
+The keeper unlocks once per launcher invocation and exposes only the chosen name through MCP. The bridge receives neither the private key nor the vault secret. Without explicit `run NAME`, the legacy harness-tail shorthand still selects from the encrypted database after authorization. Only explicit `--config FILE` opts into old plaintext target metadata; there is no automatic fallback.
 
-- SSH address and port;
-- SSH username;
-- private SSH key bytes;
-- explicitly trusted server public keys.
-
-All these fields and the target labels are inside the encrypted payload. Only the container's public cryptographic parameters and ciphertext are stored outside encryption. The vault uses the same four sequential 1 GiB Argon2id calls and **1000 nested AES-256-GCM data encryptions** documented in [KEYS.md](KEYS.md). An empty vault is encrypted too.
-
-Private key bytes are unencrypted only inside the decrypted in-memory vault, never in a staging file. The file replacement stage is already ciphertext. The vault does not store source key paths, host-key file paths, or plaintext target settings beside itself. Unix mode `0600` is used for private files; Windows users must also restrict the directory ACL.
-
-The current vault supports SSH public-key authentication. It does not add SSH password authentication, agent forwarding, host-key auto-acceptance, CA-based host certificates, port forwarding, or file transfer.
-
-## Add and edit targets
-
-`vault add <name>` prompts without echo for:
-
-1. Address in `host:port` form, including brackets for IPv6.
-2. SSH username.
-3. Path of a supported standard OpenSSH/PEM private key or ssjack key container.
-4. That source key's passphrase, only if encrypted.
-5. Path of one verified, bare server public key file in OpenSSH `.pub` format.
-
-A public host-key file must come from an already trusted channel. Supply the server's host public key, not the client's login public key. A `known_hosts` line is not a bare `.pub` key and is rejected. Do not obtain trust merely by accepting an unverified network scan.
-
-`vault edit <name>` uses the same hidden prompts. Enter keeps the existing field. A new private key is imported only when a new key path is entered; a new server pin replaces the previous pin only when a new server public-key file is entered. The current record is not written if validation fails.
-
-The imported source remains unchanged. Importing does not delete older, potentially weaker private-key copies. Decide separately whether to retain or retire them. A key can first be created with:
+## Keys and interoperability
 
 ```text
-ssjack --generate-key .ssh/derived-key.ssjack.ktav
+ssjack --generate-key .ssh/derived.ssjack.ktav
+ssjack --protect-key existing-key --key-output .ssh/protected.ssjack.ktav
+ssjack key import home existing-key.pem
+ssjack key export home exported-key
+ssjack key public home > home.pub
 ```
 
-Then import that encrypted file through `vault add`. The vault secret and the source key's secret may differ. After import, only the vault secret is required to access that copy.
+`key import` replaces only a key in an existing record and preserves address, user, usage, and server pins. For a new record, use `add`. Inputs are never rewritten or deleted. Unsupported key formats fail explicitly.
 
-`vault import <name> <file>` replaces only the key in an existing record, preserving address, user, and server pins. New records are created with `vault add`. Both plaintext and encrypted standard sources can be imported explicitly; plaintext sources remain plaintext on disk because the importer never modifies them. Only the encrypted database receives the imported copy.
+`key export` creates a new encrypted OpenSSH private-key file and never prints the private key. A confirmed nonempty export passphrase **must differ from the vault secret**. Standard OpenSSH protection is not the custom four-Argon2id/1000-layer profile. Reusing the vault secret would let the weaker export act as a cheaper password oracle for the whole database, so the CLI refuses it. Existing output paths are not overwritten. Public output is deliberately unencrypted and may be redirected.
 
-`vault export <name> <file>` writes a new encrypted OpenSSH private-key file after a separate passphrase confirmation. It never overwrites a destination or writes an unencrypted private-key export. Standard OpenSSH protection replaces the custom container profile for that exported copy; do not count it as four Argon2id plus 1000 layers. Use a different export passphrase from the vault secret so that this weaker copy does not become a cheaper oracle for the vault secret. `vault public <name>` prints only the OpenSSH public key, suitable for redirecting to a `.pub` file. A changed private key may require updating `authorized_keys` through a trusted connection; no command does that remotely on its own.
+Generation derives Ed25519 bytes from the typed secret plus fresh public parameters, not a random replacement seed. The secret alone does not recover lost parameters; back up the container/database. See [KEYS.md](KEYS.md).
 
-`vault list` prints target labels only. `vault show <name>` intentionally displays its address, username, and host-key fingerprints, but never its private key. Terminal output, terminal recording, and screenshots remain disclosure paths when explicitly displaying credentials. `vault remove` requires typing the target label again before saving.
-
-Target labels use 1 to 64 ASCII letters, digits, dots, underscores, or hyphens, starting with a letter or digit. The vault supports up to 64 targets, subject to the container's 64 KiB plaintext size limit.
-
-## Interactive shell
-
-`ssh <name>` reads only the encrypted vault. It does not read the legacy plaintext target configuration or `known_hosts` files. The SSH authentication signer and pinned server public keys are prepared in memory.
-
-The built-in Go SSH client verifies that the server presents one of the public keys stored for that target. It requests a PTY and a remote login shell, passes stdin/stdout/stderr, and forwards terminal size changes. The local terminal enters raw mode only after server authentication and PTY acceptance. Normal exit, cancellation, shell startup failure, and other ordinary error paths restore the terminal. An uncatchable process kill or crash can still require manual terminal recovery.
-
-The remote account's shell and permissions determine what the user can do. This mode is not a sandbox and does not grant sudo. Raw interactive output is controlled by the remote system, as in a normal SSH terminal. It is not rendered through the MCP command-card sanitizer.
-
-Remote exit status is preserved. Missing terminal input/output, mismatched server keys, refused PTY requests, and refused shell requests fail rather than falling back to an external client or skipping trust checks.
-
-## Writes and concurrency
-
-New vaults are created exclusively without overwriting an existing path. Updates use a same-directory encrypted staging file, flush it, and replace the old file through the OS rename operation. The implementation never deletes the current vault first to make replacement succeed. Filesystem/OS rename semantics, especially on Windows, remain relevant; this is not a guarantee against power loss on every filesystem.
-
-An exclusive `.lock` file serializes cooperating writers. A hash of the encrypted revision is checked before replacement to avoid silently overwriting another CLI invocation's changes. A stale revision fails and must be reloaded; updates are not merged automatically. A crash can leave a stale lock, which is not removed automatically. Never remove one without first confirming that its writer is no longer active. These mechanisms do not isolate against a targeted process running as the same OS user and ignoring the lock protocol.
-
-Changing the secret re-encrypts with fresh public salts and nonce parameters. Other backups retain their prior secret and protection. Removing a target is not guaranteed secure erasure of old filesystem blocks, snapshots, or backups.
-
-Read-only commands and shell startup perform four Argon2id invocations. An update first unlocks the old vault and then protects a fresh container, so it performs eight, excluding the source key's own KDF when importing a key. No fixed wall-clock latency is promised; the full profile can take seconds or longer, and requires substantial available RAM. No local benchmark is implicit.
-
-## Coding agents and MCP
+## Diagnostics
 
 ```text
-ssjack run storage claude -c
-ssjack --vault .ssh/other.ssjack.ktav run work claude -c
+ssjack doctor
+ssjack check home
 ```
 
-The keeper asks for the vault secret once per launcher invocation, opens the named record, and prepares an in-memory SSH client configuration. Only that record name is given to the job manager, and its runner rejects any other target name. `remote_targets` therefore lists only the selected credentials, not the other records in the vault.
+`doctor` reports build version/commit/platform, vault integrity, private-file permissions, MCP registration, binary resolution, and managed UI asset consistency. It does not fix settings, install plugins, execute a PATH-resolved binary, connect to SSH, or launch a harness. Missing first-run registration/assets are warnings because normal launcher startup installs them. Windows DACL privacy and actual harness render support are explicitly not falsely certified by a Unix-mode check or asset hash.
 
-When using the shorthand `ssjack <harness> [arguments...]`, the launcher still uses the encrypted vault: it selects a single available record automatically or asks for a name from a sorted list after unlocking. An empty vault, unknown name, wrong secret, or cancelled selection fails before launching the harness. There is no automatic fallback to plaintext configuration.
+`check` verifies the saved server pin, SSH authentication, and session opening without a remote command or PTY. Unknown/changed host keys fail. The native client never starts an external SSH executable or agent.
 
-The child harness starts `ssjack mcp` as before. That stdio bridge does not independently open the vault, accept a credentials flag, or receive the vault secret/private key. It connects to the keeper using the existing single-use environment/file capability pair. Selecting credentials does not bypass project MCP trust or authentication.
-
-For explicit legacy compatibility only:
+## Backup, verification, and restore
 
 ```text
-ssjack --config .ssh/ssjack.ktav claude -c
+ssjack vault backup backups/home.ssjack.ktav
+ssjack vault check backups/home.ssjack.ktav
+ssjack vault restore backups/home.ssjack.ktav
 ```
 
-This opt-in path uses the legacy plaintext target metadata and encrypted key files, and may expose all targets configured in that file. It cannot be combined with an explicit `run <name>` command. Existing files are not silently imported, deleted, or rewritten. Import their keys and verified server pins into named vault records to use the default encrypted-database path.
+Create the backup directory yourself. Backup authenticates and validates the database, then copies exactly the verified ciphertext to an exclusive new file and flushes it. No private payload is staged as plaintext. `vault check` requests the backup secret and verifies the profile, authentication, schema, and keys without modifying files or making network connections.
 
-## Verification
+Restore validates the source and, when present, the current database with their respective secrets **before** asking for exact `RESTORE` confirmation. It preserves a uniquely named encrypted previous copy before a same-directory revision-checked replacement. Source backups and recovery copies are retained. A conflict or failure does not delete the current file to make replacement succeed. A missing destination is created exclusively. Source and destination cannot be the same file.
 
-Tests cover vault schema validation, private-byte cleanup, host-key pinning, output conflicts, revision conflicts, lock ownership, command validation, terminal restoration, PTY and resize requests, SSH stream forwarding, exit status, host mismatch, and cancellation. Network tests use local ephemeral SSH servers, not real accounts.
+The restored database uses the **backup's secret**, not necessarily the previous current secret. Old copies keep their old protection. Deletion is not guaranteed secure erasure from storage, snapshots, or external backups.
 
-Key-container tests exercise 1000 actual AES-GCM data layers with an unexported low-memory Argon2id test implementation. Filesystem vault tests operate on opaque fixture bytes and do not claim to benchmark the production KDF. There is no public cheaper-profile flag. A dedicated GitHub CI job exercises the real 1 GiB profile through vault creation, loading, modification, and reloading; normal unit jobs skip that heavy integration test explicitly. This is functional validation, not a RAM/latency benchmark or confirmation of a real user terminal session. Defining these jobs does not imply they have passed.
+Writers cooperate through an exclusive `.lock` and a ciphertext revision hash. An abandoned lock is not removed automatically. These mechanisms do not isolate against a targeted same-user process ignoring the protocol. Filesystem power-loss and rename semantics remain OS-dependent, especially on Windows. Cancellation is checked after expensive KDF work and before publication; an Argon2id invocation itself is not interruptible.
 
-Test and build execution belongs in GitHub CI, not local development commands. The Go CI matrix covers Linux, Windows, and macOS; the race job runs on Linux.
+## Server identity pins
+
+```text
+ssjack hostkey show home
+ssjack hostkey replace home verified-server-key.pub
+```
+
+These commands concern **server** keys, not client login keys. Replacement reads one bare OpenSSH public key already verified through an independent trusted channel, shows old/new fingerprints, and requires typing the new fingerprint. It replaces all existing pins for the record while preserving other fields. It does not scan the network, accept a mismatch automatically, or enable certificate/CA trust implicitly.
+
+## Two-phase key rotation
+
+```text
+ssjack rotate home
+```
+
+Automatic rotation is intentionally narrow: a POSIX account using an existing regular `~/.ssh/authorized_keys` with an unrestricted bare old key. Per-key options such as `command=`, `from=`, or `restrict`, symlinks, and nonstandard key sources require manual rotation; they are refused instead of being silently stripped.
+
+1. Verify current SSH login using the saved server pins, without a remote command.
+2. Ask for a confirmed new key-recovery secret and derive a new Ed25519 identity with the unchanged heavy scheme.
+3. Preserve an encrypted database snapshot and an encrypted new-key recovery container before any remote mutation.
+4. Show old/new client fingerprints and require typing the record name.
+5. Through the pinned native client, run a fixed installation script with only public keys on stdin. The script cooperatively locks the key file, preserves old bytes, safely adds a newline when needed, and is idempotent for the same public key. It never removes the old key.
+6. Verify new SSH authentication and session opening without an exec/PTY request.
+7. Only then switch the encrypted record using the original revision and atomic writer.
+
+If addition, verification, cancellation, or local commit fails, old access is retained and recovery files remain. A new public key may already be installed even if the local switch fails; the diagnostic states that recovery path. Concurrent local edits cause a conflict rather than a lost update. Recovery filenames are printed, and the new-key container uses the separately entered recovery secret.
+
+Even after success, **old remote keys are not retired automatically**. Verify every intended client and remove obsolete authorized keys explicitly through a trusted session. Rotation does not grant privileges or bypass forced-command restrictions.
+
+## Trust and verification boundaries
+
+Stored data uses four sequential Argon2id operations at 1 GiB each, followed by 1000 nested AES-256-GCM **data encryptions**. This custom composition is not independently audited and does not imply 1000-fold password resistance: the outer GCM tag supplies a candidate-secret check. Go/OS memory copies, swap, dumps, debuggers, and same-user process inspection remain outside strong isolation guarantees.
+
+Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, aliases, other IPs, and invalid ports before TLS/dial. TCP peers must be loopback before authentication. TLS pinning and single-use two-part capabilities remain mandatory. This does not block keeper SSH to approved servers and is not an OS firewall.
+
+Unit tests, synthetic SSH servers, transaction failure fixtures, POSIX script tests, installer tests, race checks, and the dedicated real-1-GiB profile run belong in GitHub CI. Defining or writing a test is not a passed result. See [AUDIT.md](AUDIT.md) for the external-review boundary.

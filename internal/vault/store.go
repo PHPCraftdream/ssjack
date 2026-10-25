@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -50,6 +51,13 @@ func Load(path string, password []byte) (*Vault, error) {
 }
 
 func Create(path string, password []byte) error {
+	return CreateContext(context.Background(), path, password)
+}
+
+func CreateContext(ctx context.Context, path string, password []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	v := New()
 	defer v.Close()
 	plaintext, err := marshal(v)
@@ -61,10 +69,20 @@ func Create(path string, password []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return commit(path, encoded, nil)
 }
 
 func Save(path string, v *Vault, password []byte) error {
+	return SaveContext(context.Background(), path, v, password)
+}
+
+func SaveContext(ctx context.Context, path string, v *Vault, password []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	plaintext, err := marshal(v)
 	if err != nil {
 		return err
@@ -72,6 +90,9 @@ func Save(path string, v *Vault, password []byte) error {
 	defer clear(plaintext)
 	encoded, err := keyfile.Seal(plaintext, password)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := commit(path, encoded, &v.revision); err != nil {

@@ -47,7 +47,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		if err := ctx.Err(); err != nil {
 			return 1, err
 		}
-		if err := vault.Create(path, secret); err != nil {
+		if err := vault.CreateContext(ctx, path, secret); err != nil {
 			return 1, err
 		}
 		fmt.Fprintln(os.Stderr, "Created encrypted credentials vault. Each CLI invocation will request its secret again.")
@@ -83,7 +83,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		if err := ctx.Err(); err != nil {
 			return 1, err
 		}
-		if err := vault.Save(path, v, newSecret); err != nil {
+		if err := vault.SaveContext(ctx, path, v, newSecret); err != nil {
 			return 1, err
 		}
 		fmt.Fprintln(os.Stderr, "Vault secret changed. Other copies retain their previous protection.")
@@ -115,7 +115,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		}
 		return 0, nil
 	case "export":
-		if err := exportVaultKey(args[2], target.PrivateKey); err != nil {
+		if err := exportVaultKey(args[2], target.PrivateKey, secret); err != nil {
 			return 1, err
 		}
 		return 0, nil
@@ -154,7 +154,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	if err := vault.Save(path, v, secret); err != nil {
+	if err := vault.SaveContext(ctx, path, v, secret); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Encrypted vault updated. Imported source files were not changed or removed.")
@@ -232,6 +232,14 @@ func editVaultTarget(target vault.Target, editing bool) (vault.Target, error) {
 	if imported != nil {
 		target.PrivateKey = imported
 	}
+	usage, err := readTerminalInput("Usage both/human/agent (Enter keeps current or defaults to both): ", true)
+	if err != nil {
+		return vault.Target{}, err
+	}
+	if len(usage) != 0 {
+		target.Usage = string(usage)
+	}
+	clear(usage)
 	if err := target.Validate(); err != nil {
 		return vault.Target{}, err
 	}

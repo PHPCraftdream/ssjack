@@ -16,6 +16,7 @@ import (
 
 	"storagehost/internal/bridge"
 	"storagehost/internal/broker"
+	"storagehost/internal/buildinfo"
 	"storagehost/internal/hooks"
 	"storagehost/internal/launch"
 	"storagehost/internal/remote"
@@ -32,6 +33,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) (int, error) {
+	if handled, err := handleHelp(args, os.Stdout); handled {
+		if err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
 	if len(args) > 0 && args[0] == "hook" {
 		return runHook(args[1:])
 	}
@@ -63,15 +70,23 @@ func run(ctx context.Context, args []string) (int, error) {
 	protectPath := flags.String("protect-key", "", "Protect an existing encrypted SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key (default: input + .ssjack.ktav)")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted credentials database for vault, ssh, and run commands")
-	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ssjack [options] <harness> [arguments...]\nExample: ssjack run storage claude -c\nGenerate key: ssjack --generate-key <new-file>\nProtect key: ssjack --protect-key <encrypted-key> [--key-output <new-file>]\nVault: ssjack [--vault <file>] vault init|list|passwd|add|edit|show|remove|public|import|export\nInteractive SSH: ssjack ssh <name>\nCoding agent: ssjack run <name> <harness> [arguments...]\nService mode: ssjack mcp\nUI cards: configured automatically at startup\nLegacy display hooks: ssjack install-hooks")
-		flags.PrintDefaults()
-	}
+	version := flags.Bool("version", false, "Print version, commit, and platform")
+	flags.Usage = func() { printRootHelp(os.Stderr) }
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0, nil
 		}
 		return 1, err
+	}
+	if *version {
+		fmt.Fprintln(os.Stdout, buildinfo.String())
+		return 0, nil
+	}
+	if handled, err := handleHelp(flags.Args(), os.Stdout); handled {
+		if err != nil {
+			return 1, err
+		}
+		return 0, nil
 	}
 	if *generatePath != "" || *protectPath != "" || *keyOutput != "" {
 		if flags.NArg() != 0 || *configPath != "" {
@@ -89,7 +104,30 @@ func run(ctx context.Context, args []string) (int, error) {
 		if *configPath != "" {
 			return 1, errors.New("vault commands do not use legacy --config")
 		}
-		return runVaultCommand(ctx, *vaultPath, flags.Args()[1:])
+		return runVaultMaintenance(ctx, *vaultPath, flags.Args()[1:])
+	}
+	if flags.NArg() > 0 {
+		commandArgs := flags.Args()
+		switch commandArgs[0] {
+		case "list", "show", "add", "edit", "remove":
+			if *configPath != "" {
+				return 1, errors.New("record commands do not use legacy --config")
+			}
+			return runVaultCommand(ctx, *vaultPath, commandArgs)
+		case "key":
+			if len(commandArgs) < 2 || (commandArgs[1] != "public" && commandArgs[1] != "import" && commandArgs[1] != "export") {
+				return 1, errors.New("usage: ssjack key public NAME | import NAME FILE | export NAME FILE; use ssjack help key")
+			}
+			if *configPath != "" {
+				return 1, errors.New("key commands do not use legacy --config")
+			}
+			return runVaultCommand(ctx, *vaultPath, commandArgs[1:])
+		case "doctor", "check", "hostkey", "rotate":
+			if *configPath != "" {
+				return 1, errors.New("named credential commands do not use legacy --config")
+			}
+			return runSafetyCommand(ctx, *vaultPath, commandArgs)
+		}
 	}
 	command := flags.Args()
 	credentialName := ""

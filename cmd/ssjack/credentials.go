@@ -41,7 +41,7 @@ func chooseCredential(v *vault.Vault, name string, choose func([]string) (string
 	return name, nil
 }
 
-func readVaultCredential(path, name string) (*ssh.ClientConfig, string, string, error) {
+func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, string, error) {
 	if name != "" {
 		if err := vault.ValidateName(name); err != nil {
 			return nil, "", "", err
@@ -68,6 +68,11 @@ func readVaultCredential(path, name string) (*ssh.ClientConfig, string, string, 
 		return nil, "", "", err
 	}
 	target := v.Targets[name]
+	if usage != "" {
+		if err := target.RequireUsage(usage); err != nil {
+			return nil, "", "", err
+		}
+	}
 	config, err := target.ClientConfig()
 	if err != nil {
 		return nil, "", "", err
@@ -78,7 +83,7 @@ func readVaultCredential(path, name string) (*ssh.ClientConfig, string, string, 
 
 func loadAgentCredentials(path, name, legacyConfig string) (remote.Runner, []string, error) {
 	if legacyConfig == "" {
-		config, address, selected, err := readVaultCredential(path, name)
+		config, address, selected, err := readVaultCredential(path, name, "agent")
 		if err != nil {
 			return nil, nil, err
 		}
