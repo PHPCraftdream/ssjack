@@ -1,9 +1,9 @@
 /.ssh/*
-!/.ssh/config.example
 !/.ssh/ssjack.example.ktav
 /.claude/settings.local.json
 /.claude/ssjack-ui/
 /build/
+/docs/checkpoints/
 /sshpiper/
 /.mcp.json
 **/.claude-plugin/types/
@@ -15,3 +15,7 @@
 *.test
 *.p12
 *.pfx
+*.ssjack.ktav
+*.ssjack.ktav.pub
+*.ssjack.ktav.lock
+.ssjack-vault-*

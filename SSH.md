@@ -1,64 +1,36 @@
-# Manual SSH access
+# SSH compatibility and host trust
 
-`ssh.sh` and `ssh.cmd` are Windows OpenSSH wrappers for manual access. They are independent of the ssjack MCP keeper described in `SSJACK.md`: they do not receive its unlocked credentials.
-
-Both wrappers explicitly use the local `.ssh/config` and the `storagehost` alias. They change to their own directory so relative key and known-host paths do not depend on the caller's working directory.
-
-## Setup
-
-1. If `.ssh/config` does not exist, copy `.ssh/config.example` to it. Do not overwrite an existing configuration.
-2. Replace `CHANGE_ME` with the target IP or DNS name, and verify `User` and `Port`.
-3. Generate a dedicated encrypted key interactively from this directory:
-
-   CMD:
-
-   ```bat
-   "%SystemRoot%\System32\OpenSSH\ssh-keygen.exe" -t ed25519 -a 100 -f .ssh\id_ed25519 -C storagehost-local
-   ```
-
-   Git Bash:
-
-   ```bash
-   "$(cygpath -u "$SYSTEMROOT")/System32/OpenSSH/ssh-keygen.exe" -t ed25519 -a 100 -f .ssh/id_ed25519 -C storagehost-local
-   ```
-
-   Set a strong, nonempty passphrase. Never put it in command arguments, environment variables, configuration, or chat. Stop if asked to overwrite an existing key.
-
-4. Install only `.ssh/id_ed25519.pub` in the intended server account's `authorized_keys` through an existing trusted connection. Do not copy the private key.
-5. Inspect the private key's Windows ACL before changing permissions. Do not disable OpenSSH permission checks to work around an overly permissive ACL.
-
-## Usage
-
-Git Bash:
-
-```bash
-./ssh.sh
-./ssh.sh 'uname -a'
-```
-
-CMD/PowerShell:
+ssjack is its own SSH client. Use named credentials from the encrypted database:
 
 ```text
-.\ssh.cmd
-.\ssh.cmd "uname -a"
+ssjack ssh storage
+ssjack run storage claude -c
 ```
 
-Arguments are a remote command, not an alternate host. Quoting rules depend on the invoking shell. Use an interactive connection for complex manual commands.
+The former `ssh.sh` and `ssh.cmd` OpenSSH wrappers and their configuration template have been removed. Use the native client rather than an alternate credential path. The checkout/application launchers are `ssjack.sh` and `ssjack.cmd`.
 
-Before accepting an unknown host key, compare its fingerprint through a trusted console or existing SSH session. For example, on the server:
+## Host trust
+
+Before importing a server public key, verify its fingerprint through a trusted console or an already trusted SSH session. On the server, for example:
 
 ```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-Verified keys are recorded in the local `.ssh/known_hosts`.
+Import the corresponding server `.pub` file when adding or editing a credential record. The vault stores that public key inside its encrypted payload and checks it on every connection. A client login public key is not a server host key. Unknown or changed keys are rejected; there is no automatic acceptance or unverified network-scan shortcut.
+
+Install only the client's public key in the intended remote account's `authorized_keys`. Never copy the private key to the server or put a passphrase in arguments, environment variables, configuration, or chat.
+
+## Formats
+
+The encrypted ssjack container is not directly readable by OpenSSH. Standard encrypted OpenSSH/PEM keys can be imported into the encrypted database. Interoperability exports must be explicitly requested and protected with their own passphrase; they do not retain the custom container's four Argon2id operations and 1000 AES-GCM data layers.
+
+See [protected keys](docs/KEYS.md) and [the credential database CLI](docs/VAULT.md) for the supported commands. Source files and old backups retain their original protection until separately retired. Deleting a file is not guaranteed secure erasure of snapshots, backups, or storage blocks.
 
 ## Boundaries
 
-- `-F` selects the local configuration rather than the global user configuration.
-- `IdentityAgent none` disables the shared SSH agent. Each new connection asks for the encrypted key's passphrase.
-- Password and keyboard-interactive authentication are disabled.
-- Agent forwarding, X11 forwarding, and configured port forwards are disabled.
-- Ignore rules do not protect files from same-user programs, backups, synchronization, or forced Git additions.
-- These wrappers do not isolate agents and do not install or administer Incus, Nix, or remote services by themselves.
-- Remote commands and output may contain secrets; do not place secrets in command arguments or intentionally print them into a transcript.
+- The private key remains in the ssjack process, not an external SSH client or agent.
+- The remote account's permissions apply; SSH is not an application sandbox.
+- Agent/X11 forwarding and arbitrary target selection are not enabled by the interactive mode.
+- Ignore rules do not protect files from same-user processes, backups, synchronization, or forced Git additions.
+- Remote output and intentionally displayed credential metadata may contain sensitive information.

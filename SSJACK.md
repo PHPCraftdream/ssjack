@@ -1,6 +1,6 @@
 # ssjack
 
-A cross-platform Go SSH key keeper and MCP server. One executable has two roles:
+A cross-platform Go SSH client, encrypted credential manager, key utility, and MCP server. Agent access uses two roles in the same executable:
 
 - `ssjack <harness> [arguments...]` prompts for a passphrase, keeps decrypted SSH keys in memory, and runs the selected harness.
 - `ssjack mcp` is the stdio bridge started by that harness. Starting another bridge does not grant access by itself.
@@ -30,25 +30,28 @@ go build -mod=readonly -trimpath -o build/ssjack ./cmd/ssjack
 ./ssjack.sh claude -c
 ```
 
-Launch from the project directory: the default configuration and project MCP settings are relative to the current working directory. The wrapper finds the binary next to itself without changing that directory. The binary directory is prepended to PATH only for the child harness so it can start `ssjack mcp`.
+Launch from the project directory: the encrypted credentials database and project MCP settings are relative to the current working directory. The wrapper finds the binary next to itself without changing that directory. The binary directory is prepended to PATH only for the child harness so it can start `ssjack mcp`.
 
 Use an interactive terminal for the passphrase. On Windows, mintty may not provide a usable console handle; use CMD/PowerShell or a suitable `winpty`. Passphrases from environment variables, command arguments, pipes, or chat are not accepted.
 
 Keep the launcher in the foreground. A harness that daemonizes and immediately exits its initial process is not supported: the keeper closes when that process exits.
 
-## Configuration: Ktav 0.8.1, pure Go
+## Named credentials and legacy configuration: Ktav 0.8.1, pure Go
 
 ssjack uses `github.com/ktav-lang/golang/pure` pinned to `v0.8.1`. It does not import the Rust ABI-backed root package. The pure package works with `CGO_ENABLED=0` and requires no Rust shared library.
 
 The following ssjack-owned formats use Ktav:
 
 - SSH configuration: `.ssh/ssjack.ktav`;
+- protected key containers and the encrypted interactive credentials vault;
 - temporary bootstrap file: `bootstrap.ktav`;
 - framed request/response bodies on the internal TLS connection.
 
 JSON remains only at required external interfaces: MCP JSON-RPC, `.mcp.json`, Claude Code settings, and hook event input/output. Existing `json` struct tags are also used by the Ktav library to map Go field names; they do not make the stored documents JSON.
 
-Copy `.ssh/ssjack.example.ktav` to `.ssh/ssjack.ktav` only if the destination does not already exist. Example:
+By default, shell and agent launches use the encrypted named-record vault. Use `ssjack run <name> <harness> [arguments...]` to select the agent's credentials explicitly. Without a name, select after vault unlock; one available record is selected automatically. See [vault commands](docs/VAULT.md) for initialization and editing.
+
+The following target-file workflow is **legacy opt-in only**, selected by `--config .ssh/ssjack.ktav`. Copy `.ssh/ssjack.example.ktav` to `.ssh/ssjack.ktav` only if the destination does not already exist. Example:
 
 ```text
 keys.storage: id_ed25519
@@ -60,11 +63,11 @@ targets.storagehost.known_hosts: known_hosts
 
 Relative paths resolve from the configuration file's directory. Only configured targets are available through MCP. Unknown configuration fields are rejected. All configured private keys must be encrypted and unlock with the supplied passphrase.
 
-The migration does not delete an existing `.ssh/ssjack.json`; it is an unused rollback copy. New binaries read `.ssh/ssjack.ktav` by default. The internal protocol changed, so restart both keeper and bridge together; do not mix old and new executables within one session.
+The migration does not delete an existing `.ssh/ssjack.json`; it is an unused rollback copy. New binaries read that legacy file only when explicitly selected with `--config`; the default credential database is `.ssh/credentials.ssjack.ktav`. The internal protocol changed, so restart both keeper and bridge together; do not mix old and new executables within one session.
 
 ## Keys and host verification
 
-1. Generate a dedicated encrypted key interactively with `ssh-keygen`; see `SSH.md`.
+1. Generate a dedicated encrypted key with `ssjack --generate-key <new-file>`; see [protected keys](docs/KEYS.md). Legacy encrypted OpenSSH keys remain supported; see `SSH.md` for the separate manual workflow.
 2. Install only its public key into the intended server account's `authorized_keys` through an existing trusted connection.
 3. Verify server host keys through that trusted connection and populate `known_hosts` in advance. Unknown or changed host keys are never accepted automatically.
 4. Configure the target address, SSH user, key reference, and `known_hosts` file.
@@ -74,6 +77,12 @@ The example account is `mcp-agent`, not the host administrator. This tool does n
 Private keys remain encrypted on disk. After unlocking, decrypted signer objects stay in the keeper's memory until it exits. They are not exported to the harness, bridge, remote server, or an external SSH client. SSH executes inside the keeper.
 
 The passphrase buffer is cleared after unlocking, but Go and the OS cannot guarantee erasure of every copy, protection from swap, dumps, debuggers, administrators, or a targeted process running as the same user.
+
+## Interactive shell and encrypted credentials
+
+`ssjack ssh <name>` opens an interactive SSH session using the same encrypted database as `ssjack run <name> <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|list|passwd|add|edit|show|remove|import|export|public` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
+
+This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 
 ## Bootstrap: two secrets, one connection
 
@@ -148,7 +157,7 @@ Limits:
 
 Disconnecting the bridge cancels active operations and closes their SSH connections. Detached processes and system services may continue on the server. A shell command has the SSH user's permissions, so guest OS/Incus isolation remains necessary. Remote output can contain secrets and is delivered to the harness.
 
-The existing `ssh.sh`/`ssh.cmd` wrappers are separate manual OpenSSH access and do not receive the keeper's unlocked credentials.
+The old OpenSSH wrappers are retired and unused by the native client and MCP paths. Use `ssjack ssh <name>` for manual sessions; see [SSH compatibility and host trust](SSH.md).
 
 ## Updating an installed executable
 

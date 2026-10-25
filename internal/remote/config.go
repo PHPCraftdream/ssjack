@@ -12,6 +12,8 @@ import (
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"storagehost/internal/keyfile"
 )
 
 type Target struct {
@@ -123,13 +125,7 @@ func Unlock(config Config, passphrase []byte) (map[string]ssh.Signer, error) {
 			clear(data)
 			return nil, fmt.Errorf("failed to read SSH key %q", name)
 		}
-		_, plainErr := ssh.ParseRawPrivateKey(data)
-		var missing *ssh.PassphraseMissingError
-		if !errors.As(plainErr, &missing) {
-			clear(data)
-			return nil, fmt.Errorf("SSH key %q must be encrypted in a supported format", name)
-		}
-		signer, err := ssh.ParsePrivateKeyWithPassphrase(data, passphrase)
+		signer, err := unlockKey(data, passphrase)
 		clear(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unlock SSH key %q", name)
@@ -137,6 +133,23 @@ func Unlock(config Config, passphrase []byte) (map[string]ssh.Signer, error) {
 		signers[name] = signer
 	}
 	return signers, nil
+}
+
+func unlockKey(data, passphrase []byte) (ssh.Signer, error) {
+	if keyfile.IsContainer(data) {
+		plaintext, err := keyfile.Open(data, passphrase)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(plaintext)
+		return ssh.ParsePrivateKey(plaintext)
+	}
+	_, err := ssh.ParseRawPrivateKey(data)
+	var missing *ssh.PassphraseMissingError
+	if !errors.As(err, &missing) {
+		return nil, errors.New("SSH key must be encrypted in a supported format")
+	}
+	return ssh.ParsePrivateKeyWithPassphrase(data, passphrase)
 }
 
 func NewSSHRunner(config Config, signers map[string]ssh.Signer) (Runner, error) {

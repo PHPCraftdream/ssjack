@@ -10,23 +10,43 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdout, stderr io.Writer) (int, error) {
+func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, func(), error) {
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return -1, errors.New("failed to connect to the SSH target")
+		return nil, nil, errors.New("failed to connect to the SSH target")
 	}
-	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
 	if err != nil {
-		return -1, errors.New("SSH authentication or host key verification failed")
+		stop()
+		conn.Close()
+		return nil, nil, errors.New("SSH authentication or host key verification failed")
 	}
 	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, channels, requests)
-	defer client.Close()
+	return client, func() { stop(); client.Close() }, nil
+}
+
+func NewCredentialRunner(name, address string, config *ssh.ClientConfig) (Runner, error) {
+	if name == "" || address == "" || config == nil || config.HostKeyCallback == nil || config.User == "" || len(config.Auth) == 0 {
+		return nil, errors.New("credentials require a name, address, user, authentication, and verified host keys")
+	}
+	return func(ctx context.Context, target, command string, stdout, stderr io.Writer) (int, error) {
+		if target != name {
+			return -1, errors.New("unapproved credential name")
+		}
+		return runSSH(ctx, address, config, command, stdout, stderr)
+	}, nil
+}
+
+func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdout, stderr io.Writer) (int, error) {
+	client, closeClient, err := connectSSH(ctx, address, config)
+	if err != nil {
+		return -1, err
+	}
+	defer closeClient()
 	session, err := client.NewSession()
 	if err != nil {
 		return -1, errors.New("failed to open an SSH session")

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"golang.org/x/term"
 
 	"storagehost/internal/bridge"
 	"storagehost/internal/broker"
@@ -58,10 +57,14 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	configPath := flags.String("config", ".ssh/ssjack.ktav", "Ktav file with approved SSH targets")
+	configPath := flags.String("config", "", "Explicit legacy Ktav target configuration instead of the encrypted vault")
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
+	generatePath := flags.String("generate-key", "", "Create a derived Ed25519 key in a new encrypted container")
+	protectPath := flags.String("protect-key", "", "Protect an existing encrypted SSH key in a new container")
+	keyOutput := flags.String("key-output", "", "Output for --protect-key (default: input + .ssjack.ktav)")
+	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted credentials database for vault, ssh, and run commands")
 	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ssjack [options] <harness> [arguments...]\nExample: ssjack claude -c\nService mode: ssjack mcp\nUI cards: configured automatically at startup\nLegacy display hooks: ssjack install-hooks")
+		fmt.Fprintln(os.Stderr, "Usage: ssjack [options] <harness> [arguments...]\nExample: ssjack run storage claude -c\nGenerate key: ssjack --generate-key <new-file>\nProtect key: ssjack --protect-key <encrypted-key> [--key-output <new-file>]\nVault: ssjack [--vault <file>] vault init|list|passwd|add|edit|show|remove|public|import|export\nInteractive SSH: ssjack ssh <name>\nCoding agent: ssjack run <name> <harness> [arguments...]\nService mode: ssjack mcp\nUI cards: configured automatically at startup\nLegacy display hooks: ssjack install-hooks")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -70,35 +73,39 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 1, err
 	}
+	if *generatePath != "" || *protectPath != "" || *keyOutput != "" {
+		if flags.NArg() != 0 || *configPath != "" {
+			return 1, errors.New("key operations cannot launch a harness or shell")
+		}
+		return runKeyCommand(ctx, *generatePath, *protectPath, *keyOutput)
+	}
+	if flags.NArg() > 0 && flags.Arg(0) == "ssh" {
+		if flags.NArg() != 2 || *configPath != "" {
+			return 1, errors.New("usage: ssjack [--vault <file>] ssh <name>")
+		}
+		return runVaultShell(ctx, *vaultPath, flags.Arg(1))
+	}
+	if flags.NArg() > 0 && flags.Arg(0) == "vault" {
+		if *configPath != "" {
+			return 1, errors.New("vault commands do not use legacy --config")
+		}
+		return runVaultCommand(ctx, *vaultPath, flags.Args()[1:])
+	}
+	command := flags.Args()
+	credentialName := ""
+	if len(command) > 0 && command[0] == "run" {
+		if len(command) < 3 || *configPath != "" {
+			return 1, errors.New("usage: ssjack [--vault <file>] run <name> <harness> [arguments...]")
+		}
+		credentialName, command = command[1], command[2:]
+	}
 	if flags.NArg() == 0 || *ttl <= 0 || *ttl > 10*time.Minute {
 		flags.Usage()
 		return 1, errors.New("specify a harness and a bootstrap timeout greater than zero and at most 10 minutes")
 	}
-	config, err := remote.LoadConfig(*configPath)
+	runner, targets, err := loadAgentCredentials(*vaultPath, credentialName, *configPath)
 	if err != nil {
 		return 1, err
-	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return 1, errors.New("an interactive terminal is required; passphrases from environment variables or pipes are not accepted")
-	}
-	fmt.Fprint(os.Stderr, "SSH key passphrase: ")
-	passphrase, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return 1, errors.New("failed to read passphrase")
-	}
-	signers, err := remote.Unlock(config, passphrase)
-	clear(passphrase)
-	if err != nil {
-		return 1, err
-	}
-	runner, err := remote.NewSSHRunner(config, signers)
-	if err != nil {
-		return 1, err
-	}
-	var targets []string
-	for target := range config.Targets {
-		targets = append(targets, target)
 	}
 	manager := remote.NewManager(ctx, targets, runner)
 	defer manager.Close()
@@ -112,7 +119,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	fmt.Fprintln(os.Stderr, "Keys unlocked. MCP access will attach once to this session.")
 	return launch.Run(ctx, launch.Options{
-		Root: root, Executable: executable, Command: flags.Args(), BootstrapTTL: *ttl,
+		Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl,
 		Handler: manager.Handle, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 }
