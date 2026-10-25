@@ -3,6 +3,13 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      source_ref:
+        description: Existing ref to verify
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -19,21 +26,66 @@ jobs:
       CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+      - name: Check Go formatting
+        shell: bash
+        run: |
+          files="$(gofmt -l cmd internal plugins/ssjack-ui tests/fixtures)"
+          if [ -n "$files" ]; then
+            printf '%s\n' "$files"
+            exit 1
+          fi
+      - name: Build CLI and check help
+        shell: bash
+        run: |
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
+          binary="$RUNNER_TEMP/ssjack$suffix"
+          go build -mod=readonly -trimpath -o "$binary" ./cmd/ssjack
+          "$binary" --help
       - name: Test
         run: go test -mod=readonly -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+      - name: Build installer fixture
+        shell: bash
+        run: |
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
+          go build -mod=readonly -trimpath -o "$RUNNER_TEMP/ssjack-install-fixture$suffix" ./tests/fixtures/installbinary
+      - name: Test Unix installer
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash tests/installers.sh "$RUNNER_TEMP/ssjack-install-fixture"
+      - name: Test Windows PowerShell installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
+      - name: Test PowerShell Core installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
       - name: Check Bash syntax
         shell: bash
-        run: bash -n ssh.sh ssjack.sh update-ssjack.sh
+        run: bash -n ssjack.sh update-ssjack.sh install.sh tests/installers.sh
+      - name: Retain verified native CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-cli-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/ssjack${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 7
 
   race:
     name: Go race detector
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -42,3 +94,21 @@ jobs:
         env:
           CGO_ENABLED: '1'
         run: go test -mod=readonly -race -count=1 -timeout 180s ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+
+  full-profile:
+    name: Encrypted vault with production 1 GiB KDF
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify production vault encryption and reload
+        env:
+          CGO_ENABLED: '0'
+          SSJACK_TEST_FULL_KDF: '1'
+        run: go test -mod=readonly -run '^TestVaultFullProfile$' -count=1 -timeout 300s ./internal/vault
