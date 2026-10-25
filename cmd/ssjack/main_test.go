@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"storagehost/internal/broker"
@@ -30,9 +31,20 @@ func TestMCPRequiresSession(t *testing.T) {
 }
 
 func TestHarnessTailIsNotParsedAsSSJackFlags(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "missing.ktav")
-	code, err := run(context.Background(), []string{"--config", missing, "claude", "-c"})
-	if code == 0 || !os.IsNotExist(err) {
-		t.Fatalf("-c must belong to the harness rather than ssjack: %d %v", code, err)
+	dir := t.TempDir()
+	file, err := os.CreateTemp(dir, "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	previous := os.Stdin
+	os.Stdin = file
+	defer func() { os.Stdin = previous }()
+	for _, profileFlag := range []string{"-p", "--profile"} {
+		args := []string{"--vault", filepath.Join(dir, "missing"), profileFlag, "main", "run", "claude", "-c"}
+		code, err := run(context.Background(), args)
+		if code == 0 || err == nil || !strings.Contains(err.Error(), "terminal") {
+			t.Fatalf("harness tail was parsed as local flags: %d %v", code, err)
+		}
 	}
 }

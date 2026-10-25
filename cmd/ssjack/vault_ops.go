@@ -22,8 +22,14 @@ func confirmValue(prompt, expected string) error {
 	return nil
 }
 
-func runVaultMaintenance(ctx context.Context, path string, args []string) (int, error) {
-	if len(args) == 1 && (args[0] == "init" || args[0] == "passwd") {
+func runVaultMaintenance(ctx context.Context, path, profile string, args []string) (int, error) {
+	if len(args) == 2 && args[0] == "migrate" {
+		return runLegacyMigration(ctx, path, profile, args[1])
+	}
+	if len(args) == 1 && args[0] == "init" {
+		return runInitProfile(ctx, path, profile)
+	}
+	if len(args) == 1 && args[0] == "passwd" {
 		return runVaultCommand(ctx, path, args)
 	}
 	if len(args) != 2 || (args[0] != "backup" && args[0] != "check" && args[0] != "restore") {

@@ -3,8 +3,8 @@
 ssjack is its own SSH client. Use named credentials from the encrypted database:
 
 ```text
-ssjack ssh storage
-ssjack run storage claude -c
+ssjack -p storage ssh
+ssjack -p storage run claude -c
 ```
 
 The former `ssh.sh` and `ssh.cmd` OpenSSH wrappers and their configuration template have been removed. Use the native client rather than an alternate credential path. The checkout/application launchers are `ssjack.sh` and `ssjack.cmd`.

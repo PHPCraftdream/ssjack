@@ -36,22 +36,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		return 1, err
 	}
 	if args[0] == "init" {
-		if err := requireNewPath(path); err != nil {
-			return 1, err
-		}
-		secret, err := confirmedSecret()
-		if err != nil {
-			return 1, err
-		}
-		defer clear(secret)
-		if err := ctx.Err(); err != nil {
-			return 1, err
-		}
-		if err := vault.CreateContext(ctx, path, secret); err != nil {
-			return 1, err
-		}
-		fmt.Fprintln(os.Stderr, "Created encrypted credentials vault. Each CLI invocation will request its secret again.")
-		return 0, nil
+		return runInitProfile(ctx, path, "main")
 	}
 	secret, err := readSecret("Vault secret: ")
 	if err != nil {
@@ -96,13 +81,8 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 	}
 	switch args[0] {
 	case "show":
-		fmt.Fprintf(os.Stdout, "Target: %s\nAddress: %q\nUser: %q\n", name, target.Address, target.User)
-		for _, encoded := range target.HostKeys {
-			key, err := vault.ParseHostKey([]byte(encoded))
-			if err != nil {
-				return 1, err
-			}
-			fmt.Fprintln(os.Stdout, "Server key:", ssh.FingerprintSHA256(key))
+		if err := writeProfileSummary(os.Stdout, name, target); err != nil {
+			return 1, err
 		}
 		return 0, nil
 	case "public":
@@ -115,7 +95,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		}
 		return 0, nil
 	case "export":
-		if err := exportVaultKey(args[2], target.PrivateKey, secret); err != nil {
+		if err := exportVaultKey(ctx, args[2], target.PrivateKey, secret); err != nil {
 			return 1, err
 		}
 		return 0, nil

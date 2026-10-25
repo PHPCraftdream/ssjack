@@ -13,15 +13,18 @@ import (
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 
+	"storagehost/internal/sshauth"
+
 	"storagehost/internal/keyfile"
 )
 
 type Target struct {
-	Address    string   `json:"address"`
-	User       string   `json:"user"`
-	PrivateKey []byte   `json:"private_key"`
-	HostKeys   []string `json:"host_keys"`
-	Usage      string   `json:"usage,omitempty"`
+	Address    string    `json:"address"`
+	User       string    `json:"user"`
+	PrivateKey []byte    `json:"private_key"`
+	HostKeys   []string  `json:"host_keys"`
+	Usage      string    `json:"usage,omitempty"`
+	SSHPolicy  SSHPolicy `json:"ssh_policy,omitempty"`
 }
 
 type Vault struct {
@@ -95,6 +98,9 @@ func ParseHostKey(data []byte) (ssh.PublicKey, error) {
 }
 
 func (t Target) Validate() error {
+	if err := t.SSHPolicy.Validate(); err != nil {
+		return err
+	}
 	if t.Usage != "" && t.Usage != "both" && t.Usage != "human" && t.Usage != "agent" {
 		return errors.New("credential usage must be both, human, or agent")
 	}
@@ -169,9 +175,18 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 		}
 		pins = append(pins, key.Marshal())
 	}
+	supported := ssh.SupportedAlgorithms()
+	selectAlgorithms := func(selected, defaults []string) []string {
+		if len(selected) == 0 {
+			selected = defaults
+		}
+		return append([]string(nil), selected...)
+	}
 	return &ssh.ClientConfig{
-		User: t.User,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Config:            ssh.Config{KeyExchanges: selectAlgorithms(t.SSHPolicy.KeyExchanges, supported.KeyExchanges), Ciphers: selectAlgorithms(t.SSHPolicy.Ciphers, supported.Ciphers), MACs: selectAlgorithms(t.SSHPolicy.MACs, supported.MACs)},
+		HostKeyAlgorithms: selectAlgorithms(t.SSHPolicy.HostKeys, supported.HostKeys),
+		User:              t.User,
+		Auth:              []ssh.AuthMethod{sshauth.PublicKey(signer)},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			for _, pin := range pins {
 				if bytes.Equal(pin, key.Marshal()) {
@@ -205,6 +220,9 @@ func marshal(v *Vault) ([]byte, error) {
 	records := make(map[string]any, len(v.Targets))
 	for name, target := range v.Targets {
 		record := map[string]any{"address": target.Address, "user": target.User, "private_key": target.PrivateKey, "host_keys": target.HostKeys}
+		if !target.SSHPolicy.Empty() {
+			record["ssh_policy"] = target.SSHPolicy
+		}
 		if target.Usage != "" {
 			record["usage"] = target.Usage
 		}
@@ -238,14 +256,27 @@ func unmarshal(data []byte) (*Vault, error) {
 	}
 	for _, value := range targets {
 		target, ok := value.(map[string]any)
-		if !ok || (len(target) != 4 && len(target) != 5) {
+		if !ok || len(target) < 4 || len(target) > 6 {
 			return nil, errors.New("invalid vault target fields")
 		}
 		for field := range target {
 			switch field {
-			case "address", "user", "private_key", "host_keys", "usage":
+			case "address", "user", "private_key", "host_keys", "usage", "ssh_policy":
 			default:
 				return nil, errors.New("unknown vault target field")
+			}
+		}
+		if value, exists := target["ssh_policy"]; exists {
+			policy, ok := value.(map[string]any)
+			if !ok {
+				return nil, errors.New("invalid SSH policy")
+			}
+			for field := range policy {
+				switch field {
+				case "host_keys", "key_exchanges", "ciphers", "macs":
+				default:
+					return nil, errors.New("unknown SSH policy field")
+				}
 			}
 		}
 		for _, field := range []string{"address", "user", "private_key", "host_keys"} {

@@ -42,22 +42,14 @@ Without `--key-output`, the output defaults to the input path plus `.ssjack.ktav
 
 The key identity is preserved. No decrypted key is written to disk. The input is not overwritten, removed, or re-encrypted in place, and SSH configuration is not changed automatically. Older copies and backups retain their original, potentially weaker protection. Strengthening one copy does not strengthen the others; any retirement or deletion of old copies is a separate decision.
 
-For the normal encrypted-database workflow, import the new container with `ssjack add <name>` and select it with `ssjack ssh <name>` or `ssjack run <name> <harness> [arguments...]`.
-
-For explicit legacy `--config` usage only, set the configured key path after generation or conversion succeeds:
-
-```text
-keys.storage: protected-key.ssjack.ktav
-```
-
-Paths are relative to the configuration file's directory. All configured keys must unlock with the one secret entered at launcher startup. Legacy encrypted SSH keys remain supported; they retain their original KDF and are not silently upgraded.
+For the normal encrypted-database workflow, import the container during `ssjack [-p NAME] add` or replace a profile key using `ssjack [-p NAME] key import FILE`. Select the same profile for `ssh` and `run`; omitted selection means `main`. Legacy metadata can be consumed only by explicit `vault migrate FILE`, never as runtime configuration.
 
 ## Standard-format interoperability
 
 ```text
-ssjack key import storage existing-key.pem
-ssjack key export storage exported-key
-ssjack key public storage
+ssjack -p storage key import existing-key.pem
+ssjack -p storage key export exported-key
+ssjack -p storage key public
 ```
 
 `vault import` replaces only the private key of an existing named credential record. For a new record, `vault add` prompts for the connection settings and imports its key. Addresses, usernames, and server pins are not changed by key replacement. Plaintext sources, encrypted OpenSSH keys, supported PEM keys, and ssjack containers are accepted; the source file is never overwritten or deleted. Unsupported PEM encryption formats fail explicitly rather than being guessed.

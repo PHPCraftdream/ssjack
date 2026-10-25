@@ -31,8 +31,8 @@ func TestEveryCommandHasDetailedHelpAndExamples(t *testing.T) {
 
 func TestHelpDoesNotConsumeHarnessArguments(t *testing.T) {
 	for _, args := range [][]string{
-		{"run", "home", "claude", "--help"},
-		{"run", "home", "program", "key", "--help"},
+		{"run", "claude", "--help"},
+		{"run", "program", "key", "--help"},
 		{"claude", "--help"},
 	} {
 		if handled, err := handleHelp(args, &bytes.Buffer{}); handled || err != nil {
@@ -70,7 +70,7 @@ func TestHelpAndVersionNeverOpenVault(t *testing.T) {
 func TestRootHelpListsPrimaryWorkflows(t *testing.T) {
 	var output bytes.Buffer
 	printRootHelp(&output)
-	for _, fragment := range []string{"ssjack ssh home", "ssjack run home claude -c", "ssjack add home", "--vault FILE", "--version", "doctor", "rotate", "hostkey"} {
+	for _, fragment := range []string{"ssjack ssh", "ssjack run claude -c", "ssjack add", "--vault FILE", "--version", "doctor", "rotate", "hostkey"} {
 		if !strings.Contains(output.String(), fragment) {
 			t.Fatalf("root help is missing %q", fragment)
 		}

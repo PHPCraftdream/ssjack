@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"storagehost/internal/sshauth"
 )
 
 func sshStageError(ctx context.Context, message string) error {
@@ -18,6 +20,10 @@ func sshStageError(ctx context.Context, message string) error {
 }
 
 func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, func(), error) {
+	prepared, signed, err := sshauth.ForConnection(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
@@ -25,11 +31,17 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, prepared)
 	if err != nil {
 		stop()
 		conn.Close()
 		return nil, nil, sshStageError(ctx, "SSH authentication or host key verification failed")
+	}
+	if !signed() {
+		stop()
+		sshConn.Close()
+		conn.Close()
+		return nil, nil, errors.New("SSH authentication did not use the selected private key; refusing unverified identity")
 	}
 	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, channels, requests)

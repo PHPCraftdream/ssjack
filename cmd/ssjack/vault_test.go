@@ -50,9 +50,9 @@ func TestCredentialCommandsRequireInteractiveSecret(t *testing.T) {
 	defer func() { os.Stdin = previous }()
 	t.Setenv("SSJACK_PASSPHRASE", "environment secrets must not be accepted")
 	for _, args := range [][]string{
-		{"vault", "init"}, {"list"}, {"show", "test"},
-		{"add", "test"}, {"edit", "test"},
-		{"remove", "test"}, {"vault", "passwd"}, {"check", "test"}, {"hostkey", "show", "test"}, {"hostkey", "replace", "test", "input"}, {"rotate", "test"}, {"vault", "check", "input"}, {"vault", "restore", "input"}, {"key", "public", "test"}, {"key", "import", "test", "input"}, {"key", "export", "test", "output"}, {"ssh", "test"}, {"run", "test", "claude", "-c"}, {"claude", "-c"},
+		{"vault", "init"}, {"list"}, {"show"},
+		{"add"}, {"edit"},
+		{"remove"}, {"vault", "passwd"}, {"check"}, {"hostkey", "show"}, {"hostkey", "replace", "input"}, {"rotate"}, {"vault", "check", "input"}, {"vault", "restore", "input"}, {"key", "public"}, {"key", "import", "input"}, {"key", "export", "output"}, {"ssh"}, {"run", "claude", "-c"}, {"claude", "-c"},
 	} {
 		command := append([]string{"--vault", filepath.Join(dir, "vault")}, args...)
 		code, err := run(context.Background(), command)

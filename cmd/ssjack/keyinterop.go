@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -32,11 +33,17 @@ func readImportedPrivate(path string) ([]byte, error) {
 	return keyfile.ImportSSH(data, password)
 }
 
-func exportVaultKey(path string, plaintext, vaultSecret []byte) error {
+func exportVaultKey(ctx context.Context, path string, plaintext, vaultSecret []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := requireNewPath(path); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "OpenSSH export uses standard protection, not the ssjack Argon2id/AES-layer profile. Use a different passphrase: reusing the vault secret gives attackers a cheaper way to guess that secret.")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	password, err := confirmedSecretFor("OpenSSH passphrase")
 	if err != nil {
 		return err
@@ -45,11 +52,7 @@ func exportVaultKey(path string, plaintext, vaultSecret []byte) error {
 	if err := validateExportSecret(password, vaultSecret); err != nil {
 		return err
 	}
-	encoded, err := keyfile.ExportSSH(plaintext, password)
-	if err != nil {
-		return err
-	}
-	if err := writeNewFile(path, encoded, 0600); err != nil {
+	if err := publishKeyExport(ctx, path, plaintext, password, keyfile.ExportSSH); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Saved encrypted OpenSSH private key. Vault credentials were not changed.")
@@ -64,4 +67,18 @@ func validateExportSecret(password, vaultSecret []byte) error {
 		return errors.New("OpenSSH export passphrase must differ from the vault secret")
 	}
 	return nil
+}
+
+func publishKeyExport(ctx context.Context, path string, plaintext, password []byte, encode func([]byte, []byte) ([]byte, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	encoded, err := encode(plaintext, password)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writeNewFile(path, encoded, 0600)
 }

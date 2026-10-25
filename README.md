@@ -9,9 +9,9 @@ Using an executable built from the current source, from your application directo
 ```text
 ssjack --version
 ssjack vault init
-ssjack add home
-ssjack ssh home
-ssjack run home claude -c
+ssjack -p home add
+ssjack -p home ssh
+ssjack -p home run claude -c
 ```
 
 The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use two-part capability. Human SSH behaves like a normal PTY session after login.
@@ -30,14 +30,14 @@ Each command explains its arguments, trust boundaries, and examples. Global flag
 
 ```text
 ssjack list
-ssjack show home
-ssjack edit home
-ssjack remove home
-ssjack key public home
-ssjack key import home existing-key.pem
-ssjack key export home home.openssh
+ssjack -p home show
+ssjack -p home edit
+ssjack -p home remove
+ssjack -p home key public
+ssjack -p home key import existing-key.pem
+ssjack -p home key export home.openssh
 ssjack doctor
-ssjack check home
+ssjack -p home check
 ```
 
 Records contain encrypted addresses, users, private keys, server pins, and optional `both`/`human`/`agent` usage. Usage gates prevent selecting the wrong record accidentally; real readonly/admin privileges require separate server accounts and isolation, not string filtering of shell commands.
@@ -50,9 +50,9 @@ Records contain encrypted addresses, users, private keys, server pins, and optio
 ssjack vault backup backups/home.ssjack.ktav
 ssjack vault check backups/home.ssjack.ktav
 ssjack vault restore backups/home.ssjack.ktav
-ssjack hostkey show home
-ssjack hostkey replace home verified-server-key.pub
-ssjack rotate home
+ssjack -p home hostkey show
+ssjack -p home hostkey replace verified-server-key.pub
+ssjack -p home rotate
 ```
 
 Create backup parent directories yourself. Backups stay encrypted; restore validates before confirmation, retains the previous encrypted copy, and refuses revision conflicts. Server pin replacement requires independent verification and exact fingerprint confirmation, never automatic acceptance of a mismatch.
@@ -76,7 +76,7 @@ This custom composition is **not independently audited**. The outermost GCM tag 
 
 CI builds the CLI with the Go version in `go.mod` and embeds build identity. From a compiled checkout, `./ssjack.sh` or `.\ssjack.cmd` locates the local `build/ssjack` executable without building automatically. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
 
-The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Legacy plaintext target metadata requires explicit `--config FILE`; no automatic fallback occurs. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
+The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Normal startup never reads plaintext target metadata; explicit `vault migrate FILE` is the only legacy import path. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
 
 ## Security boundaries
 
@@ -97,3 +97,11 @@ All test and build execution belongs in GitHub CI, not local development. The ma
 - [SSH interoperability and server trust](SSH.md)
 - [Release assets and installers](docs/RELEASES.md)
 - [UI plugin development](plugins/ssjack-ui/README.md)
+
+## Legacy metadata migration boundary
+
+Normal startup accepts profiles only from the encrypted database. `--config` is not a supported startup option. An old plaintext metadata file can be consumed only by explicit `ssjack [-p PROFILE] vault migrate LEGACY_FILE`, defaulting to destination profile `main`.
+
+Migration asks for database authorization (or a confirmed new database secret), source key authorization when needed, and explicit destination-profile confirmation. It imports address/user/private key bytes and only raw server keys already trusted for the exact legacy address/port, including supported hashed known_hosts entries; revoked, unrelated, CA-only, or missing trust is not accepted. No network scan or connection supplies migration trust. Existing destination profiles are never overwritten. Existing databases receive encrypted recovery snapshots before the new profile is committed.
+
+Source metadata, source private-key files, and old copies are never silently deleted. They can still expose metadata until the user separately retires them after verifying the encrypted profile. The assistant cannot perform real migration without the user's terminal-only secrets and does not read real private keys through tools.

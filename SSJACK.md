@@ -7,7 +7,7 @@ A cross-platform Go SSH client, encrypted credential manager, key utility, and M
 
 ```text
 ssjack claude -c
-ssjack --config .ssh/ssjack.ktav --bootstrap-timeout 5m claude -c
+ssjack -p work --bootstrap-timeout 5m run claude -c
 ```
 
 Options belonging to ssjack precede the harness name. The remaining arguments belong to the harness. Native executables are launched without a shell. Windows batch launchers require `cmd.exe`; ambiguous quoting and shell expansion arguments are rejected rather than guessed.
@@ -49,21 +49,9 @@ The following ssjack-owned formats use Ktav:
 
 JSON remains only at required external interfaces: MCP JSON-RPC, `.mcp.json`, Claude Code settings, and hook event input/output. Existing `json` struct tags are also used by the Ktav library to map Go field names; they do not make the stored documents JSON.
 
-By default, shell and agent launches use the encrypted named-record vault. Use `ssjack run <name> <harness> [arguments...]` to select the agent's credentials explicitly. Without a name, select after vault unlock; one available record is selected automatically. See [vault commands](docs/VAULT.md) for initialization and editing.
+Normal startup reads only the encrypted profile database. Select a profile with `-p NAME` / `--profile NAME`; absence means `main`, not a guessed single record. Use `ssjack ssh`, `ssjack run claude -c`, and `ssjack edit` for the selected profile.
 
-The following target-file workflow is **legacy opt-in only**, selected by `--config .ssh/ssjack.ktav`. Copy `.ssh/ssjack.example.ktav` to `.ssh/ssjack.ktav` only if the destination does not already exist. Example:
-
-```text
-keys.storage: id_ed25519
-targets.storagehost.address: CHANGE_ME:22
-targets.storagehost.user: mcp-agent
-targets.storagehost.key: storage
-targets.storagehost.known_hosts: known_hosts
-```
-
-Relative paths resolve from the configuration file's directory. Only configured targets are available through MCP. Unknown configuration fields are rejected. All configured private keys must be encrypted and unlock with the supplied passphrase.
-
-The migration does not delete an existing `.ssh/ssjack.json`; it is an unused rollback copy. New binaries read that legacy file only when explicitly selected with `--config`; the default credential database is `.ssh/credentials.ssjack.ktav`. The internal protocol changed, so restart both keeper and bridge together; do not mix old and new executables within one session.
+An old plaintext target file is an explicit migration input only: `ssjack [-p NAME] vault migrate LEGACY_FILE`. The CLI authenticates interactively, imports actual key bytes and verified server pins into the encrypted database, preserves originals, and never enables plaintext startup fallback. See [profile migration](docs/VAULT.md).
 
 ## Keys and host verification
 
@@ -80,7 +68,7 @@ The passphrase buffer is cleared after unlocking, but Go and the OS cannot guara
 
 ## Interactive shell and encrypted credentials
 
-`ssjack ssh <name>` opens an interactive SSH session using the same encrypted database as `ssjack run <name> <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|passwd|backup|restore|check` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
+`ssjack [-p NAME] ssh` opens an interactive SSH session using the same encrypted database as `ssjack [-p NAME] run <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|passwd|backup|restore|check` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
 
 This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 
@@ -157,7 +145,7 @@ Limits:
 
 Disconnecting the bridge cancels active operations and closes their SSH connections. Detached processes and system services may continue on the server. A shell command has the SSH user's permissions, so guest OS/Incus isolation remains necessary. Remote output can contain secrets and is delivered to the harness.
 
-The old OpenSSH wrappers are retired and unused by the native client and MCP paths. Use `ssjack ssh <name>` for manual sessions; see [SSH compatibility and host trust](SSH.md).
+The old OpenSSH wrappers are retired and unused by the native client and MCP paths. Use `ssjack [-p NAME] ssh` for manual sessions; see [SSH compatibility and host trust](SSH.md).
 
 ## Updating an installed executable
 
@@ -189,3 +177,11 @@ go test -mod=readonly -race -count=1 -timeout 120s ./cmd/ssjack ./internal/...
 ```
 
 Tests use temporary test keys and a local test SSH server. They do not connect to user servers or alter real SSH keys or global settings. Ktav round-trip tests cover commands, binary output, large integers, bootstrap consumption, and strict configuration validation.
+
+## Legacy metadata migration boundary
+
+Normal startup accepts profiles only from the encrypted database. `--config` is not a supported startup option. An old plaintext metadata file can be consumed only by explicit `ssjack [-p PROFILE] vault migrate LEGACY_FILE`, defaulting to destination profile `main`.
+
+Migration asks for database authorization (or a confirmed new database secret), source key authorization when needed, and explicit destination-profile confirmation. It imports address/user/private key bytes and only raw server keys already trusted for the exact legacy address/port, including supported hashed known_hosts entries; revoked, unrelated, CA-only, or missing trust is not accepted. No network scan or connection supplies migration trust. Existing destination profiles are never overwritten. Existing databases receive encrypted recovery snapshots before the new profile is committed.
+
+Source metadata, source private-key files, and old copies are never silently deleted. They can still expose metadata until the user separately retires them after verifying the encrypted profile. The assistant cannot perform real migration without the user's terminal-only secrets and does not read real private keys through tools.

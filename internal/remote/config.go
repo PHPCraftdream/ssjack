@@ -11,7 +11,9 @@ import (
 
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
+
 	"golang.org/x/crypto/ssh/knownhosts"
+	"storagehost/internal/sshauth"
 
 	"storagehost/internal/keyfile"
 )
@@ -168,7 +170,7 @@ func NewSSHRunner(config Config, signers map[string]ssh.Signer) (Runner, error) 
 			return nil, fmt.Errorf("failed to read known_hosts for %q", name)
 		}
 		connections[name] = connection{target, &ssh.ClientConfig{
-			User: target.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: callback,
+			User: target.User, Auth: []ssh.AuthMethod{sshauth.PublicKey(signer)}, HostKeyCallback: callback,
 		}}
 	}
 	return func(ctx context.Context, target, command string, stdout, stderr io.Writer) (int, error) {

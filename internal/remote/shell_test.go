@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"storagehost/internal/sshauth"
 )
 
 type shellEvent struct {
@@ -111,7 +113,7 @@ func shellServer(t *testing.T, allowed ssh.PublicKey, rejectPTY bool) (string, s
 }
 
 func shellClientConfig(signer ssh.Signer, host ssh.PublicKey) *ssh.ClientConfig {
-	return &ssh.ClientConfig{User: "test", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+	return &ssh.ClientConfig{User: "test", Auth: []ssh.AuthMethod{sshauth.PublicKey(signer)},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			if !bytes.Equal(key.Marshal(), host.Marshal()) {
 				return errors.New("wrong host key")

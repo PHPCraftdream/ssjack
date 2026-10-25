@@ -60,6 +60,13 @@ func CreateContext(ctx context.Context, path string, password []byte) error {
 	}
 	v := New()
 	defer v.Close()
+	return CreateWithRecords(ctx, path, v, password)
+}
+
+func CreateWithRecords(ctx context.Context, path string, v *Vault, password []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	plaintext, err := marshal(v)
 	if err != nil {
 		return err

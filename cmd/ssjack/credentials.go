@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 
 	"golang.org/x/crypto/ssh"
 
@@ -12,31 +11,15 @@ import (
 	"storagehost/internal/vault"
 )
 
-func chooseCredential(v *vault.Vault, name string, choose func([]string) (string, error)) (string, error) {
+func chooseCredential(v *vault.Vault, name string) (string, error) {
 	if name == "" {
-		var names []string
-		for candidate := range v.Targets {
-			names = append(names, candidate)
-		}
-		sort.Strings(names)
-		if len(names) == 0 {
-			return "", errors.New("vault has no credentials; add a record with ssjack vault add <name>")
-		}
-		if len(names) == 1 {
-			name = names[0]
-		} else {
-			var err error
-			name, err = choose(names)
-			if err != nil {
-				return "", err
-			}
-		}
+		name = "main"
 	}
 	if err := vault.ValidateName(name); err != nil {
 		return "", err
 	}
 	if _, exists := v.Targets[name]; !exists {
-		return "", errors.New("named credentials do not exist in the vault")
+		return "", errors.New("selected profile does not exist; create it with ssjack -p NAME add")
 	}
 	return name, nil
 }
@@ -57,13 +40,7 @@ func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, s
 		return nil, "", "", err
 	}
 	defer v.Close()
-	name, err = chooseCredential(v, name, func(names []string) (string, error) {
-		fmt.Fprintln(os.Stderr, "Available credentials:")
-		for _, candidate := range names {
-			fmt.Fprintln(os.Stderr, " ", candidate)
-		}
-		return credentialField("Credential name", "", false)
-	})
+	name, err = chooseCredential(v, name)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -81,39 +58,11 @@ func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, s
 	return config, target.Address, name, nil
 }
 
-func loadAgentCredentials(path, name, legacyConfig string) (remote.Runner, []string, error) {
-	if legacyConfig == "" {
-		config, address, selected, err := readVaultCredential(path, name, "agent")
-		if err != nil {
-			return nil, nil, err
-		}
-		runner, err := remote.NewCredentialRunner(selected, address, config)
-		return runner, []string{selected}, err
-	}
-	if name != "" {
-		return nil, nil, errors.New("named run credentials and legacy --config cannot be combined")
-	}
-	config, err := remote.LoadConfig(legacyConfig)
+func loadAgentCredentials(path, name string) (remote.Runner, []string, error) {
+	config, address, selected, err := readVaultCredential(path, name, "agent")
 	if err != nil {
 		return nil, nil, err
 	}
-	secret, err := readSecret("Legacy SSH key passphrase: ")
-	if err != nil {
-		return nil, nil, err
-	}
-	signers, err := remote.Unlock(config, secret)
-	clear(secret)
-	if err != nil {
-		return nil, nil, err
-	}
-	runner, err := remote.NewSSHRunner(config, signers)
-	if err != nil {
-		return nil, nil, err
-	}
-	var names []string
-	for candidate := range config.Targets {
-		names = append(names, candidate)
-	}
-	sort.Strings(names)
-	return runner, names, nil
+	runner, err := remote.NewCredentialRunner(selected, address, config)
+	return runner, []string{selected}, err
 }

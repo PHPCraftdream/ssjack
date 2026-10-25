@@ -14,7 +14,7 @@ ssjack key export --help
 Every command has a usage description, safety notes, and examples in built-in help. Global options such as `--vault FILE` precede the command. Arguments after the harness name belong to that harness, including `--help`:
 
 ```text
-ssjack run home claude --help
+ssjack -p home run claude --help
 ```
 
 This launches the harness after vault authorization; it does not show ssjack help.
@@ -23,11 +23,11 @@ This launches the harness after vault authorization; it does not show ssjack hel
 
 ```text
 ssjack vault init
-ssjack add home
+ssjack -p home add
 ssjack list
-ssjack show home
-ssjack edit home
-ssjack remove home
+ssjack -p home show
+ssjack -p home edit
+ssjack -p home remove
 ssjack vault passwd
 ```
 
@@ -42,8 +42,8 @@ Labels use 1–64 ASCII letters, digits, dots, underscores, or hyphens, beginnin
 ## Human and agent usage
 
 ```text
-ssjack ssh home
-ssjack run home claude -c
+ssjack -p home ssh
+ssjack -p home run claude -c
 ssjack --vault .ssh/work.ssjack.ktav run work claude -c
 ```
 
@@ -53,16 +53,16 @@ This is an accident-prevention policy, **not a server-side sandbox or readonly s
 
 Older records without a usage field mean `both`. The reader accepts the original four fields and the known optional usage field, rejecting unknown fields. Writes preserve the old four-field representation when no explicit usage exists. An older strict reader rejects policy-bearing five-field records instead of silently ignoring the policy. Keep an encrypted backup before adopting new metadata; the key-container encryption profile is unchanged.
 
-The keeper unlocks once per launcher invocation and exposes only the chosen name through MCP. The bridge receives neither the private key nor the vault secret. Without explicit `run NAME`, the legacy harness-tail shorthand still selects from the encrypted database after authorization. Only explicit `--config FILE` opts into old plaintext target metadata; there is no automatic fallback.
+The keeper unlocks once per launcher invocation and exposes only the selected profile through MCP. The bridge receives neither the private key nor the vault secret. Global `-p NAME` defaults to `main`; an unknown profile never selects another record. Plaintext target metadata is accepted only by explicit migration, never by normal startup.
 
 ## Keys and interoperability
 
 ```text
 ssjack --generate-key .ssh/derived.ssjack.ktav
 ssjack --protect-key existing-key --key-output .ssh/protected.ssjack.ktav
-ssjack key import home existing-key.pem
-ssjack key export home exported-key
-ssjack key public home > home.pub
+ssjack -p home key import existing-key.pem
+ssjack -p home key export exported-key
+ssjack -p home key public > home.pub
 ```
 
 `key import` replaces only a key in an existing record and preserves address, user, usage, and server pins. For a new record, use `add`. Inputs are never rewritten or deleted. Unsupported key formats fail explicitly.
@@ -75,7 +75,7 @@ Generation derives Ed25519 bytes from the typed secret plus fresh public paramet
 
 ```text
 ssjack doctor
-ssjack check home
+ssjack -p home check
 ```
 
 `doctor` reports build version/commit/platform, vault integrity, private-file permissions, MCP registration, binary resolution, and managed UI asset consistency. It does not fix settings, install plugins, execute a PATH-resolved binary, connect to SSH, or launch a harness. Missing first-run registration/assets are warnings because normal launcher startup installs them. Windows DACL privacy and actual harness render support are explicitly not falsely certified by a Unix-mode check or asset hash.
@@ -101,8 +101,8 @@ Writers cooperate through an exclusive `.lock` and a ciphertext revision hash. A
 ## Server identity pins
 
 ```text
-ssjack hostkey show home
-ssjack hostkey replace home verified-server-key.pub
+ssjack -p home hostkey show
+ssjack -p home hostkey replace verified-server-key.pub
 ```
 
 These commands concern **server** keys, not client login keys. Replacement reads one bare OpenSSH public key already verified through an independent trusted channel, shows old/new fingerprints, and requires typing the new fingerprint. It replaces all existing pins for the record while preserving other fields. It does not scan the network, accept a mismatch automatically, or enable certificate/CA trust implicitly.
@@ -110,7 +110,7 @@ These commands concern **server** keys, not client login keys. Replacement reads
 ## Two-phase key rotation
 
 ```text
-ssjack rotate home
+ssjack -p home rotate
 ```
 
 Automatic rotation is intentionally narrow: a POSIX account using an existing regular `~/.ssh/authorized_keys` with an unrestricted bare old key. Per-key options such as `command=`, `from=`, or `restrict`, symlinks, and nonstandard key sources require manual rotation; they are refused instead of being silently stripped.
@@ -134,3 +134,25 @@ Stored data uses four sequential Argon2id operations at 1 GiB each, followed by 
 Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, aliases, other IPs, and invalid ports before TLS/dial. TCP peers must be loopback before authentication. TLS pinning and single-use two-part capabilities remain mandatory. This does not block keeper SSH to approved servers and is not an OS firewall.
 
 Unit tests, synthetic SSH servers, transaction failure fixtures, POSIX script tests, installer tests, race checks, and the dedicated real-1-GiB profile run belong in GitHub CI. Defining or writing a test is not a passed result. See [AUDIT.md](AUDIT.md) for the external-review boundary.
+
+## Default profile selection
+
+Every profile-scoped command uses global `-p NAME` / `--profile NAME`, defaulting to `main`. Profile names are not ambiguous positional arguments: use `ssjack ssh`, `ssjack run claude -c`, `ssjack edit`, or select another with `ssjack -p work run claude -c`. An absent `main` is an error even when another profile is the only available record; no fallback occurs.
+
+First `vault init` asks for complete connection credentials and stores the selected profile (`main` by default) only after successful validation. Existing databases are not silently renamed or populated. Vault-wide backup/list/check operations do not reveal profile values without authorization. Named profiles remain encrypted at rest; a name explicitly supplied through argv can still be visible in process listings and shell history.
+
+## Legacy metadata migration boundary
+
+Normal startup accepts profiles only from the encrypted database. `--config` is not a supported startup option. An old plaintext metadata file can be consumed only by explicit `ssjack [-p PROFILE] vault migrate LEGACY_FILE`, defaulting to destination profile `main`.
+
+Migration asks for database authorization (or a confirmed new database secret), source key authorization when needed, and explicit destination-profile confirmation. It imports address/user/private key bytes and only raw server keys already trusted for the exact legacy address/port, including supported hashed known_hosts entries; revoked, unrelated, CA-only, or missing trust is not accepted. No network scan or connection supplies migration trust. Existing destination profiles are never overwritten. Existing databases receive encrypted recovery snapshots before the new profile is committed.
+
+Source metadata, source private-key files, and old copies are never silently deleted. They can still expose metadata until the user separately retires them after verifying the encrypted profile. The assistant cannot perform real migration without the user's terminal-only secrets and does not read real private keys through tools.
+
+## Encrypted SSH policy
+
+`ssjack [-p PROFILE] policy show` displays this profile's preferences only after database authorization. `policy edit` uses hidden interactive input for host-key algorithms, key exchanges, ciphers, and MACs. Empty values preserve existing settings; `default` resets a list. Values are stored only in the authenticated encrypted record, never in a new plaintext configuration file or command-line options.
+
+The pinned SSH library's `SupportedAlgorithms()` lists define accepted algorithms; unknown, duplicate, and insecure choices are rejected rather than silently ignored by ssh.Config. Default connections use those supported lists explicitly. Host-key pinning remains mandatory and independent of the chosen negotiation algorithms. This changes SSH negotiation preferences, not the four-Argon2id/1000-data-layer storage profile.
+
+The optional known `ssh_policy` object is a payload extension. Older strict readers reject it rather than ignoring it. Original records without usage/policy fields retain safe compiled defaults. Always preserve an encrypted backup before saving extended metadata. Supported algorithm names are not secrets cryptographically; traffic observers can see parts of SSH negotiation, and hiding a filename cannot hide the destination IP from the OS/network.

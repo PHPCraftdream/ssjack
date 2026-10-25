@@ -127,7 +127,7 @@ func TestExportRefusesExistingPathBeforePrompt(t *testing.T) {
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	err := exportVaultKey(path, []byte("unused payload"), []byte("vault secret"))
+	err := exportVaultKey(context.Background(), path, []byte("unused payload"), []byte("vault secret"))
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("output conflict was not checked before prompting: %v", err)
 	}

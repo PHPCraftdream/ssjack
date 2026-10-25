@@ -20,6 +20,7 @@ import (
 	"storagehost/internal/hooks"
 	"storagehost/internal/launch"
 	"storagehost/internal/remote"
+	"storagehost/internal/vault"
 )
 
 func main() {
@@ -53,7 +54,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		if err := hooks.Install(".", executable); err != nil {
 			return 1, err
 		}
-		fmt.Fprintln(os.Stderr, "Installed ssjack display hooks in .claude/settings.local.json. Open /hooks or restart if they do not appear.")
+		fmt.Fprintln(os.Stderr, "Installed legacy display hooks. Normal startup uses the embedded UI plugin instead.")
 		return 0, nil
 	}
 	if len(args) > 0 && args[0] == "mcp" {
@@ -64,13 +65,15 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	configPath := flags.String("config", "", "Explicit legacy Ktav target configuration instead of the encrypted vault")
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	generatePath := flags.String("generate-key", "", "Create a derived Ed25519 key in a new encrypted container")
-	protectPath := flags.String("protect-key", "", "Protect an existing encrypted SSH key in a new container")
-	keyOutput := flags.String("key-output", "", "Output for --protect-key (default: input + .ssjack.ktav)")
-	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted credentials database for vault, ssh, and run commands")
+	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
+	keyOutput := flags.String("key-output", "", "Output for --protect-key")
+	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
 	version := flags.Bool("version", false, "Print version, commit, and platform")
+	var profile string
+	flags.StringVar(&profile, "profile", "main", "Named encrypted profile (default main)")
+	flags.StringVar(&profile, "p", "main", "Short form of --profile")
 	flags.Usage = func() { printRootHelp(os.Stderr) }
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -88,60 +91,76 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 0, nil
 	}
+	if err := vault.ValidateName(profile); err != nil {
+		return 1, err
+	}
 	if *generatePath != "" || *protectPath != "" || *keyOutput != "" {
-		if flags.NArg() != 0 || *configPath != "" {
-			return 1, errors.New("key operations cannot launch a harness or shell")
+		if flags.NArg() != 0 {
+			return 1, errors.New("key-file operations cannot launch another command")
 		}
 		return runKeyCommand(ctx, *generatePath, *protectPath, *keyOutput)
 	}
-	if flags.NArg() > 0 && flags.Arg(0) == "ssh" {
-		if flags.NArg() != 2 || *configPath != "" {
-			return 1, errors.New("usage: ssjack [--vault <file>] ssh <name>")
-		}
-		return runVaultShell(ctx, *vaultPath, flags.Arg(1))
-	}
-	if flags.NArg() > 0 && flags.Arg(0) == "vault" {
-		if *configPath != "" {
-			return 1, errors.New("vault commands do not use legacy --config")
-		}
-		return runVaultMaintenance(ctx, *vaultPath, flags.Args()[1:])
-	}
-	if flags.NArg() > 0 {
-		commandArgs := flags.Args()
-		switch commandArgs[0] {
-		case "list", "show", "add", "edit", "remove":
-			if *configPath != "" {
-				return 1, errors.New("record commands do not use legacy --config")
-			}
-			return runVaultCommand(ctx, *vaultPath, commandArgs)
-		case "key":
-			if len(commandArgs) < 2 || (commandArgs[1] != "public" && commandArgs[1] != "import" && commandArgs[1] != "export") {
-				return 1, errors.New("usage: ssjack key public NAME | import NAME FILE | export NAME FILE; use ssjack help key")
-			}
-			if *configPath != "" {
-				return 1, errors.New("key commands do not use legacy --config")
-			}
-			return runVaultCommand(ctx, *vaultPath, commandArgs[1:])
-		case "doctor", "check", "hostkey", "rotate":
-			if *configPath != "" {
-				return 1, errors.New("named credential commands do not use legacy --config")
-			}
-			return runSafetyCommand(ctx, *vaultPath, commandArgs)
-		}
-	}
 	command := flags.Args()
-	credentialName := ""
-	if len(command) > 0 && command[0] == "run" {
-		if len(command) < 3 || *configPath != "" {
-			return 1, errors.New("usage: ssjack [--vault <file>] run <name> <harness> [arguments...]")
-		}
-		credentialName, command = command[1], command[2:]
-	}
-	if flags.NArg() == 0 || *ttl <= 0 || *ttl > 10*time.Minute {
+	if len(command) == 0 {
 		flags.Usage()
-		return 1, errors.New("specify a harness and a bootstrap timeout greater than zero and at most 10 minutes")
+		return 1, errors.New("specify a command; default profile is main")
 	}
-	runner, targets, err := loadAgentCredentials(*vaultPath, credentialName, *configPath)
+	switch command[0] {
+	case "ssh":
+		if len(command) != 1 {
+			return 1, errors.New("usage: ssjack [-p PROFILE] ssh")
+		}
+		return runVaultShell(ctx, *vaultPath, profile)
+	case "vault":
+		return runVaultMaintenance(ctx, *vaultPath, profile, command[1:])
+	case "list":
+		if len(command) != 1 {
+			return 1, errors.New("usage: ssjack list")
+		}
+		return runVaultCommand(ctx, *vaultPath, command)
+	case "show", "add", "edit", "remove":
+		if len(command) != 1 {
+			return 1, errors.New("select a profile with -p PROFILE before the command")
+		}
+		return runVaultCommand(ctx, *vaultPath, []string{command[0], profile})
+	case "key":
+		if len(command) == 2 && command[1] == "public" {
+			return runVaultCommand(ctx, *vaultPath, []string{"public", profile})
+		}
+		if len(command) == 3 && (command[1] == "import" || command[1] == "export") {
+			return runVaultCommand(ctx, *vaultPath, []string{command[1], profile, command[2]})
+		}
+		return 1, errors.New("usage: ssjack [-p PROFILE] key public | import FILE | export FILE")
+	case "policy":
+		return runPolicy(ctx, *vaultPath, profile, command[1:])
+	case "doctor":
+		if len(command) != 1 {
+			return 1, errors.New("usage: ssjack doctor")
+		}
+		return runSafetyCommand(ctx, *vaultPath, command)
+	case "check", "rotate":
+		if len(command) != 1 {
+			return 1, errors.New("select a profile with -p PROFILE before the command")
+		}
+		return runSafetyCommand(ctx, *vaultPath, []string{command[0], profile})
+	case "hostkey":
+		if len(command) == 2 && command[1] == "show" {
+			return runSafetyCommand(ctx, *vaultPath, []string{"hostkey", "show", profile})
+		}
+		if len(command) == 3 && command[1] == "replace" {
+			return runSafetyCommand(ctx, *vaultPath, []string{"hostkey", "replace", profile, command[2]})
+		}
+		return 1, errors.New("usage: ssjack [-p PROFILE] hostkey show | replace FILE")
+	case "run":
+		if len(command) < 2 {
+			return 1, errors.New("usage: ssjack [-p PROFILE] run HARNESS [ARGUMENTS...]")
+		}
+		command = command[1:]
+	}
+	if *ttl <= 0 || *ttl > 10*time.Minute {
+		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
+	}
+	runner, targets, err := loadAgentCredentials(*vaultPath, profile)
 	if err != nil {
 		return 1, err
 	}
@@ -155,11 +174,8 @@ func run(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintln(os.Stderr, "Keys unlocked. MCP access will attach once to this session.")
-	return launch.Run(ctx, launch.Options{
-		Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl,
-		Handler: manager.Handle, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
-	})
+	fmt.Fprintln(os.Stderr, "Profile unlocked. MCP access will attach once to this session.")
+	return launch.Run(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: manager.Handle, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"storagehost/internal/sshauth"
 )
 
 func TestCheckAuthenticatesWithoutRemoteRequests(t *testing.T) {
@@ -59,7 +61,7 @@ func TestCheckAuthenticatesWithoutRemoteRequests(t *testing.T) {
 		}
 		requestsSeen <- count
 	}()
-	config := &ssh.ClientConfig{User: "test", Auth: []ssh.AuthMethod{ssh.PublicKeys(clientKey)}, HostKeyCallback: ssh.FixedHostKey(host.PublicKey())}
+	config := &ssh.ClientConfig{User: "test", Auth: []ssh.AuthMethod{sshauth.PublicKey(clientKey)}, HostKeyCallback: ssh.FixedHostKey(host.PublicKey())}
 	if err := Check(ctx, listener.Addr().String(), config); err != nil {
 		t.Fatal(err)
 	}
