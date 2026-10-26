@@ -48,19 +48,35 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 	return client, func() { stop(); client.Close() }, nil
 }
 
+type StreamRunner func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error)
+
 func NewCredentialRunner(name, address string, config *ssh.ClientConfig) (Runner, error) {
+	stream, err := NewCredentialStreamRunner(name, address, config)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, target, command string, stdout, stderr io.Writer) (int, error) {
+		return stream(ctx, target, command, nil, stdout, stderr)
+	}, nil
+}
+
+func NewCredentialStreamRunner(name, address string, config *ssh.ClientConfig) (StreamRunner, error) {
 	if name == "" || address == "" || config == nil || config.HostKeyCallback == nil || config.User == "" || len(config.Auth) == 0 {
 		return nil, errors.New("credentials require a name, address, user, authentication, and verified host keys")
 	}
-	return func(ctx context.Context, target, command string, stdout, stderr io.Writer) (int, error) {
+	return func(ctx context.Context, target, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 		if target != name {
 			return -1, errors.New("unapproved credential name")
 		}
-		return runSSH(ctx, address, config, command, stdout, stderr)
+		return runSSHInput(ctx, address, config, command, stdin, stdout, stderr)
 	}, nil
 }
 
 func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdout, stderr io.Writer) (int, error) {
+	return runSSHInput(ctx, address, config, command, nil, stdout, stderr)
+}
+
+func runSSHInput(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	client, closeClient, err := connectSSH(ctx, address, config)
 	if err != nil {
 		return -1, err
@@ -71,7 +87,7 @@ func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, comma
 		return -1, sshStageError(ctx, "failed to open an SSH session")
 	}
 	defer session.Close()
-	session.Stdout, session.Stderr = stdout, stderr
+	session.Stdin, session.Stdout, session.Stderr = stdin, stdout, stderr
 	if err := session.Run(command); err != nil {
 		if ctx.Err() != nil {
 			return -1, ctx.Err()

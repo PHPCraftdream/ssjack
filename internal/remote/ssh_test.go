@@ -88,6 +88,12 @@ func testSSH(t *testing.T, allowed ssh.PublicKey) (string, ssh.PublicKey) {
 								<-closed
 								return
 							}
+							if command.Command == "copy" {
+								io.Copy(channel, channel)
+								channel.Stderr().Write([]byte("stderr"))
+								channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{7}))
+								return
+							}
 							channel.Write([]byte("stdout:" + command.Command))
 							channel.Stderr().Write([]byte("stderr"))
 							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{9}))
