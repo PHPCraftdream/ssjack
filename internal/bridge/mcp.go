@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
@@ -30,6 +31,23 @@ type ReadOutput struct {
 	Error        string `json:"error,omitempty"`
 }
 
+func readOutput(raw remote.ReadOutput) ReadOutput {
+	out := ReadOutput{
+		JobID: raw.JobID, Stdout: strings.ToValidUTF8(string(raw.Stdout), "�"), Stderr: strings.ToValidUTF8(string(raw.Stderr), "�"),
+		StdoutOffset: raw.StdoutOffset, StderrOffset: raw.StderrOffset,
+		StdoutLost: raw.StdoutLost, StderrLost: raw.StderrLost,
+		StdoutMore: raw.StdoutMore, StderrMore: raw.StderrMore,
+		Done: raw.Done, ExitCode: raw.ExitCode, Error: raw.Error,
+	}
+	if !utf8.Valid(raw.Stdout) {
+		out.StdoutBase64 = base64.StdEncoding.EncodeToString(raw.Stdout)
+	}
+	if !utf8.Valid(raw.Stderr) {
+		out.StderrBase64 = base64.StdEncoding.EncodeToString(raw.Stderr)
+	}
+	return out
+}
+
 func NewServer(client *broker.Client) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys."},
@@ -48,25 +66,36 @@ func NewServer(client *broker.Client) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
 			var raw remote.ReadOutput
 			err := client.Call(ctx, "read", input, &raw)
-			out := ReadOutput{
-				JobID: raw.JobID, Stdout: strings.ToValidUTF8(string(raw.Stdout), "�"), Stderr: strings.ToValidUTF8(string(raw.Stderr), "�"),
-				StdoutOffset: raw.StdoutOffset, StderrOffset: raw.StderrOffset,
-				StdoutLost: raw.StdoutLost, StderrLost: raw.StderrLost,
-				StdoutMore: raw.StdoutMore, StderrMore: raw.StderrMore,
-				Done: raw.Done, ExitCode: raw.ExitCode, Error: raw.Error,
-			}
-			if !utf8.Valid(raw.Stdout) {
-				out.StdoutBase64 = base64.StdEncoding.EncodeToString(raw.Stdout)
-			}
-			if !utf8.Valid(raw.Stderr) {
-				out.StderrBase64 = base64.StdEncoding.EncodeToString(raw.Stderr)
-			}
-			return nil, out, err
+			return nil, readOutput(raw), err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "remote_cancel", Description: "Cancel an operation and close its SSH connection. Detached remote processes may continue running."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.JobInput) (*mcp.CallToolResult, remote.CancelOutput, error) {
 			var out remote.CancelOutput
 			err := client.Call(ctx, "cancel", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "app_list", Description: "List the human-registered local Clawwright deployment, if enabled."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, application.ListOutput, error) {
+			var out application.ListOutput
+			err := client.Call(ctx, "app_list", struct{}{}, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "app_exec", Description: "Start a finite command in the registered Clawwright deployment. Arguments are passed as argv, never through a local shell. Mutating operations require confirm=true and applicable harness authorization. Returns job_id."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input application.Input) (*mcp.CallToolResult, remote.StartOutput, error) {
+			var out remote.StartOutput
+			err := client.Call(ctx, "app_start", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered Clawwright operation output using returned offsets; drain both streams until done and no more output remains."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
+			var raw remote.ReadOutput
+			err := client.Call(ctx, "app_read", input, &raw)
+			return nil, readOutput(raw), err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "app_cancel", Description: "Cancel a Clawwright operation and revoke its child transport. A detached remote process may continue running."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.JobInput) (*mcp.CallToolResult, remote.CancelOutput, error) {
+			var out remote.CancelOutput
+			err := client.Call(ctx, "app_cancel", input, &out)
 			return nil, out, err
 		})
 	return server

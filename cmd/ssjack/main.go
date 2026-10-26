@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	project "github.com/PHPCraftdream/ssjack"
+	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
@@ -22,6 +23,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/launch"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func main() {
@@ -67,6 +69,10 @@ func run(ctx context.Context, args []string) (int, error) {
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
+	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
+	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright JavaScript entry (default installed package on PATH)")
+	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
+	clawwrightUser := flags.String("clawwright-user", "", "Fixed guest user for the Clawwright Incus route")
 	generatePath := flags.String("generate-key", "", "Create a derived Ed25519 key in a new encrypted container")
 	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
@@ -176,12 +182,30 @@ func run(ctx context.Context, args []string) (int, error) {
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}
-	runner, targets, err := loadAgentCredentials(*vaultPath, profile)
+	applicationOptions, err := registeredClawwright(*clawwrightDirectory, *clawwrightEntry, *clawwrightContainer, *clawwrightUser, profile, nil)
+	if err != nil {
+		return 1, err
+	}
+	runner, streamRunner, targets, err := loadAgentCredentials(*vaultPath, profile)
 	if err != nil {
 		return 1, err
 	}
 	manager := remote.NewManager(ctx, targets, runner)
 	defer manager.Close()
+	if applicationOptions != nil {
+		applicationOptions.Runner = streamRunner
+	}
+	applicationManager, err := application.New(ctx, applicationOptions)
+	if err != nil {
+		return 1, err
+	}
+	defer applicationManager.Close()
+	handler := func(ctx context.Context, request wire.Request) wire.Reply {
+		if reply, handled := applicationManager.Handle(ctx, request); handled {
+			return reply
+		}
+		return manager.Handle(ctx, request)
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return 1, err
@@ -191,7 +215,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Profile unlocked. MCP access will attach once to this session.")
-	return launch.Run(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: manager.Handle, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return launch.Run(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {
@@ -217,7 +241,7 @@ func runMCP(ctx context.Context) (int, error) {
 		Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint),
 		Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken),
 	}
-	for _, name := range []string{broker.EnvFile, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin} {
+	for _, name := range []string{broker.EnvFile, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, "SSJACK_APP_ENDPOINT", "SSJACK_APP_TOKEN", "SSJACK_APP_CERTIFICATE_SHA256"} {
 		os.Unsetenv(name)
 	}
 	if bootstrap.Endpoint == "" || bootstrap.Pin == "" || bootstrap.Session == "" || bootstrap.Token == "" {

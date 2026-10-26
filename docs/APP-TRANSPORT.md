@@ -2,9 +2,30 @@
 
 ## Integration status
 
-The internal `apptransport` package implements the child transport described here. Registering and launching a local application through the main MCP surface is a separate integration step. The package alone does not enable an application, start a persistent listener, or add a new CLI command.
+The internal `apptransport` package implements the child transport described here. The main MCP surface supports opt-in Clawwright registration and finite application jobs. No application is enabled without human startup registration, and no child listener exists until an application operation starts. Consumer-side transport activation and cross-project laboratory acceptance remain separate work; the presence of these keeper tools does not establish end-to-end Clawwright readiness.
 
 This is not the primary keeper bootstrap protocol. The primary bridge still uses its one-use protocol-v2 capability and framed Ktav over pinned loopback TLS. A child transport uses a different ephemeral TLS identity and a separate bearer lease, scoped to one selected profile and its application-operation lifetime.
+
+## Managed launcher contract
+
+The application-facing integration is opt-in. A human registers one Clawwright deployment at keeper startup with `--clawwright-directory DIR`, optionally `--clawwright-entry FILE` for a checked development package. The executable is native Node plus the selected entry file, never a model-supplied program or a shell command. Resolve and retain the directory and entry before unlocking credentials. Without an explicit entry, resolve the installed `clawwright` on PATH: the npm executable symlink on Unix, or the adjacent known npm package layout on Windows. Never execute or parse a Windows command shim. Relative explicit entry paths are relative to the registered deployment directory. Missing entries and partial Incus routes fail before the vault prompt.
+
+```sh
+ssjack -p lab --clawwright-directory ./deployment run claude -c
+ssjack -p lab --clawwright-directory ./deployment --clawwright-entry ../checked-package/dist/entry/bin.js --clawwright-container lab-guest --clawwright-user operator run claude -c
+```
+
+Arguments passed to `app_exec` are bounded to 128 entries and 8 KiB before internal encoding. `mcp-serve`, `control-mcp` and interactive `--stdin` are refused. Application output uses the existing bounded captured-log manager: output eviction is explicit through `*_lost`; this surface is not an archive-download stream. Binary archives belong on the lossless child transport. Both output streams mask the known child token, including matches split across writes; this is not a general-purpose detector of encoded or unrelated application secrets. Application tools use the harness's normal tool presentation; the existing SSH display cards remain unchanged.
+
+For an Incus laboratory, `--clawwright-container NAME` and `--clawwright-user USER` bind a fixed route through the selected SSH host: `sudo -n incus exec NAME -- runuser -u USER -- sh -c COMMAND`. Validate and quote the fixed arguments. The caller supplies only the inner command; it cannot replace the profile, container or user. This authenticates the host and uses its trusted local Incus control plane, not an implicitly trusted guest SSH connection. Direct guest SSH would require separate enrollment and pins.
+
+The main MCP surface offers `app_list`, `app_exec`, `app_read` and `app_cancel`. `app_exec` accepts the registered application ID, an argument vector, a finite timeout and a confirmation flag for non-observational commands. It returns a job ID rather than holding the primary broker request open. Read/cancel address only application jobs. Confirmation is a caller acknowledgement, not proof that a human approved a call; harness permissions and operator authorization still apply.
+
+Launch each operation with a fresh child transport. Reuse the unlocked credential runner, not the primary bootstrap token. Close the child transport when the application finishes, times out, is cancelled or loses its parent session. This API is for finite CLI operations, not starting a nested stdio MCP server. Native application code remains trusted; fixing its entry point and working directory is not filesystem isolation.
+
+Clawwright selects this transport for an automatic target only when the complete child context is present. Explicit standalone targets stay explicit. A supplied invalid context fails closed. Target-side Compose invocations must stage the operator's checked Compose definition through the byte-safe transport into the existing private per-call environment directory; they must not assume a global npm package and a remote checkout have matching paths.
+
+The first vertical slice covers finite instance inspection, configuration and full backup/restore. Second-hop rsync deployment, recipe build-context delivery, persistent invocations and stdio protocol relays must refuse unsupported session-scoped routes before applying them. They must not fall back to an unrelated SSH executable or persist a temporary lease.
 
 ## Trust and lifetime
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -30,8 +31,18 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 			return broker.Result(remote.StartOutput{JobID: "test-job"}, nil)
 		case "read":
 			return broker.Result(remote.ReadOutput{JobID: "test-job", Stdout: []byte("Hello"), Done: true, ExitCode: 0}, nil)
-		case "cancel":
+		case "cancel", "app_cancel":
 			return broker.Result(remote.CancelOutput{Cancelled: true}, nil)
+		case "app_list":
+			return broker.Result(application.ListOutput{Applications: []application.Description{{Name: "clawwright", Profile: "allowed"}}}, nil)
+		case "app_start":
+			var input application.Input
+			if wire.Decode(req.Data, &input) != nil || input.Application != "clawwright" || len(input.Arguments) != 1 || input.Arguments[0] != "status" {
+				return wire.Reply{Error: "invalid application"}
+			}
+			return broker.Result(remote.StartOutput{JobID: "app-job"}, nil)
+		case "app_read":
+			return broker.Result(remote.ReadOutput{JobID: "app-job", Stdout: []byte("Clawwright result"), Done: true, ExitCode: 0}, nil)
 		default:
 			return wire.Reply{Error: "denied"}
 		}
@@ -58,7 +69,7 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 4 {
+	if err != nil || len(tools.Tools) != 8 {
 		t.Fatalf("unexpected tool list: %+v, %v", tools, err)
 	}
 	for _, call := range []struct {
@@ -70,6 +81,10 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 		{"remote_exec", map[string]any{"target": "allowed", "command": "echo hello"}, "test-job"},
 		{"remote_read", map[string]any{"job_id": "test-job"}, "Hello"},
 		{"remote_cancel", map[string]any{"job_id": "test-job"}, "true"},
+		{"app_list", map[string]any{}, "clawwright"},
+		{"app_exec", map[string]any{"application": "clawwright", "arguments": []string{"status"}}, "app-job"},
+		{"app_read", map[string]any{"job_id": "app-job"}, "Clawwright result"},
+		{"app_cancel", map[string]any{"job_id": "app-job"}, "true"},
 	} {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.name, Arguments: call.args})
 		if err != nil || result.IsError {

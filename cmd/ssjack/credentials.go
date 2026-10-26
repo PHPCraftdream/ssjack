@@ -58,11 +58,18 @@ func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, s
 	return config, target.Address, name, nil
 }
 
-func loadAgentCredentials(path, name string) (remote.Runner, []string, error) {
+func loadAgentCredentials(path, name string) (remote.Runner, remote.StreamRunner, []string, error) {
 	config, address, selected, err := readVaultCredential(path, name, "agent")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	runner, err := remote.NewCredentialRunner(selected, address, config)
-	return runner, []string{selected}, err
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	streamRunner, err := remote.NewCredentialStreamRunner(selected, address, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return runner, streamRunner, []string{selected}, nil
 }

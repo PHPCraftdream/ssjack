@@ -115,7 +115,7 @@ func TestExistingMCPIsNotOverwritten(t *testing.T) {
 }
 
 func TestEnvironmentAndFailedLaunchCleanup(t *testing.T) {
-	env := Environment([]string{"PATH=original", "ssjack_env_token=stale", "SSJACK_BOOTSTRAP_FILE=stale", "ssjack_session=stale", "SSJACK_ENDPOINT=stale", "SSJACK_CERTIFICATE_SHA256=stale", "KEEP=value"}, broker.Bootstrap{Token: "new", Session: "session", Endpoint: "endpoint", Pin: "pin"}, filepath.Join("bin", "ssjack"))
+	env := Environment([]string{"PATH=original", "ssjack_env_token=stale", "SSJACK_BOOTSTRAP_FILE=stale", "ssjack_session=stale", "SSJACK_ENDPOINT=stale", "SSJACK_CERTIFICATE_SHA256=stale", "ssjack_app_token=stale", "SSJACK_APP_ENDPOINT=stale", "SSJACK_APP_CERTIFICATE_SHA256=stale", "KEEP=value"}, broker.Bootstrap{Token: "new", Session: "session", Endpoint: "endpoint", Pin: "pin"}, filepath.Join("bin", "ssjack"))
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "stale") || strings.Contains(joined, broker.EnvFile+"=") || !strings.Contains(joined, "KEEP=value") || !strings.Contains(joined, "SSJACK_ENV_TOKEN=new") {
 		t.Fatal("incorrect environment")
