@@ -69,6 +69,9 @@ func registeredClawwright(directory, entry, container, user, profile string, run
 	if err != nil || !info.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(entry), ".js") {
 		return nil, errors.New("Clawwright entry must be a regular JavaScript file")
 	}
+	if err := validateClawwrightPackage(entry); err != nil {
+		return nil, err
+	}
 	return &application.Options{
 		Directory: root,
 		Command:   []string{node, entry},

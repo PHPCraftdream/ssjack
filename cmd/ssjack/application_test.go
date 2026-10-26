@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -27,11 +28,12 @@ func TestClawwrightRegistrationWithoutUnlock(t *testing.T) {
 	}
 	t.Setenv("PATH", bin)
 	root := t.TempDir()
-	entry := filepath.Join(root, "checked entry.js")
-	if err := os.WriteFile(entry, []byte("// fixture, never executed\n"), 0600); err != nil {
+	entry := fixtureClawwrightPackage(t, filepath.Join(t.TempDir(), "checked package"))
+	relative, err := filepath.Rel(root, entry)
+	if err != nil {
 		t.Fatal(err)
 	}
-	options, err := registeredClawwright(root, "checked entry.js", "guest", "operator", "fixed", nil)
+	options, err := registeredClawwright(root, relative, "guest", "operator", "fixed", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +56,14 @@ func TestClawwrightRegistrationWithoutUnlock(t *testing.T) {
 	}
 	if code, err := run(context.Background(), []string{"--clawwright-entry", entry, "run", "harness"}); code == 0 || err == nil {
 		t.Fatal("orphan entry reached vault unlock")
+	}
+	metadata := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(entry))), "package.json")
+	if err := os.WriteFile(metadata, []byte(`{"name":"@phpcraftdream/clawwright","version":"0.1.2"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, err := run(context.Background(), []string{"--vault", filepath.Join(root, "missing.vault"), "--clawwright-directory", root, "--clawwright-entry", entry, "run", "harness"})
+	if code == 0 || err == nil || !strings.Contains(err.Error(), "Clawwright package") {
+		t.Fatal("old Clawwright package was not refused before vault authorization")
 	}
 }
 

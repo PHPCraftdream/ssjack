@@ -70,7 +70,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	flags.SetOutput(os.Stderr)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
-	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright JavaScript entry (default installed package on PATH)")
+	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
 	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
 	clawwrightUser := flags.String("clawwright-user", "", "Fixed guest user for the Clawwright Incus route")
 	generatePath := flags.String("generate-key", "", "Create a derived Ed25519 key in a new encrypted container")
