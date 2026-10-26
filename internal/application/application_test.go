@@ -217,6 +217,18 @@ func TestApplicationCancellationAndDisconnect(t *testing.T) {
 	}
 }
 
+func TestApplicationTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	manager := fixtureManager(t, ctx)
+	var start remote.StartOutput
+	applicationCall(t, ctx, manager, "app_start", Input{Application: Name, Arguments: []string{"inspect", "wait"}, TimeoutSeconds: 1}, &start)
+	out := readApplication(t, ctx, manager, start.JobID)
+	if out.ExitCode == 0 || !strings.Contains(out.Error, "deadline exceeded") {
+		t.Fatalf("application deadline was lost: %+v", out)
+	}
+}
+
 func TestApplicationAdmissionAndDisabledRegistration(t *testing.T) {
 	for _, input := range []Input{
 		{Application: "other", Arguments: []string{"status"}},
