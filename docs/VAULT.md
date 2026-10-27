@@ -161,6 +161,10 @@ Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, ali
 
 Unit tests, synthetic SSH servers, transaction failure fixtures, POSIX script tests, installer tests, race checks, and the dedicated real-1-GiB profile run belong in GitHub CI. Defining or writing a test is not a passed result. See [AUDIT.md](AUDIT.md) for the external-review boundary.
 
+## Separate application-secret store design
+
+Application secrets and large objects are not SSH records and must not be placed in this vault. The separate application-store design proposal and source compatibility map are indexed in [application-store design](application-store/FORMAT.md). It is unimplemented and unaudited; SSH compatibility is unchanged.
+
 ## Default profile selection
 
 Every profile-scoped command uses global `-p NAME` / `--profile NAME`, defaulting to `main`. Profile names are not ambiguous positional arguments: use `ssjack ssh`, `ssjack run claude -c`, `ssjack edit`, or select another with `ssjack -p work run claude -c`. An absent `main` is an error even when another profile is the only available record; no fallback occurs.
