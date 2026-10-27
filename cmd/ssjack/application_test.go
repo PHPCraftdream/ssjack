@@ -230,3 +230,39 @@ func TestPolicyLaunchHelper(t *testing.T) {
 		t.Fatal("policy keeper accepted operation")
 	}
 }
+
+func TestEnrollmentIdentityCLIRejectsInvalidAndForgedInputsBeforeCredentials(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath, policyPath, identityPath := filepath.Join(dir, "metadata.json"), filepath.Join(dir, "policy.json"), filepath.Join(dir, "identity.json")
+	for p, raw := range map[string]string{metaPath: cliIdentityMeta, policyPath: cliIdentityPolicy, identityPath: cliIdentityJSON} {
+		if err := os.WriteFile(p, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := cliLoadAgentCredentials
+	defer func() { cliLoadAgentCredentials = old }()
+	called := false
+	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+		called = true
+		return nil, nil, nil, errors.New("credentials accessed")
+	}
+	cases := [][]string{{"--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "full", "--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "declarative", "--enrollment-metadata", metaPath, "--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "declarative", "--enrollment-metadata", metaPath, "--policy-snapshot", policyPath, "--enrollment-identity", "relative.json", "run", "fixture"}}
+	for _, args := range cases {
+		if code, err := run(context.Background(), args); code == 0 || err == nil {
+			t.Errorf("accepted invalid args %v", args)
+		}
+	}
+	if err := os.WriteFile(identityPath, []byte(`{"format":"forged"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--mode", "declarative", "--enrollment-metadata", metaPath, "--policy-snapshot", policyPath, "--enrollment-identity", identityPath, "run", "fixture"}
+	if code, err := run(context.Background(), args); code == 0 || err == nil {
+		t.Fatal("accepted forged snapshot")
+	}
+	if called {
+		t.Fatal("invalid identity reached credentials")
+	}
+}

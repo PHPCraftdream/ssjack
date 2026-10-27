@@ -1,7 +1,9 @@
 package enrollment
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -140,5 +142,135 @@ func TestLoadPathAndNoFollow(t *testing.T) {
 		if _, err := Load(fifo); err == nil {
 			t.Fatal("accepted special file")
 		}
+	}
+}
+
+func snapshotInputs(t *testing.T) (Metadata, Policy, string) {
+	t.Helper()
+	metadata, err := Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := ParsePolicy([]byte(`{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1,"revision":"r1"}`), metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := `{"format":"ssjack-enrollment-identity-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1,"executable":{"path":"/opt/driver","sha256":"` + strings.Repeat("a", 64) + `"},"artifact_digests":{"main":"` + strings.Repeat("b", 64) + `"},"dependency_digests":{},"configuration_digest":"` + strings.Repeat("c", 64) + `","principal":{"issuer":"local","subject":"operator"}}`
+	return metadata, policy, good
+}
+func TestSnapshotAdversarial(t *testing.T) {
+	m, p, good := snapshotInputs(t)
+	rawDigest := sha256.Sum256([]byte(good))
+	expectedDigest := hex.EncodeToString(rawDigest[:])
+	s, err := ParseSnapshot([]byte(good), m, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Digest() != expectedDigest {
+		t.Fatalf("snapshot digest = %q, want raw-input SHA256 %q", s.Digest(), expectedDigest)
+	}
+	cp := s.ArtifactDigests()
+	cp["main"] = "changed"
+	if s.ArtifactDigests()["main"] == "changed" {
+		t.Fatal("mutable accessor")
+	}
+	if s.PolicyRevision() != "r1" || s.PolicyDigest() != p.Digest() {
+		t.Fatal("missing policy binding")
+	}
+	bad := []string{
+		strings.Replace(good, `"path":"/opt/driver"`, `"path":"/"`, 1), strings.Replace(good, `"path":"/opt/driver"`, `"path":"/opt/driver/"`, 1), strings.Replace(good, `"path":"/opt/driver"`, `"path":"/opt/../driver"`, 1),
+		strings.Replace(good, `"format":"ssjack-enrollment-identity-subset-v1"`, `"format":"ssjack-enrollment-identity-subset-v1","format":"ssjack-enrollment-identity-subset-v1"`, 1),
+		strings.Replace(good, `"driver_id":"driver.one-v1"`, `"driver_id":"driver.other"`, 1),
+		strings.Replace(good, `"driver_id":"driver.one-v1"`, `"driver_id":"driver.one-v1","driver_\u0069d":"driver.one-v1"`, 1),
+		strings.Replace(good, `"subject":"operator"`, `"subject":"op\u00e9rator"`, 1),
+		strings.Replace(good, `"subject":"operator"`, `"subject":"op\n"`, 1),
+		strings.Replace(good, `"dependency_digests":{}`, `"dependency_digests":null`, 1), strings.Replace(good, `"dependency_digests":{}`, `"dependency_digests":{"bad key":"`+strings.Repeat("b", 64)+`"}`, 1),
+		strings.Replace(good, `"driver_id":"driver.one-v1"`, `"driver_id":"driver.one-v1","driver_\u0069d":"driver.one-v1"`, 1), strings.Replace(good, `"driver_id":"driver.one-v1"`, `"driver_id":"driver.one-v1","unsupported":0`, 1),
+		strings.TrimSuffix(good, "}") + `,"extra":true`, strings.Repeat(" ", MaxSnapshotSize+1), strings.Replace(good, `"subject":"operator"`, `"subject":"`+strings.Repeat("x", 257)+`"`, 1),
+		strings.Replace(good, `"path":"/opt/driver"`, `"path":"/`+strings.Repeat("x", 4096)+`"`, 1),
+	}
+	validDigestChanges := []struct {
+		name string
+		raw  string
+	}{
+		{"path", strings.Replace(good, `"path":"/opt/driver"`, `"path":"/opt/driver-v2"`, 1)},
+		{"executable hash", strings.Replace(good, `"sha256":"`+strings.Repeat("a", 64)+`"`, `"sha256":"`+strings.Repeat("d", 64)+`"`, 1)},
+		{"artifact", strings.Replace(good, `"artifact_digests":{"main":"`+strings.Repeat("b", 64)+`"}`, `"artifact_digests":{"main":"`+strings.Repeat("d", 64)+`"}`, 1)},
+		{"dependency", strings.Replace(good, `"dependency_digests":{}`, `"dependency_digests":{"library":"`+strings.Repeat("d", 64)+`"}`, 1)},
+		{"configuration", strings.Replace(good, `"configuration_digest":"`+strings.Repeat("c", 64)+`"`, `"configuration_digest":"`+strings.Repeat("d", 64)+`"`, 1)},
+		{"issuer", strings.Replace(good, `"issuer":"local"`, `"issuer":"remote"`, 1)},
+		{"subject", strings.Replace(good, `"subject":"operator"`, `"subject":"administrator"`, 1)},
+	}
+	for _, change := range validDigestChanges {
+		t.Run(change.name, func(t *testing.T) {
+			if change.raw == good {
+				t.Fatal("replacement did not change raw input")
+			}
+			changed, err := ParseSnapshot([]byte(change.raw), m, p)
+			if err != nil {
+				t.Fatalf("rejected valid mutation: %v", err)
+			}
+			independent := sha256.Sum256([]byte(change.raw))
+			want := hex.EncodeToString(independent[:])
+			if changed.Digest() != want {
+				t.Fatalf("snapshot digest = %q, want raw-input SHA256 %q", changed.Digest(), want)
+			}
+			if changed.Digest() == expectedDigest {
+				t.Fatal("raw-input digest did not change")
+			}
+		})
+	}
+	for _, raw := range bad {
+		if _, err := ParseSnapshot([]byte(raw), m, p); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+	if _, err := ParseSnapshot([]byte(good), Metadata{}, p); err == nil {
+		t.Fatal("accepted metadata mismatch")
+	}
+	if _, err := ParseSnapshot([]byte(good), m, Policy{}); err == nil {
+		t.Fatal("accepted zero policy")
+	}
+	wrong, err := ParsePolicy([]byte(`{"format":"ssjack-policy-subset-v1","enrollment_id":"BBBBBBBBBBBBBBBBBBBBBB","driver_id":"driver.one-v1","driver_protocol":1,"revision":"r1"}`), Metadata{enrollmentID: "BBBBBBBBBBBBBBBBBBBBBB", driverID: "driver.one-v1", driverProtocol: 1})
+	if err == nil {
+		if _, err := ParseSnapshot([]byte(good), m, wrong); err == nil {
+			t.Fatal("accepted policy identity mismatch")
+		}
+	}
+}
+func TestSnapshotPathLengthBoundary(t *testing.T) {
+	m, p, good := snapshotInputs(t)
+	path := "/" + strings.Repeat("x", 4095)
+	raw := strings.Replace(good, `/opt/driver`, path, 1)
+	if _, err := ParseSnapshot([]byte(raw), m, p); err != nil {
+		t.Fatalf("rejected 4096 byte path: %v", err)
+	}
+}
+func TestLoadSnapshotSafeOpen(t *testing.T) {
+	m, p, good := snapshotInputs(t)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(path, []byte(good), 0600); err != nil {
+		t.Fatal(err)
+	}
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris":
+	default:
+		if _, err := LoadSnapshot(path, m, p); err == nil || !strings.Contains(err.Error(), "unsupported") {
+			t.Fatalf("expected unsupported error, got %v", err)
+		}
+		return
+	}
+	if _, err := LoadSnapshot(path, m, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(good, `"format":"ssjack-enrollment-identity-subset-v1"`, `"format":"unsupported"`, 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSnapshot(path, m, p); err == nil {
+		t.Fatal("accepted mutated snapshot file")
 	}
 }

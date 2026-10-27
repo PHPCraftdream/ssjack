@@ -76,6 +76,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
 	policyPath := flags.String("policy-snapshot", "", "Absolute path to human-installed deny-only policy snapshot")
+	identityPath := flags.String("enrollment-identity", "", "Absolute path to declarative enrollment identity snapshot")
 	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
 	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
 	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
@@ -96,7 +97,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 1, err
 	}
-	metadataSupplied, policySupplied := false, false
+	metadataSupplied, policySupplied, identitySupplied := false, false, false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "enrollment-metadata" {
 			metadataSupplied = true
@@ -104,10 +105,13 @@ func run(ctx context.Context, args []string) (int, error) {
 		if f.Name == "policy-snapshot" {
 			policySupplied = true
 		}
+		if f.Name == "enrollment-identity" {
+			identitySupplied = true
+		}
 	})
 	command := flags.Args()
-	if (metadataSupplied || policySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
-		return 1, errors.New("--enrollment-metadata and --policy-snapshot are only available for declarative run")
+	if (metadataSupplied || policySupplied || identitySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
+		return 1, errors.New("--enrollment-metadata, --policy-snapshot, and --enrollment-identity are only available for declarative run")
 	}
 	if *version {
 		fmt.Fprintln(os.Stdout, buildinfo.String())
@@ -203,6 +207,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	var metadata *enrollment.Metadata
 	var policy *enrollment.Policy
+	var identity *enrollment.Snapshot
 	if metadataSupplied {
 		if *metadataPath == "" {
 			return 1, errors.New("--enrollment-metadata requires a non-empty absolute path")
@@ -228,8 +233,21 @@ func run(ctx context.Context, args []string) (int, error) {
 			}
 			policy = &installed
 		}
-	} else if policySupplied {
-		return 1, errors.New("--policy-snapshot requires --enrollment-metadata")
+		if identitySupplied {
+			if *identityPath == "" || !filepath.IsAbs(*identityPath) {
+				return 1, errors.New("--enrollment-identity requires a non-empty absolute path")
+			}
+			if policy == nil {
+				return 1, errors.New("--enrollment-identity requires --policy-snapshot")
+			}
+			loaded, err := enrollment.LoadSnapshot(*identityPath, loaded, *policy)
+			if err != nil {
+				return 1, err
+			}
+			identity = &loaded
+		}
+	} else if policySupplied || identitySupplied {
+		return 1, errors.New("--policy-snapshot and --enrollment-identity require --enrollment-metadata")
 	}
 
 	if *ttl <= 0 || *ttl > 10*time.Minute {
@@ -284,7 +302,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	} else {
 		fmt.Fprintln(os.Stderr, "Starting declarative session. MCP access will attach once to this session.")
 	}
-	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {

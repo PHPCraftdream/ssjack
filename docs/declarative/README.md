@@ -43,6 +43,30 @@ On supported Unix platforms, file loading uses no-follow opens for path componen
 - Loading/parsing metadata itself invokes no tools or drivers and grants no authority. Declarative mode skips credential loading, so this path performs no new secret reads.
 - This partial integration is not the complete v1 enrollment flow and does not authenticate metadata or guarantee authentication provenance, implement a driver runner, authorize execution, deliver secrets, or provide secret-handling guarantees. It makes no blanket guarantee about secret reads or secret absence.
 
+## Optional enrollment identity subset (partial integration)
+
+`ssjack --mode declarative --enrollment-metadata ABSOLUTE_PATH --policy-snapshot ABSOLUTE_PATH --enrollment-identity ABSOLUTE_PATH run HARNESS [ARGUMENTS...]` opts into loading an enrollment identity subset. `--enrollment-identity` is optional and requires both existing `--enrollment-metadata` and `--policy-snapshot`; it is a root CLI option before `run`. With the option absent, existing behavior is unchanged. A valid identity produces only the incomplete, zero-tool `ssjack-identity-subset-partial-1` descriptor, containing the identity and policy digests; it does not enable tools.
+
+The identity input is a closed subset with exactly these fields:
+
+```json
+{
+  "format": "ssjack-enrollment-identity-subset-v1",
+  "enrollment_id": "<canonical unpadded base64url encoding of exactly 16 bytes>",
+  "driver_id": "<v1 Name>",
+  "driver_protocol": 1,
+  "executable": {"path": "<fixed POSIX absolute path>", "sha256": "<digest>"},
+  "artifact_digests": {"<name>": "<sha256>"},
+  "dependency_digests": {"<name>": "<sha256>"},
+  "configuration_digest": "<sha256>",
+  "principal": {"issuer": "<value>", "subject": "<value>"}
+}
+```
+
+Strings are printable ASCII only. Digest maps associate names with SHA-256 values. The executable path is a fixed POSIX absolute path; it is descriptive and is never executed. Artifact map key semantics remain unresolved, and a configuration digest does not verify configuration contents. The subset is smaller than a full enrollment record and may reject otherwise valid v1 records. These maps do not prove dependency closure.
+
+The reported identity digest is SHA-256 of the exact input bytes, not the proposed v1 enrollment digest. Input is treated as an immutable snapshot after loading. Safe-open loading is unsupported on Windows and fails closed. This partial descriptor provides no provenance or authentication, file verification, or authorization; it must not contain secrets. Trust must be established separately through a human process and independently sourced information. Loading adds no tools and executes no driver.
+
 ## Security invariants
 
 Only the human launcher selects full or declarative mode. The authenticated keeper session fixes that choice; `both` is invalid. The new bridge supports declarative mode and retains the legacy full-mode path. Its default partial declarative slice advertises no tools and uses `ssjack-declarative-partial-0`; when optional enrollment metadata is supplied, the incomplete zero-tool descriptor instead uses `ssjack-enrollment-partial-1`. Neither discriminator is proposed protocol v1. Bridge startup requires a descriptor and fails closed if absent or invalid. Old keepers that do not recognize declarative mode fail closed and deny launch. The legacy bridge may display full-mode tool names, but the keeper denies requests and cannot grant authority. Full mode has exactly eight tools: `remote_targets`, `remote_exec`, `remote_read`, `remote_cancel`, `app_list`, `app_exec`, `app_read`, `app_cancel`; proposed declarative mode has exactly six tools, unavailable in this partial slice. Declarative uses a dedicated dispatcher and cannot call `remote_*`, `app_*`, child transport or another admin credential. Rejection never falls through to full dispatch. Current `remote_*` is shell-capable; `app_*` is not a restricted subset. `confirm=true` is not approval. Cross-version behavior is untested.

@@ -226,3 +226,54 @@ func TestHarnessTailIsNotParsedAsSSJackFlags(t *testing.T) {
 		}
 	}
 }
+
+const cliIdentityMeta = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1}`
+const cliIdentityPolicy = `{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1,"revision":"rev-1"}`
+const cliIdentityJSON = `{"format":"ssjack-enrollment-identity-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"driver.one-v1","driver_protocol":1,"executable":{"path":"/opt/driver","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"artifact_digests":{"main":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"dependency_digests":{},"configuration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","principal":{"issuer":"local","subject":"operator"}}`
+
+func TestEnrollmentIdentityCLIReadsSnapshotAndNeverCredentials(t *testing.T) {
+	supported := runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" || runtime.GOOS == "openbsd" || runtime.GOOS == "netbsd" || runtime.GOOS == "dragonfly" || runtime.GOOS == "solaris"
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath, policyPath, identityPath := filepath.Join(dir, "metadata.json"), filepath.Join(dir, "policy.json"), filepath.Join(dir, "identity.json")
+	for p, raw := range map[string]string{metaPath: cliIdentityMeta, policyPath: cliIdentityPolicy, identityPath: cliIdentityJSON} {
+		if err := os.WriteFile(p, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldC, oldL := cliLoadAgentCredentials, cliLaunchRun
+	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldC, oldL }()
+	credentials := false
+	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+		credentials = true
+		return nil, nil, nil, errors.New("credentials accessed")
+	}
+	launched := false
+	cliLaunchRun = func(_ context.Context, opts launch.Options) (int, error) {
+		launched = true
+		if opts.Identity == nil {
+			return 1, errors.New("identity missing")
+		}
+		if err := os.WriteFile(identityPath, []byte(`{}`), 0600); err != nil {
+			return 1, err
+		}
+		if opts.Identity.DriverID() != "driver.one-v1" {
+			return 1, errors.New("identity mutated")
+		}
+		return 0, nil
+	}
+	args := []string{"--mode", "declarative", "--enrollment-metadata", metaPath, "--policy-snapshot", policyPath, "--enrollment-identity", identityPath, "run", "fixture"}
+	code, err := run(context.Background(), args)
+	if supported {
+		if err != nil || code != 0 {
+			t.Fatalf("run %d %v", code, err)
+		}
+		if !launched || credentials {
+			t.Fatalf("launch=%v credentials=%v", launched, credentials)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), "unsupported") || launched || credentials {
+		t.Fatalf("unsupported safe-open did not fail closed: %d %v", code, err)
+	}
+}

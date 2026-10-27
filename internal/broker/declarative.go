@@ -19,6 +19,8 @@ const (
 	PartialProtocol         = "ssjack-declarative-partial-0"
 	EnrollmentProtocol      = "ssjack-enrollment-partial-1"
 	FullProtocol            = "ssjack-full-1"
+	PolicyProtocol          = "ssjack-policy-deny-only-1"
+	SnapshotProtocol        = "ssjack-identity-subset-partial-1"
 	DiscoveryRequest        = "ssjack-session-discovery"
 )
 
@@ -32,6 +34,7 @@ type Descriptor struct {
 	DriverProtocol int      `json:"driver_protocol,omitempty"`
 	PolicyRevision string   `json:"policy_revision,omitempty"`
 	PolicyDigest   string   `json:"policy_digest,omitempty"`
+	SnapshotDigest string   `json:"snapshot_digest,omitempty"`
 }
 type DescribeRequest struct {
 	Discovery string `json:"discovery"`
@@ -51,16 +54,19 @@ var policyDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func ValidateDescriptor(d Descriptor) error {
 	fullTools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}
 	policyFieldsEmpty := d.PolicyRevision == "" && d.PolicyDigest == ""
-	if d.Mode == ModeDeclarative && d.Protocol == PolicyProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyRevisionPattern.MatchString(d.PolicyRevision) && policyDigestPattern.MatchString(d.PolicyDigest) {
+	if d.Mode == ModeDeclarative && d.Protocol == SnapshotProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyRevisionPattern.MatchString(d.PolicyRevision) && policyDigestPattern.MatchString(d.PolicyDigest) && policyDigestPattern.MatchString(d.SnapshotDigest) {
 		return nil
 	}
-	if d.Mode == ModeFull && d.Protocol == FullProtocol && d.Complete && equalTools(d.Tools, fullTools) && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty {
+	if d.Mode == ModeDeclarative && d.Protocol == PolicyProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyRevisionPattern.MatchString(d.PolicyRevision) && policyDigestPattern.MatchString(d.PolicyDigest) && d.SnapshotDigest == "" {
 		return nil
 	}
-	if d.Mode == ModeDeclarative && d.Protocol == PartialProtocol && !d.Complete && len(d.Tools) == 0 && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty {
+	if d.Mode == ModeFull && d.Protocol == FullProtocol && d.Complete && equalTools(d.Tools, fullTools) && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty && d.SnapshotDigest == "" {
 		return nil
 	}
-	if d.Mode == ModeDeclarative && d.Protocol == EnrollmentProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyFieldsEmpty {
+	if d.Mode == ModeDeclarative && d.Protocol == PartialProtocol && !d.Complete && len(d.Tools) == 0 && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty && d.SnapshotDigest == "" {
+		return nil
+	}
+	if d.Mode == ModeDeclarative && d.Protocol == EnrollmentProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyFieldsEmpty && d.SnapshotDigest == "" {
 		return nil
 	}
 	return errors.New("invalid keeper session descriptor")
@@ -75,6 +81,23 @@ func equalTools(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func DispatchIdentity(metadata *enrollment.Metadata, policy enrollment.Policy, snapshot enrollment.Snapshot) (Handler, error) {
+	if metadata == nil || !validEnrollmentFields(metadata.EnrollmentID(), metadata.DriverID(), metadata.DriverProtocol()) || snapshot.EnrollmentID() != metadata.EnrollmentID() || snapshot.DriverID() != metadata.DriverID() || policy.EnrollmentID() != metadata.EnrollmentID() || policy.DriverID() != metadata.DriverID() || policy.DriverProtocol() != metadata.DriverProtocol() || snapshot.PolicyRevision() != policy.Revision() || snapshot.PolicyDigest() != policy.Digest() || policy.Revision() == "" || !policyRevisionPattern.MatchString(policy.Revision()) || !policyDigestPattern.MatchString(policy.Digest()) || !policyDigestPattern.MatchString(snapshot.Digest()) {
+		return nil, errors.New("snapshot identity or policy mismatch")
+	}
+	metadataSnapshot, policySnapshot, identitySnapshot := *metadata, policy, snapshot
+	return func(_ context.Context, request wire.Request) wire.Reply {
+		if request.Operation != "session.describe" {
+			return wire.Reply{Error: "operation unavailable in this session mode"}
+		}
+		var input DescribeRequest
+		if wire.DecodeStrict(request.Data, &input, "discovery") != nil || input.Discovery != DiscoveryRequest {
+			return wire.Reply{Error: "unsupported descriptor request"}
+		}
+		return Result(Descriptor{Protocol: SnapshotProtocol, Mode: ModeDeclarative, Complete: false, Tools: []string{}, EnrollmentID: metadataSnapshot.EnrollmentID(), DriverID: metadataSnapshot.DriverID(), DriverProtocol: metadataSnapshot.DriverProtocol(), PolicyRevision: policySnapshot.Revision(), PolicyDigest: policySnapshot.Digest(), SnapshotDigest: identitySnapshot.Digest()}, nil)
+	}, nil
 }
 
 func DispatchPolicy(metadata *enrollment.Metadata, policy enrollment.Policy) (Handler, error) {
@@ -103,8 +126,6 @@ func DispatchPolicy(metadata *enrollment.Metadata, policy enrollment.Policy) (Ha
 		return Result(descriptor, nil)
 	}, nil
 }
-
-const PolicyProtocol = "ssjack-policy-deny-only-1"
 
 func DispatchEnrollment(metadata *enrollment.Metadata) (Handler, error) {
 	if metadata == nil || !validEnrollmentFields(metadata.EnrollmentID(), metadata.DriverID(), metadata.DriverProtocol()) {
@@ -170,11 +191,14 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 	if !ok {
 		return Descriptor{}, errors.New("invalid keeper session descriptor")
 	}
-	if protocol == EnrollmentProtocol || protocol == PolicyProtocol {
+	if protocol == EnrollmentProtocol || protocol == PolicyProtocol || protocol == SnapshotProtocol {
 		keys = append(keys, "enrollment_id", "driver_id", "driver_protocol")
-		if protocol == PolicyProtocol {
-			keys = append(keys, "policy_revision", "policy_digest")
-		}
+	}
+	if protocol == PolicyProtocol || protocol == SnapshotProtocol {
+		keys = append(keys, "policy_revision", "policy_digest")
+	}
+	if protocol == SnapshotProtocol {
+		keys = append(keys, "snapshot_digest")
 	}
 	if len(fields) != len(keys) {
 		return Descriptor{}, errors.New("invalid keeper session descriptor")
@@ -199,7 +223,7 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
 	}
-	if protocol == PolicyProtocol {
+	if protocol == PolicyProtocol || protocol == SnapshotProtocol {
 		if _, ok := fields["policy_revision"].(string); !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
@@ -207,7 +231,12 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
 	}
-	if protocol == EnrollmentProtocol || protocol == PolicyProtocol {
+	if protocol == SnapshotProtocol {
+		if _, ok := fields["snapshot_digest"].(string); !ok {
+			return Descriptor{}, errors.New("invalid keeper session descriptor")
+		}
+	}
+	if protocol == EnrollmentProtocol || protocol == PolicyProtocol || protocol == SnapshotProtocol {
 		if _, ok := fields["enrollment_id"].(string); !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
