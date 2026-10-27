@@ -130,6 +130,7 @@ Project validation builds and tests run in GitHub CI, not automatically on a con
 - [Key format and derivation details](docs/KEYS.md)
 - [Cryptographic audit scope and known limitations](docs/AUDIT.md)
 - [Architecture, MCP bootstrap, and updates](SSJACK.md)
+- [Proposed universal declarative contract](docs/declarative/README.md)
 - [SSH interoperability and server trust](SSH.md)
 - [Release assets and installers](docs/RELEASES.md)
 - [UI plugin development](plugins/ssjack-ui/README.md)

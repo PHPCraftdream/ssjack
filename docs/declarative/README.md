@@ -1,0 +1,30 @@
+# Declarative MCP specification
+
+**Status: proposed design only; not implemented, approved, or deployed.** These pages describe no live API, approval service, enrollment account, driver runner, or production integration. Normative v1 language is a proposed contract, not authorization. Do not invent credentials or approval mechanisms. Existing full MCP behavior is unchanged.
+
+## Pages
+
+- [Protocol](protocol.md): session negotiation, tools, schemas, errors and limits.
+- [Driver](driver.md): human enrollment, schema/artifact distribution, execution and framing.
+- [Policy](policy.md): policy, canonical binding and approval availability.
+- [Lifecycle](lifecycle.md): recovery, durable operations, retries and cancellation.
+- [Conformance](conformance.md): synthetic future acceptance criteria.
+- [Common schemas](schemas.md): deterministic JSON Schema grammar, descriptor/tool DTOs and digests, and exact enrollment record shapes.
+
+## Security invariants
+
+Only the human launcher selects full or declarative mode. The authenticated keeper session fixes that choice; `both` is invalid. The new bridge supports declarative mode and retains the legacy full-mode path. The full mode has exactly eight tools: `remote_targets`, `remote_exec`, `remote_read`, `remote_cancel`, `app_list`, `app_exec`, `app_read`, `app_cancel`; declarative mode has exactly six tools. Old keepers that do not recognize declarative mode refuse it. Declarative uses a dedicated dispatcher and cannot call `remote_*`, `app_*`, child transport or another admin credential. Rejection never falls through to full dispatch. Current `remote_*` is shell-capable; `app_*` is not a restricted subset. `confirm=true` is not approval.
+
+Drivers are trusted executable code, not sandboxes. Human enrollment binds executable/dependency identities, configuration, principal, target, schema, permissions, output vocabulary and limits. Broad root, Docker/Incus, sudo, Nix trusted-user or alternate-shell access defeats least privilege; same-user processes are not isolated from one another. JSON Schema/redaction cannot prove arbitrary output nonsecret. Only explicitly reviewed typed fields may leave the driver; unknown/free-form values fail closed. V1 has no SecretRef resolver or secret delivery.
+
+Enrollment records and exact schema documents must be distributed to clients through an independently controlled, authenticated human process before execution. Schema IDs are immutable and digest-bound within an enrollment; changed content requires reviewed revision and redistribution. Clients validate locally: no driver, registry, network or foreign schema lookup. Schema IDs and schema digests are defined in [schemas](schemas.md); no external schema bundle or lookup is used.
+
+**Pre-invocation versus post-invocation:** a failure proven before the durable invocation-start marker/process call means no driver invocation. Once invocation may have started—including marker persistence, timeout, crash, malformed response, lost acknowledgment or uncertain commit—mutation outcome is unknown; never automatically retry apply. See [lifecycle](lifecycle.md) and [conformance](conformance.md).
+
+**Attachment recovery is deliberately not reconnectable.** Existing keeper bootstrap is one-use. After claim, bridge disconnect, timeout or process loss does not enable a second claim, token refresh, reconnect, alternate credential or foreign lookup. Affected resources are durably quarantined: no model reads, automated continuation or mutation until human inspection and fresh authorized launcher session; if scope cannot be determined, quarantine the enrollment/session. Do not retry a possibly-started mutation. This is recovery procedure, not authentication. No local prompt, TTY, account identity, model confirmation or typed phrase proves human identity. Independently authenticated approval/recovery is unspecified and must not be invented.
+
+Keeper owns authorization, scope, policy, plan binding, operation records and safe projections; drivers own domain semantics. `observe` is mandatory, read-only, and the basis of plan preconditions and no-op confirmation. Resource interlocks use canonical target/resource identity across sessions, aliases and re-enrollments; uncertain outcomes quarantine that resource and deny reads/planning/apply until human-reviewed recovery. Revocation or policy/enrollment changes invalidate plans and must be rechecked before invocation. Cancellation is a durable intent, not proof detached work stopped or a rollback. Unknown capabilities are unsupported, never guessed. Protocol documentation does not change existing pinned loopback TLS, one-use environment bootstrap, framed Ktav wire, or bridge behavior.
+
+Protocol, schema, desired and plan digests use policy `JCS-SSJACK-1` integer-only canonical JSON. Domains are `ssjack-schema-v1`, `ssjack-tool-schema-v1`, `ssjack-plan-v1`, `ssjack-desired-v1`, `ssjack-effects-v1`, and `ssjack-enrollment-v1` (ASCII + NUL + canonical bytes). `schemas.md` defines deterministic JSON Schema documents and exact schema IDs/digests; no external bundle or lookup is used. Driver schema subset forbids regex, references, formats, floats and ambiguous composition keywords. Resource schema IDs identify schema documents; resource IDs identify instances. Driver requests/responses are each ≤64 KiB payload (length prefix excluded); outer Ktav encoded frame ≤256 KiB (four-byte prefix excluded). Four ordinary slots and one emergency cancellation slot per enrollment; cancellation has a separate 4096-byte reserve per operation. See policy, driver and protocol.
+
+Tracking references: #131 declarative runtime; #125 application store; #140 crypto/unlock. These identify follow-up tasks only; they do not imply implementation, credentials, approval, or production readiness.
