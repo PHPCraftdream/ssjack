@@ -48,7 +48,25 @@ func readOutput(raw remote.ReadOutput) ReadOutput {
 	return out
 }
 
+func NewDeclarativeServer() *mcp.Server {
+	return mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
+}
+
 func NewServer(client *broker.Client) *mcp.Server {
+	return NewFullServer(client)
+}
+
+func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descriptor) (*mcp.Server, error) {
+	if err := broker.ValidateDescriptor(descriptor); err != nil {
+		return nil, err
+	}
+	if descriptor.Mode == broker.ModeDeclarative {
+		return NewDeclarativeServer(), nil
+	}
+	return NewFullServer(client), nil
+}
+
+func NewFullServer(client *broker.Client) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, remote.TargetsOutput, error) {

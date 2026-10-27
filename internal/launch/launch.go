@@ -20,6 +20,7 @@ import (
 
 type Options struct {
 	Root         string
+	Mode         broker.Mode
 	Executable   string
 	Command      []string
 	BootstrapTTL time.Duration
@@ -90,7 +91,7 @@ func EnsureMCP(root string) error {
 }
 
 func Run(ctx context.Context, opts Options) (int, error) {
-	if len(opts.Command) == 0 || opts.Handler == nil || opts.BootstrapTTL <= 0 {
+	if len(opts.Command) == 0 || (opts.Handler == nil && opts.Mode != broker.ModeDeclarative) || opts.BootstrapTTL <= 0 || (opts.Mode != "" && opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
 		return 1, errors.New("missing harness or session parameters")
 	}
 	root, err := filepath.Abs(opts.Root)
@@ -115,7 +116,10 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, opts.Handler)
+	if opts.Mode == "" {
+		opts.Mode = broker.ModeFull
+	}
+	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, broker.Dispatch(opts.Mode, opts.Handler))
 	if err != nil {
 		return 1, err
 	}

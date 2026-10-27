@@ -69,6 +69,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
+	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
 	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
 	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
 	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
@@ -179,6 +180,9 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		command = command[1:]
 	}
+	if *modeFlag != string(broker.ModeFull) && *modeFlag != string(broker.ModeDeclarative) {
+		return 1, errors.New("mode must be full or declarative")
+	}
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}
@@ -190,21 +194,26 @@ func run(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	manager := remote.NewManager(ctx, targets, runner)
-	defer manager.Close()
-	if applicationOptions != nil {
-		applicationOptions.Runner = streamRunner
-	}
-	applicationManager, err := application.New(ctx, applicationOptions)
-	if err != nil {
-		return 1, err
-	}
-	defer applicationManager.Close()
-	handler := func(ctx context.Context, request wire.Request) wire.Reply {
-		if reply, handled := applicationManager.Handle(ctx, request); handled {
-			return reply
+	var handler broker.Handler
+	var manager *remote.Manager
+	var applicationManager *application.Manager
+	if *modeFlag == string(broker.ModeFull) {
+		manager = remote.NewManager(ctx, targets, runner)
+		defer manager.Close()
+		if applicationOptions != nil {
+			applicationOptions.Runner = streamRunner
 		}
-		return manager.Handle(ctx, request)
+		applicationManager, err = application.New(ctx, applicationOptions)
+		if err != nil {
+			return 1, err
+		}
+		defer applicationManager.Close()
+		handler = func(ctx context.Context, request wire.Request) wire.Reply {
+			if reply, handled := applicationManager.Handle(ctx, request); handled {
+				return reply
+			}
+			return manager.Handle(ctx, request)
+		}
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -215,7 +224,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stderr, "Profile unlocked. MCP access will attach once to this session.")
-	return launch.Run(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return launch.Run(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {
@@ -253,7 +262,15 @@ func runMCP(ctx context.Context) (int, error) {
 		return 1, err
 	}
 	defer client.Close()
-	if err := bridge.NewServer(client).Run(ctx, &mcp.StdioTransport{}); err != nil {
+	descriptor, err := broker.Describe(ctx, client)
+	if err != nil {
+		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
+	}
+	server, err := bridge.NewRegistryForDescriptor(client, descriptor)
+	if err != nil {
+		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
+	}
+	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		return 1, err
 	}
 	return 0, nil
