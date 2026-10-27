@@ -75,6 +75,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
+	policyPath := flags.String("policy-snapshot", "", "Absolute path to human-installed deny-only policy snapshot")
 	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
 	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
 	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
@@ -95,15 +96,18 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 1, err
 	}
-	metadataSupplied := false
+	metadataSupplied, policySupplied := false, false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "enrollment-metadata" {
 			metadataSupplied = true
 		}
+		if f.Name == "policy-snapshot" {
+			policySupplied = true
+		}
 	})
 	command := flags.Args()
-	if metadataSupplied && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
-		return 1, errors.New("--enrollment-metadata is only available for declarative run")
+	if (metadataSupplied || policySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
+		return 1, errors.New("--enrollment-metadata and --policy-snapshot are only available for declarative run")
 	}
 	if *version {
 		fmt.Fprintln(os.Stdout, buildinfo.String())
@@ -198,6 +202,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, errors.New("mode must be full or declarative")
 	}
 	var metadata *enrollment.Metadata
+	var policy *enrollment.Policy
 	if metadataSupplied {
 		if *metadataPath == "" {
 			return 1, errors.New("--enrollment-metadata requires a non-empty absolute path")
@@ -213,7 +218,20 @@ func run(ctx context.Context, args []string) (int, error) {
 			return 1, err
 		}
 		metadata = &loaded
+		if policySupplied {
+			if *policyPath == "" || !filepath.IsAbs(*policyPath) {
+				return 1, errors.New("--policy-snapshot requires a non-empty absolute path")
+			}
+			installed, err := enrollment.LoadPolicy(*policyPath, loaded)
+			if err != nil {
+				return 1, err
+			}
+			policy = &installed
+		}
+	} else if policySupplied {
+		return 1, errors.New("--policy-snapshot requires --enrollment-metadata")
 	}
+
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}
@@ -266,7 +284,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	} else {
 		fmt.Fprintln(os.Stderr, "Starting declarative session. MCP access will attach once to this session.")
 	}
-	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {

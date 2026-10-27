@@ -27,6 +27,7 @@ type Options struct {
 	BootstrapTTL time.Duration
 	Handler      broker.Handler
 	Metadata     *enrollment.Metadata
+	Policy       *enrollment.Policy
 	Stdin        io.Reader
 	Stdout       io.Writer
 	Stderr       io.Writer
@@ -99,6 +100,17 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if opts.Metadata != nil && opts.Mode != broker.ModeDeclarative {
 		return 1, errors.New("enrollment metadata is unavailable in full mode")
 	}
+	if opts.Policy != nil {
+		if opts.Mode != broker.ModeDeclarative {
+			return 1, errors.New("policy snapshot unavailable in full mode")
+		}
+		if opts.Metadata == nil {
+			return 1, errors.New("policy snapshot requires enrollment metadata")
+		}
+		if opts.Policy.EnrollmentID() != opts.Metadata.EnrollmentID() || opts.Policy.DriverID() != opts.Metadata.DriverID() || opts.Policy.DriverProtocol() != opts.Metadata.DriverProtocol() {
+			return 1, errors.New("policy snapshot identity mismatch")
+		}
+	}
 	if len(opts.Command) == 0 || (opts.Handler == nil && opts.Mode != broker.ModeDeclarative) || opts.BootstrapTTL <= 0 || (opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
 		return 1, errors.New("missing harness or session parameters")
 	}
@@ -108,6 +120,12 @@ func Run(ctx context.Context, opts Options) (int, error) {
 		dispatch, err = broker.DispatchEnrollment(opts.Metadata)
 		if err != nil {
 			return 1, err
+		}
+		if opts.Policy != nil {
+			dispatch, err = broker.DispatchPolicy(opts.Metadata, *opts.Policy)
+			if err != nil {
+				return 1, err
+			}
 		}
 	}
 	root, err := filepath.Abs(opts.Root)

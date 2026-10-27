@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,24 @@ func TestHarnessProcess(t *testing.T) {
 	}
 	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "arg with spaces" || os.Args[len(os.Args)-1] != "--flag=value" {
 		os.Exit(93)
+	}
+	if os.Getenv("SSJACK_POLICY_HELPER") == "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client, err := broker.ConnectBootstrap(ctx, broker.Bootstrap{Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint), Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken)})
+		if err != nil {
+			os.Exit(101)
+		}
+		defer client.Close()
+		d, err := broker.Describe(ctx, client)
+		if err != nil || d.Protocol != broker.PolicyProtocol || d.PolicyRevision != "rev-1" || d.PolicyDigest != os.Getenv("SSJACK_EXPECTED_POLICY_DIGEST") || len(d.Tools) != 0 {
+			os.Exit(102)
+		}
+		var out map[string]any
+		if client.Call(ctx, "anything", map[string]any{}, &out) == nil {
+			os.Exit(103)
+		}
+		os.Exit(0)
 	}
 	if os.Getenv("SSJACK_METADATA_HELPER") == "1" {
 		metadata, err := enrollment.Parse([]byte(os.Getenv("SSJACK_EXPECTED_METADATA")))
@@ -175,6 +194,82 @@ func TestExistingMCPIsNotOverwritten(t *testing.T) {
 	}
 	if err := EnsureMCP(root); err != nil {
 		t.Fatal("rechecking a valid entry must be idempotent")
+	}
+}
+func TestPolicySourceSnapshotAuthenticatedAndFullRejected(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "freebsd" && runtime.GOOS != "openbsd" && runtime.GOOS != "netbsd" && runtime.GOOS != "dragonfly" && runtime.GOOS != "solaris" {
+		t.Skip("safe policy loading is unsupported on this platform")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSJACK_TEST_HELPER", "1")
+	t.Setenv("SSJACK_POLICY_HELPER", "1")
+	t.Setenv("SSJACK_METADATA_HELPER", "")
+	const meta = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1}`
+	const raw = `{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"rev-1"}`
+	metadata, err := enrollment.Parse([]byte(meta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "policy.json")
+	if err = os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mismatch, err := enrollment.Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"different","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = enrollment.ParsePolicy([]byte(raw), mismatch); err == nil {
+		t.Fatal("mismatched identity accepted")
+	}
+	policy, err := enrollment.LoadPolicy(path, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSJACK_EXPECTED_METADATA", meta)
+	t.Setenv("SSJACK_EXPECTED_POLICY_DIGEST", policy.Digest())
+	if err = os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	code, err := Run(ctx, Options{Root: root, Executable: executable, Command: []string{executable, "-test.run=^TestHarnessProcess$", "--", "arg with spaces", "--flag=value"}, BootstrapTTL: time.Minute, Mode: broker.ModeDeclarative, Metadata: &metadata, Policy: &policy, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("launch %d %v", code, err)
+	}
+	validHarness := []string{executable, "-test.run=^TestHarnessProcess$", "--", "arg with spaces", "--flag=value"}
+	t.Setenv("SSJACK_POLICY_HELPER", "")
+	t.Setenv(uiplugin.EnvDirectories, "parent-plugin")
+	fullRoot := t.TempDir()
+	fullCode, fullErr := Run(context.Background(), Options{Root: fullRoot, Executable: executable, Command: validHarness, BootstrapTTL: time.Minute, Handler: func(_ context.Context, request wire.Request) wire.Reply {
+		if request.Operation == "test" {
+			return broker.Result(struct{ Value string }{"ok"}, nil)
+		}
+		return wire.Reply{Error: "denied"}
+	}, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	if fullErr != nil || fullCode != 7 {
+		t.Fatalf("valid full-mode baseline: %d %v", fullCode, fullErr)
+	}
+	denyHandler := func(context.Context, wire.Request) wire.Reply { return wire.Reply{} }
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{"identity mismatch", Options{Root: t.TempDir(), Executable: executable, Command: validHarness, BootstrapTTL: time.Minute, Mode: broker.ModeDeclarative, Handler: denyHandler, Metadata: &mismatch, Policy: &policy}, "policy snapshot identity mismatch"},
+		{"full mode policy guard", Options{Root: t.TempDir(), Executable: executable, Command: validHarness, BootstrapTTL: time.Minute, Mode: broker.ModeFull, Handler: denyHandler, Policy: &policy}, "policy snapshot unavailable in full mode"},
+		{"full mode with metadata", Options{Root: t.TempDir(), Executable: executable, Command: validHarness, BootstrapTTL: time.Minute, Mode: broker.ModeFull, Handler: denyHandler, Metadata: &metadata, Policy: &policy}, "enrollment metadata is unavailable in full mode"},
+	} {
+		_, err := Run(context.Background(), tc.opts)
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%s: got %v; want exact error %q", tc.name, err, tc.want)
+		}
 	}
 }
 

@@ -41,6 +41,53 @@ func TestParseAdversarial(t *testing.T) {
 	}
 }
 
+func TestPolicySnapshotStrictBinding(t *testing.T) {
+	const good = `{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"rev-1"}`
+	metadata, err := Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		good,
+		strings.Replace(good, `"revision":"rev-1"`, `"revision":"rev-\u0031"`, 1),
+	} {
+		if _, err := ParsePolicy([]byte(raw), metadata); err != nil {
+			t.Fatalf("rejected valid snapshot %s: %v", raw, err)
+		}
+	}
+	invalid := []string{
+		`null`, `[]`,
+		`{"format":null,"enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"rev-1"}`,
+		`{"format":"ssjack-policy-subset-v1","enrollment_id":null,"driver_id":"before","driver_protocol":1,"revision":"rev-1"}`,
+		`{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":null,"driver_protocol":1,"revision":"rev-1"}`,
+		`{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":null,"revision":"rev-1"}`,
+		`{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":null}`,
+		strings.Replace(good, `"driver_protocol":1`, `"driver_protocol":"1"`, 1),
+		strings.Replace(good, `"format":"ssjack-policy-subset-v1",`, ``, 1),
+		strings.Replace(good, `,"enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA"`, ``, 1),
+		strings.Replace(good, `,"driver_id":"before"`, ``, 1),
+		strings.Replace(good, `,"driver_protocol":1`, ``, 1),
+		strings.Replace(good, `,"revision":"rev-1"`, ``, 1),
+		strings.Replace(good, `"revision":"rev-1"`, `"revision":"rev-1","revision":"r2"`, 1),
+		strings.Replace(good, `"revision":"rev-1"`, `"revision":"rev-1","\u0072evision":"r2"`, 1),
+		strings.Replace(good, `"driver_protocol":1`, `"driver_protocol":1.0`, 1),
+		strings.Replace(good, `"driver_id":"before"`, `"driver_id":"after"`, 1),
+		strings.Replace(good, `"enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA"`, `"enrollment_id":"BBBBBBBBBBBBBBBBBBBBBB"`, 1),
+		`{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"\uD800"}`,
+		good + ` {}`,
+	}
+	for _, raw := range invalid {
+		if _, err := ParsePolicy([]byte(raw), metadata); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+	if _, err := ParsePolicy([]byte(good), Metadata{}); err == nil {
+		t.Fatal("accepted invalid metadata identity")
+	}
+	if _, err := ParsePolicy(make([]byte, MaxPolicySize+1), metadata); err == nil {
+		t.Fatal("accepted oversized snapshot")
+	}
+}
 func TestLoadPathAndNoFollow(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
