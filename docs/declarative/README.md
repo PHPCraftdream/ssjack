@@ -13,7 +13,7 @@
 
 ## Driver execution status
 
-There is no production driver runner or launch path. Immutable artifact binding remains missing, and driver execution is not implemented. The disconnected, untracked `internal/driverexec` and `internal/driverframe` packages (including their tests) are removed; no production transport implementation exists. Do not infer an empty child environment or any other environment guarantee on Windows.
+There is no production driver runner or launch path. Immutable artifact binding remains missing, and driver execution is not implemented. A disconnected `internal/driverframe` transport-framing prerequisite exists, but no runtime invokes it; it does not implement JSON/schema validation or process execution. `internal/driverexec` is absent. Do not infer an empty child environment or any other environment guarantee on Windows.
 
 Execution remains a proposed contract, not an implemented security boundary. Outstanding obligations include immutable artifact binding and race-free execution, dependency/configuration identity, verified OS identity and privilege enforcement, environment control, sandboxing and network/filesystem containment, guaranteed descendant termination, durable operation state, enrollment and full schema validation, and safe output projection. Arguments and driver code cannot be treated as isolated or independently trusted; drivers remain trusted executable code. No successful production invocation or validation is established here.
 
