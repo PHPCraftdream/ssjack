@@ -23,6 +23,46 @@ func fixture(t *testing.T) (*Server, wire.Auth) {
 	return s, auth
 }
 
+func TestFullCompatibilityAndInvalidDescriptor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("c", 64), Token: strings.Repeat("d", 64)}
+	called := false
+	handler := Dispatch(ModeFull, func(context.Context, wire.Request) wire.Reply {
+		called = true
+		return Result(map[string]string{"ok": "yes"}, nil)
+	})
+	keeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeper.Close()
+	client, err := Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	d, err := Describe(ctx, client)
+	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
+		t.Fatalf("full descriptor: %+v %v", d, err)
+	}
+	var response map[string]string
+	if err := client.Call(ctx, "legacy-op", struct{}{}, &response); err != nil || response["ok"] != "yes" || !called {
+		t.Fatal("full compatibility path failed")
+	}
+	called = false
+	if err := client.Call(ctx, "session.describe", map[string]any{"discovery": DiscoveryRequest, "mode": "declarative"}, &response); err == nil {
+		t.Fatal("accepted mode switch attempt")
+	}
+	d, err = Describe(ctx, client)
+	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
+		t.Fatalf("mode changed after rejected attempt: %+v %v", d, err)
+	}
+	if called {
+		t.Fatal("mode-switch attempt invoked full callback")
+	}
+}
+
 func TestRequiresTokenSessionAndProtocolVersion(t *testing.T) {
 	s, auth := fixture(t)
 	for _, field := range []string{"token", "version", "session"} {

@@ -2,8 +2,11 @@ package broker
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"regexp"
 
+	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 	"github.com/ktav-lang/golang/pure"
 )
@@ -11,35 +14,48 @@ import (
 type Mode string
 
 const (
-	ModeFull         Mode = "full"
-	ModeDeclarative  Mode = "declarative"
-	PartialProtocol       = "ssjack-declarative-partial-0"
-	FullProtocol          = "ssjack-full-1"
-	DiscoveryRequest      = "ssjack-session-discovery"
+	ModeFull           Mode = "full"
+	ModeDeclarative    Mode = "declarative"
+	PartialProtocol         = "ssjack-declarative-partial-0"
+	EnrollmentProtocol      = "ssjack-enrollment-partial-1"
+	FullProtocol            = "ssjack-full-1"
+	DiscoveryRequest        = "ssjack-session-discovery"
 )
 
 type Descriptor struct {
-	Protocol string   `json:"protocol"`
-	Mode     Mode     `json:"mode"`
-	Complete bool     `json:"complete"`
-	Tools    []string `json:"tools"`
+	Protocol       string   `json:"protocol"`
+	Mode           Mode     `json:"mode"`
+	Complete       bool     `json:"complete"`
+	Tools          []string `json:"tools"`
+	EnrollmentID   string   `json:"enrollment_id,omitempty"`
+	DriverID       string   `json:"driver_id,omitempty"`
+	DriverProtocol int      `json:"driver_protocol,omitempty"`
 }
-
 type DescribeRequest struct {
 	Discovery string `json:"discovery"`
 }
 
+var enrollmentIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22}$`)
+var driverIDPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
+
+func validEnrollmentFields(id, driver string, protocol int) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(id)
+	return err == nil && len(decoded) == 16 && base64.RawURLEncoding.EncodeToString(decoded) == id && enrollmentIDPattern.MatchString(id) && driverIDPattern.MatchString(driver) && protocol == 1
+}
+
 func ValidateDescriptor(d Descriptor) error {
 	fullTools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}
-	if d.Mode == ModeFull && d.Protocol == FullProtocol && d.Complete && equalTools(d.Tools, fullTools) {
+	if d.Mode == ModeFull && d.Protocol == FullProtocol && d.Complete && equalTools(d.Tools, fullTools) && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 {
 		return nil
 	}
-	if d.Mode == ModeDeclarative && d.Protocol == PartialProtocol && !d.Complete && len(d.Tools) == 0 {
+	if d.Mode == ModeDeclarative && d.Protocol == PartialProtocol && !d.Complete && len(d.Tools) == 0 && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 {
+		return nil
+	}
+	if d.Mode == ModeDeclarative && d.Protocol == EnrollmentProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) {
 		return nil
 	}
 	return errors.New("invalid keeper session descriptor")
 }
-
 func equalTools(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -52,7 +68,23 @@ func equalTools(a, b []string) bool {
 	return true
 }
 
-// Dispatch fixes mode when the keeper is constructed; it is not request-selected.
+func DispatchEnrollment(metadata *enrollment.Metadata) (Handler, error) {
+	if metadata == nil || !validEnrollmentFields(metadata.EnrollmentID(), metadata.DriverID(), metadata.DriverProtocol()) {
+		return nil, errors.New("invalid enrollment metadata")
+	}
+	id, driver, protocol := metadata.EnrollmentID(), metadata.DriverID(), metadata.DriverProtocol()
+	return func(_ context.Context, request wire.Request) wire.Reply {
+		if request.Operation != "session.describe" {
+			return wire.Reply{Error: "operation unavailable in this session mode"}
+		}
+		var input DescribeRequest
+		if wire.DecodeStrict(request.Data, &input, "discovery") != nil || input.Discovery != DiscoveryRequest {
+			return wire.Reply{Error: "unsupported descriptor request"}
+		}
+		return Result(Descriptor{Protocol: EnrollmentProtocol, Mode: ModeDeclarative, Complete: false, Tools: []string{}, EnrollmentID: id, DriverID: driver, DriverProtocol: protocol}, nil)
+	}, nil
+}
+
 func Dispatch(mode Mode, full Handler) Handler {
 	if mode != ModeFull && mode != ModeDeclarative {
 		panic("invalid immutable keeper mode")
@@ -82,9 +114,7 @@ func Dispatch(mode Mode, full Handler) Handler {
 }
 
 func Describe(ctx context.Context, client *Client) (Descriptor, error) {
-	var descriptor Descriptor
-	input := DescribeRequest{Discovery: DiscoveryRequest}
-	data, err := client.CallRaw(ctx, "session.describe", input)
+	data, err := client.CallRaw(ctx, "session.describe", DescribeRequest{Discovery: DiscoveryRequest})
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -93,39 +123,65 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 		return Descriptor{}, err
 	}
 	fields, ok := parsed.(map[string]any)
-	if !ok || len(fields) != 4 {
+	if !ok {
 		return Descriptor{}, errors.New("invalid keeper session descriptor")
 	}
-	for key, want := range map[string]string{"protocol": "string", "mode": "string", "complete": "bool", "tools": "array"} {
-		value, exists := fields[key]
-		if !exists {
+	base := []string{"protocol", "mode", "complete", "tools"}
+	keys := append([]string{}, base...)
+	protocol, ok := fields["protocol"].(string)
+	if !ok {
+		return Descriptor{}, errors.New("invalid keeper session descriptor")
+	}
+	if protocol == EnrollmentProtocol {
+		keys = append(keys, "enrollment_id", "driver_id", "driver_protocol")
+	}
+	if len(fields) != len(keys) {
+		return Descriptor{}, errors.New("invalid keeper session descriptor")
+	}
+	for _, key := range keys {
+		if _, ok := fields[key]; !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
-		typeOK := false
+	}
+	for key, want := range map[string]string{"protocol": "string", "mode": "string", "complete": "bool", "tools": "array"} {
+		v := fields[key]
+		good := false
 		switch want {
 		case "string":
-			_, typeOK = value.(string)
+			_, good = v.(string)
 		case "bool":
-			_, typeOK = value.(bool)
+			_, good = v.(bool)
 		case "array":
-			_, typeOK = value.([]any)
+			_, good = v.([]any)
 		}
-		if !typeOK {
+		if !good {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
 	}
-	for _, value := range fields["tools"].([]any) {
-		if _, ok := value.(string); !ok {
+	if protocol == EnrollmentProtocol {
+		if _, ok := fields["enrollment_id"].(string); !ok {
+			return Descriptor{}, errors.New("invalid keeper session descriptor")
+		}
+		if _, ok := fields["driver_id"].(string); !ok {
+			return Descriptor{}, errors.New("invalid keeper session descriptor")
+		}
+		if _, ok := fields["driver_protocol"].(int64); !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
 	}
-	if err := wire.DecodeStrict(data, &descriptor, "protocol", "mode", "complete", "tools"); err != nil {
+	for _, v := range fields["tools"].([]any) {
+		if _, ok := v.(string); !ok {
+			return Descriptor{}, errors.New("invalid keeper session descriptor")
+		}
+	}
+	var d Descriptor
+	if err := wire.DecodeStrict(data, &d, keys...); err != nil {
 		return Descriptor{}, err
 	}
-	if err := ValidateDescriptor(descriptor); err != nil {
+	if err := ValidateDescriptor(d); err != nil {
 		return Descriptor{}, err
 	}
-	return descriptor, nil
+	return d, nil
 }
 
 func DeclarativeDenyAll(_ context.Context, _ wire.Request) wire.Reply {

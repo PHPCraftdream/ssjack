@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -25,6 +26,7 @@ type Options struct {
 	Command      []string
 	BootstrapTTL time.Duration
 	Handler      broker.Handler
+	Metadata     *enrollment.Metadata
 	Stdin        io.Reader
 	Stdout       io.Writer
 	Stderr       io.Writer
@@ -91,8 +93,22 @@ func EnsureMCP(root string) error {
 }
 
 func Run(ctx context.Context, opts Options) (int, error) {
-	if len(opts.Command) == 0 || (opts.Handler == nil && opts.Mode != broker.ModeDeclarative) || opts.BootstrapTTL <= 0 || (opts.Mode != "" && opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
+	if opts.Mode == "" {
+		opts.Mode = broker.ModeFull
+	}
+	if opts.Metadata != nil && opts.Mode != broker.ModeDeclarative {
+		return 1, errors.New("enrollment metadata is unavailable in full mode")
+	}
+	if len(opts.Command) == 0 || (opts.Handler == nil && opts.Mode != broker.ModeDeclarative) || opts.BootstrapTTL <= 0 || (opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
 		return 1, errors.New("missing harness or session parameters")
+	}
+	dispatch := broker.Dispatch(opts.Mode, opts.Handler)
+	if opts.Metadata != nil {
+		var err error
+		dispatch, err = broker.DispatchEnrollment(opts.Metadata)
+		if err != nil {
+			return 1, err
+		}
 	}
 	root, err := filepath.Abs(opts.Root)
 	if err != nil {
@@ -116,10 +132,7 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if opts.Mode == "" {
-		opts.Mode = broker.ModeFull
-	}
-	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, broker.Dispatch(opts.Mode, opts.Handler))
+	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, dispatch)
 	if err != nil {
 		return 1, err
 	}

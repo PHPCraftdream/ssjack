@@ -2,13 +2,118 @@ package broker
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
+
+func TestEnrollmentDescriptorAuthenticatedSnapshotAndDeny(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := "AAAAAAAAAAAAAAAAAAAAAA"
+	m, err := enrollment.Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"driver-a","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := DispatchEnrollment(&m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated, err := enrollment.Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"driver-b","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = mutated
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("1", 64), Token: strings.Repeat("2", 64)}
+	keeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeper.Close()
+	client, err := Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	d, err := Describe(ctx, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Protocol != EnrollmentProtocol || d.DriverID != "driver-a" || d.EnrollmentID != id || d.DriverProtocol != 1 || len(d.Tools) != 0 {
+		t.Fatalf("descriptor: %+v", d)
+	}
+	for _, op := range []string{"targets", "start", "app_start", "driver.execute"} {
+		var out map[string]any
+		if err := client.Call(ctx, op, map[string]any{}, &out); err == nil {
+			t.Fatalf("accepted %s", op)
+		}
+	}
+}
+
+func TestEnrollmentSourceFileMutationDoesNotChangeSnapshot(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "freebsd" && runtime.GOOS != "openbsd" && runtime.GOOS != "netbsd" && runtime.GOOS != "dragonfly" && runtime.GOOS != "solaris" {
+		t.Skip("secure enrollment file loading is unsupported on this platform")
+	}
+	id := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	original := []byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"before","driver_protocol":1}`)
+	path := filepath.Join(t.TempDir(), "metadata.json")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := enrollment.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := DispatchEnrollment(&metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := []byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"after","driver_protocol":1}`)
+	if err := os.WriteFile(path, changed, 0600); err != nil {
+		t.Fatalf("unexpected source metadata mutation failure: %v", err)
+	}
+	request, _ := wire.Encode(DescribeRequest{Discovery: DiscoveryRequest})
+	reply := h(context.Background(), wire.Request{Operation: "session.describe", Data: request})
+	var got Descriptor
+	if err := wire.DecodeStrict(reply.Data, &got, "protocol", "mode", "complete", "tools", "enrollment_id", "driver_id", "driver_protocol"); err != nil {
+		t.Fatal(err)
+	}
+	if got.DriverID != "before" {
+		t.Fatalf("source mutation changed snapshot: %+v", got)
+	}
+}
+
+func TestEnrollmentDescriptorRejectsMalformedFields(t *testing.T) {
+	valid := Descriptor{Protocol: EnrollmentProtocol, Mode: ModeDeclarative, Complete: false, Tools: []string{}, EnrollmentID: "AAAAAAAAAAAAAAAAAAAAAA", DriverID: "driver-a", DriverProtocol: 1}
+	if err := ValidateDescriptor(valid); err != nil {
+		t.Fatalf("valid enrollment descriptor rejected: %v", err)
+	}
+	cases := map[string]func(*Descriptor){
+		"enrollment id":   func(d *Descriptor) { d.EnrollmentID = "invalid" },
+		"driver id":       func(d *Descriptor) { d.DriverID = "Invalid" },
+		"driver protocol": func(d *Descriptor) { d.DriverProtocol = 2 },
+		"mode":            func(d *Descriptor) { d.Mode = ModeFull },
+		"complete":        func(d *Descriptor) { d.Complete = true },
+		"tools":           func(d *Descriptor) { d.Tools = []string{"remote_exec"} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := valid
+			mutate(&d)
+			if ValidateDescriptor(d) == nil {
+				t.Fatalf("accepted malformed descriptor: %+v", d)
+			}
+		})
+	}
+}
 
 func TestDeclarativeAuthenticatedBoundaryDeniesForgedCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -103,6 +208,30 @@ func TestDescriptorRawTypeValidationAuthenticated(t *testing.T) {
 	}
 	cases["invalid array element"] = badArray
 	cases["duplicate mode"] = valid + "\nmode: declarative\n"
+	enrollmentMap := map[string]any{"protocol": EnrollmentProtocol, "mode": ModeDeclarative, "complete": false, "tools": []string{}, "enrollment_id": "AAAAAAAAAAAAAAAAAAAAAA", "driver_id": "driver-a", "driver_protocol": 1}
+	enrollmentRaw, err := wire.Encode(enrollmentMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, badValues := range map[string][]any{"enrollment_id": {nil, 17}, "driver_id": {nil, 17}, "driver_protocol": {nil, "1"}} {
+		for _, bad := range badValues {
+			candidate := map[string]any{}
+			for k, v := range enrollmentMap {
+				candidate[k] = v
+			}
+			candidate[field] = bad
+			raw, err := wire.Encode(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			label := field + " null"
+			if bad != nil {
+				label = field + " wrong type " + fmt.Sprint(bad)
+			}
+			cases[label] = raw
+		}
+	}
+	cases["duplicate enrollment id"] = enrollmentRaw + "\nenrollment_id: AAAAAAAAAAAAAAAAAAAAAA\n"
 	baselineKeeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, func(_ context.Context, _ wire.Request) wire.Reply { return wire.Reply{OK: true, Data: valid} })
 	if err != nil {
 		t.Fatal(err)
@@ -135,46 +264,6 @@ func TestDescriptorRawTypeValidationAuthenticated(t *testing.T) {
 				t.Fatal("accepted malformed descriptor")
 			}
 		})
-	}
-}
-
-func TestFullCompatibilityAndInvalidDescriptor(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	auth := wire.Auth{Version: 2, Session: strings.Repeat("c", 64), Token: strings.Repeat("d", 64)}
-	called := false
-	handler := Dispatch(ModeFull, func(context.Context, wire.Request) wire.Reply {
-		called = true
-		return Result(map[string]string{"ok": "yes"}, nil)
-	})
-	keeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, handler)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer keeper.Close()
-	client, err := Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	d, err := Describe(ctx, client)
-	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
-		t.Fatalf("full descriptor: %+v %v", d, err)
-	}
-	var response map[string]string
-	if err := client.Call(ctx, "legacy-op", struct{}{}, &response); err != nil || response["ok"] != "yes" || !called {
-		t.Fatal("full compatibility path failed")
-	}
-	called = false
-	if err := client.Call(ctx, "session.describe", map[string]any{"discovery": DiscoveryRequest, "mode": "declarative"}, &response); err == nil {
-		t.Fatal("accepted mode switch attempt")
-	}
-	d, err = Describe(ctx, client)
-	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
-		t.Fatalf("mode changed after rejected attempt: %+v %v", d, err)
-	}
-	if called {
-		t.Fatal("mode-switch attempt invoked full callback")
 	}
 }
 

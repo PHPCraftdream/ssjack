@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -28,6 +29,46 @@ func listSelected(ctx context.Context, server *mcp.Server) ([]*mcp.Tool, error) 
 		return nil, err
 	}
 	return tools.Tools, nil
+}
+
+func TestEnrollmentDescriptorSelectsEmptyRegistry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := "AAAAAAAAAAAAAAAAAAAAAA"
+	metadata, err := enrollment.Parse([]byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"driver.test","driver_protocol":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := broker.DispatchEnrollment(&metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := wire.Auth{Version: 2, Session: strings.Repeat("3", 64), Token: strings.Repeat("4", 64)}
+	keeper, err := broker.Listen(ctx, auth.Session, auth.Token, time.Minute, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeper.Close()
+	client, err := broker.Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	d, err := broker.Describe(ctx, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewRegistryForDescriptor(client, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := listSelected(ctx, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 0 || d.Protocol != broker.EnrollmentProtocol {
+		t.Fatalf("descriptor=%+v tools=%d", d, len(tools))
+	}
 }
 
 func TestAuthenticatedDiscoverySelectsRegistry(t *testing.T) {

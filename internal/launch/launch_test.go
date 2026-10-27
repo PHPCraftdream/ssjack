@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -25,6 +26,28 @@ func TestHarnessProcess(t *testing.T) {
 	}
 	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "arg with spaces" || os.Args[len(os.Args)-1] != "--flag=value" {
 		os.Exit(93)
+	}
+	if os.Getenv("SSJACK_METADATA_HELPER") == "1" {
+		metadata, err := enrollment.Parse([]byte(os.Getenv("SSJACK_EXPECTED_METADATA")))
+		if err != nil || metadata.DriverID() != "before" {
+			os.Exit(96)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client, err := broker.ConnectBootstrap(ctx, broker.Bootstrap{Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint), Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken)})
+		if err != nil {
+			os.Exit(97)
+		}
+		defer client.Close()
+		descriptor, err := broker.Describe(ctx, client)
+		if err != nil || descriptor.DriverID != "before" || descriptor.DriverProtocol != 1 {
+			os.Exit(98)
+		}
+		var ignored map[string]any
+		if err := client.Call(ctx, "operation", map[string]any{}, &ignored); err == nil {
+			os.Exit(99)
+		}
+		os.Exit(0)
 	}
 	directories := filepath.SplitList(os.Getenv(uiplugin.EnvDirectories))
 	if len(directories) < 2 || directories[0] != "parent-plugin" {
@@ -88,6 +111,47 @@ func TestLaunchPassesOnlyChildCredentialsAndPreservesExit(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
 	if err != nil || strings.Contains(string(data), "token") || strings.Contains(string(data), "parent-value") {
 		t.Fatal("configuration must not contain secrets")
+	}
+}
+
+func TestEnrollmentMetadataLaunchSnapshot(t *testing.T) {
+	t.Setenv("SSJACK_TEST_HELPER", "1")
+	t.Setenv("SSJACK_METADATA_HELPER", "1")
+	const raw = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1}`
+	t.Setenv("SSJACK_EXPECTED_METADATA", raw)
+	metadata, err := enrollment.Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	code, err := Run(ctx, Options{Root: root, Executable: executable, Command: []string{executable, "-test.run=^TestHarnessProcess$", "--", "arg with spaces", "--flag=value"}, BootstrapTTL: time.Minute, Mode: broker.ModeDeclarative, Metadata: &metadata, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("launch: %d %v", code, err)
+	}
+}
+
+func TestInvalidMetadataHasNoLaunchSideEffects(t *testing.T) {
+	invalid := enrollment.Metadata{}
+	root := t.TempDir()
+	if _, err := Run(context.Background(), Options{Root: root, Executable: "ssjack", Command: []string{"missing"}, BootstrapTTL: time.Minute, Mode: broker.ModeDeclarative, Metadata: &invalid}); err == nil {
+		t.Fatal("invalid metadata accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatal("invalid metadata caused MCP side effect")
+	}
+	full := enrollment.Metadata{}
+	root = t.TempDir()
+	if _, err := Run(context.Background(), Options{Root: root, Executable: "ssjack", Command: []string{"missing"}, BootstrapTTL: time.Minute, Metadata: &full}); err == nil {
+		t.Fatal("full mode accepted metadata")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatal("full mode metadata caused MCP side effect")
 	}
 }
 
