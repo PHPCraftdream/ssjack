@@ -246,8 +246,10 @@ func run(ctx context.Context, args []string) (int, error) {
 			}
 			identity = &loaded
 		}
-	} else if policySupplied || identitySupplied {
-		return 1, errors.New("--policy-snapshot and --enrollment-identity require --enrollment-metadata")
+	} else if policySupplied {
+		return 1, errors.New("--policy-snapshot requires --enrollment-metadata")
+	} else if identitySupplied {
+		return 1, errors.New("--enrollment-identity requires --enrollment-metadata")
 	}
 
 	if *ttl <= 0 || *ttl > 10*time.Minute {
