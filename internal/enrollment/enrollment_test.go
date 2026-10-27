@@ -42,7 +42,10 @@ func TestParseAdversarial(t *testing.T) {
 }
 
 func TestLoadPathAndNoFollow(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	file := filepath.Join(dir, "metadata.json")
 	if err := os.WriteFile(file, []byte(validJSON()), 0600); err != nil {
 		t.Fatal(err)
@@ -65,16 +68,18 @@ func TestLoadPathAndNoFollow(t *testing.T) {
 		}
 	}
 	link := filepath.Join(dir, "link.json")
-	if err := os.Symlink(file, link); err == nil {
-		if _, err := Load(link); err == nil {
-			t.Fatal("accepted leaf symlink")
-		}
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatalf("create leaf symlink: %v", err)
+	}
+	if _, err := Load(link); err == nil {
+		t.Fatal("accepted leaf symlink")
 	}
 	parent := filepath.Join(dir, "parent-link")
-	if err := os.Symlink(dir, parent); err == nil {
-		if _, err := Load(filepath.Join(parent, "metadata.json")); err == nil {
-			t.Fatal("accepted parent symlink")
-		}
+	if err := os.Symlink(dir, parent); err != nil {
+		t.Fatalf("create parent symlink: %v", err)
+	}
+	if _, err := Load(filepath.Join(parent, "metadata.json")); err == nil {
+		t.Fatal("accepted parent symlink")
 	}
 	large := filepath.Join(dir, "large.json")
 	if err := os.WriteFile(large, []byte(validJSON()+strings.Repeat(" ", MaxSize)), 0600); err != nil {

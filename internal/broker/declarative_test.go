@@ -64,7 +64,11 @@ func TestEnrollmentSourceFileMutationDoesNotChangeSnapshot(t *testing.T) {
 	}
 	id := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
 	original := []byte(`{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"` + id + `","driver_id":"before","driver_protocol":1}`)
-	path := filepath.Join(t.TempDir(), "metadata.json")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "metadata.json")
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}

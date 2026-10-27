@@ -17,7 +17,10 @@ import (
 )
 
 func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	bad := filepath.Join(dir, "invalid.json")
 	if err := os.WriteFile(bad, []byte(`{"format":!}`), 0600); err != nil {
 		t.Fatal(err)
@@ -78,7 +81,10 @@ func TestEnrollmentMetadataSnapshotReachesKeeper(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "freebsd" && runtime.GOOS != "openbsd" && runtime.GOOS != "netbsd" && runtime.GOOS != "dragonfly" && runtime.GOOS != "solaris" {
 		t.Skip("safe metadata file loading is unsupported on this platform")
 	}
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "metadata.json")
 	const first = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1}`
 	const second = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"after","driver_protocol":1}`
