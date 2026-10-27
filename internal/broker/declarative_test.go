@@ -36,7 +36,7 @@ func TestDeclarativeAuthenticatedBoundaryDeniesForgedCalls(t *testing.T) {
 	if err := client.Call(ctx, "session.describe", map[string]any{"discovery": DiscoveryRequest, "mode": "declarative"}, &d); err == nil {
 		t.Fatal("accepted descriptor request containing mode selector")
 	}
-	d, err := Describe(ctx, client)
+	d, err = Describe(ctx, client)
 	if err != nil || d.Mode != ModeDeclarative || d.Complete || len(d.Tools) != 0 {
 		t.Fatalf("descriptor: %+v %v", d, err)
 	}
