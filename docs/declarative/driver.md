@@ -20,7 +20,7 @@ Only Draft 2020-12 (`https://json-schema.org/draft/2020-12/schema`). Schemas are
 
 ## Canonical content and digest
 
-Canonical JSON is `JCS-SSJACK-1`, not RFC 8785. Reject duplicate keys, non-NFC strings, floats/nonfinite numbers, invalid UTF-8, trailing bytes, controls and lone surrogates; integers only. SHA-256 domains: `ssjack-schema-v1\0` for schema documents, `ssjack-tool-schema-v1\0` for descriptor input/output pairs, `ssjack-plan-v1\0`, `ssjack-enrollment-v1\0`, `ssjack-desired-v1\0`, `ssjack-effects-v1\0`; append canonical bytes, lowercase hex. Digest binds content, not provenance or authorization.
+Canonical JSON is proposed `JCS-SSJACK-1`, not RFC 8785; see [policy.md](policy.md#canonical-values-and-binding) for exact encoding and examples. Reject duplicate decoded keys, non-NFC Unicode scalar strings and keys, U+0000–U+001F and U+007F–U+009F, floats/nonfinite numbers, invalid UTF-8, trailing bytes and lone surrogates; integers only. Emit allowed scalars as literal UTF-8 except quote as `\"` and backslash as `\\`; U+2028/U+2029 are literal UTF-8. SHA-256 domains: `ssjack-schema-v1\0` for schema documents, `ssjack-tool-schema-v1\0` for descriptor input/output pairs, `ssjack-plan-v1\0`, `ssjack-enrollment-v1\0`, `ssjack-desired-v1\0`, `ssjack-effects-v1\0`; append canonical bytes, lowercase hex. Digest binds content, not provenance or authorization.
 
 ## Process and frames
 
