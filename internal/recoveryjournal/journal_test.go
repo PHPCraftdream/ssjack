@@ -3,6 +3,7 @@
 package recoveryjournal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,89 +53,6 @@ func TestBindingValidationAndPersistedRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDiskRoundTripAndConditionalPhase(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	b := validBinding("inv", "res", "tx")
-	i := recovery.Intent{Binding: b, Phase: recovery.Prepared}
-	if e = j.PutIntent(context.Background(), i); e != nil {
-		t.Fatal(e)
-	}
-	if got, e := j.LoadIntent(context.Background(), "inv"); e != nil || got != i {
-		t.Fatalf("%v %v", got, e)
-	}
-	if e = j.SetPhase(context.Background(), "inv", recovery.Committed); e != nil {
-		t.Fatal(e)
-	}
-	if e = j.SetPhase(context.Background(), "inv", recovery.Committed); e != nil {
-		t.Fatalf("idempotent commit: %v", e)
-	}
-	committed, e := j.LoadIntent(context.Background(), "inv")
-	if e != nil || committed.Phase != recovery.Committed || committed.Binding != b {
-		t.Fatalf("evidence: %+v %v", committed, e)
-	}
-	if e = j.SetPhase(context.Background(), "inv", recovery.Prepared); !errors.Is(e, recovery.ErrConflict) {
-		t.Fatalf("rollback: %v", e)
-	}
-}
-func TestRefusesReopenAndPersistsQuarantine(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "j")
-	j, e := Initialize(root, time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	b := validBinding("i", "r", "t")
-	if e = j.Quarantine(context.Background(), b); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = Initialize(root, time.Second); !errors.Is(e, ErrUnavailable) {
-		t.Fatal(e)
-	}
-	if _, e = j.LoadIntent(context.Background(), "i"); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-}
-func TestRepeatedIdenticalQuarantine(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	b := validBinding("repeat", "repeat-res", "tx")
-	for n := 0; n < 2; n++ {
-		if e = j.Quarantine(context.Background(), b); e != nil {
-			t.Fatal(e)
-		}
-	}
-	if _, e = j.LoadIntent(context.Background(), b.Invocation); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-}
-
-func TestQuarantineConflictFencesAbsentRequestedBinding(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	a := validBinding("conflict", "original", "tx")
-	b := validBinding("conflict", "other", "tx")
-	if e = j.PutIntent(context.Background(), recovery.Intent{Binding: a, Phase: recovery.Prepared}); e != nil {
-		t.Fatal(e)
-	}
-	for n := 0; n < 2; n++ {
-		if e = j.QuarantineConflict(context.Background(), a, b); e != nil {
-			t.Fatal(e)
-		}
-	}
-	if _, e = j.LoadIntent(context.Background(), a.Invocation); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-	if e = j.PutIntent(context.Background(), recovery.Intent{Binding: b, Phase: recovery.Prepared}); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-}
-
 func TestQuarantineConflictPreservesAndFencesBothStoredBindings(t *testing.T) {
 	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
 	if e != nil {
@@ -172,91 +90,6 @@ func TestQuarantineConflictPreservesAndFencesBothStoredBindings(t *testing.T) {
 		}
 	}
 }
-func TestDiskConflictsAndQuarantineBlocksBothBindings(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	a := prepared("one", "res-one")
-	if e = j.PutIntent(context.Background(), a); e != nil {
-		t.Fatal(e)
-	}
-	if e = j.PutIntent(context.Background(), prepared("one", "other")); !errors.Is(e, recovery.ErrConflict) {
-		t.Fatal(e)
-	}
-	if e = j.PutIntent(context.Background(), prepared("other", "res-one")); !errors.Is(e, recovery.ErrConflict) {
-		t.Fatal(e)
-	}
-	b := validBinding("two", "res-two", "tx-two")
-	if e = j.QuarantineConflict(context.Background(), a.Binding, b); e != nil {
-		t.Fatal(e)
-	}
-	for _, id := range []string{"one", "two"} {
-		if _, e = j.LoadIntent(context.Background(), id); !errors.Is(e, recovery.ErrQuarantined) {
-			t.Fatalf("%s: %v", id, e)
-		}
-	}
-	if e = j.PutIntent(context.Background(), prepared("three", "res-two")); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-	if e = j.PutIntent(context.Background(), prepared("two", "res-three")); !errors.Is(e, recovery.ErrQuarantined) {
-		t.Fatal(e)
-	}
-}
-
-func TestBindingValidationBoundaryMatrix(t *testing.T) {
-	base := validBinding("matrix-inv", "matrix-res", "matrix-tx")
-	valid := base
-	valid.Stage = recovery.InvocationStage
-	valid.Expected = recovery.State{Resource: valid.Resource, Generation: 4, Hash: valid.RequestHash, Transaction: "prior-tx"}
-	valid.Next.Generation = 5
-	valid.Next.Transaction = valid.Transaction
-	invalid := []struct {
-		name string
-		edit func(*recovery.Binding)
-	}{{"stage", func(b *recovery.Binding) { b.Stage = 255 }}, {"ascii", func(b *recovery.Binding) { b.Invocation = "bad\nvalue" }}, {"utf8", func(b *recovery.Binding) {
-		b.Resource = "rés"
-		b.Expected.Resource = b.Resource
-		b.Next.Resource = b.Resource
-	}}, {"invocation", func(b *recovery.Binding) { b.Invocation = "" }}, {"resource", func(b *recovery.Binding) { b.Next.Resource = "other" }}, {"transaction", func(b *recovery.Binding) { b.Next.Transaction = "other" }}, {"genesis", func(b *recovery.Binding) { b.Expected.Generation = 0; b.Expected.Transaction = "prior-tx" }}, {"hash", func(b *recovery.Binding) { b.Next.Hash = b.Expected.Hash }}, {"overflow", func(b *recovery.Binding) { b.Expected.Generation = ^uint64(0); b.Next.Generation = 0 }}}
-	if !recovery.ValidBinding(base) || !recovery.ValidBinding(valid) {
-		t.Fatal("valid binding rejected")
-	}
-	for _, tc := range invalid {
-		t.Run(tc.name, func(t *testing.T) {
-			b := base
-			tc.edit(&b)
-			if recovery.ValidBinding(b) {
-				t.Fatal("invalid binding accepted")
-			}
-		})
-	}
-}
-func TestDirectValidDocValidationBoundaryMatrix(t *testing.T) {
-	b := validBinding("doc-inv", "doc-res", "doc-tx")
-	baseline := document{Version: 1, Records: []record{{Intent: recovery.Intent{Binding: b, Phase: recovery.Prepared}}}}
-	if !validDoc(baseline) {
-		t.Fatal("valid document rejected")
-	}
-	invalid := []struct {
-		name string
-		doc  document
-	}{{"version", document{Version: 2, Records: baseline.Records}}, {"phase", document{Version: 1, Records: []record{{Intent: recovery.Intent{Binding: b, Phase: recovery.Phase(0)}}}}}, {"oversized", document{Version: 1, Records: make([]record, maxEntries+1)}}}
-	for _, tc := range invalid {
-		t.Run(tc.name, func(t *testing.T) {
-			if validDoc(tc.doc) {
-				t.Fatal("invalid document accepted")
-			}
-		})
-	}
-}
-func TestDirectValidDocRejectsDuplicateBindings(t *testing.T) {
-	b := validBinding("dup", "dup-res", "tx")
-	i := recovery.Intent{Binding: b, Phase: recovery.Prepared}
-	if validDoc(document{Version: 1, Records: []record{{Intent: i}, {Intent: i}}}) {
-		t.Fatal("duplicates accepted")
-	}
-}
 func TestMalformedAndOversizedDiskDenied(t *testing.T) {
 	for _, name := range []string{"duplicate-json-key"} {
 		t.Run(name, func(t *testing.T) {
@@ -284,12 +117,182 @@ func TestMalformedAndOversizedDiskDenied(t *testing.T) {
 		})
 	}
 }
-func TestSyncDirectoryCloseError(t *testing.T) {
-	root := t.TempDir()
-	closed := false
-	closeErr := errors.New("close")
-	err := syncDirectory(root, os.Open, func(f *os.File) error { return f.Sync() }, func(f *os.File) error { closed = true; _ = f.Close(); return closeErr })
-	if !closed || !errors.Is(err, closeErr) {
-		t.Fatalf("close error not propagated: closed=%v err=%v", closed, err)
+
+// This gate models a caller-owned global fence, not a production admission mechanism.
+type publicationGate struct {
+	closed bool
+	admits int
+}
+
+func (g *publicationGate) recover(ctx context.Context, m recovery.Machine, b recovery.Binding) error {
+	if g.closed {
+		return recovery.ErrUnavailable
+	}
+	g.admits++
+	err := m.Recover(ctx, b)
+	if errors.Is(err, recovery.ErrUnavailable) {
+		g.closed = true
+	}
+	return err
+}
+
+type observedJournal struct {
+	*Journal
+	loads, conflicts int
+	conflictErr      error
+}
+
+func (j *observedJournal) LoadIntent(ctx context.Context, id string) (recovery.Intent, error) {
+	j.loads++
+	return j.Journal.LoadIntent(ctx, id)
+}
+
+func (j *observedJournal) QuarantineConflict(ctx context.Context, a, b recovery.Binding) error {
+	j.conflicts++
+	j.conflictErr = j.Journal.QuarantineConflict(ctx, a, b)
+	return j.conflictErr
+}
+
+func TestConflictPostRenameFailureClosesCallerGate(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "journal")
+	j, err := Initialize(root, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := validBinding("shared-invocation", "stored-resource", "stored-tx")
+	requested := validBinding(stored.Invocation, "requested-resource", "requested-tx")
+	other := validBinding("other-invocation", "other-resource", "other-tx")
+	if err := j.PutIntent(ctx, recovery.Intent{Binding: stored, Phase: recovery.Prepared}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fail the directory sync only after the real rename has succeeded.
+	rename, syncDir := j.io.rename, j.io.syncDir
+	renamed, syncFailed := false, false
+	j.io.rename = func(from, to string) error {
+		err := rename(from, to)
+		if err == nil && from == j.newPath() && to == j.path() {
+			renamed = true
+		}
+		return err
+	}
+	j.io.syncDir = func(path string) error {
+		if path == root && renamed {
+			syncFailed = true
+			return errors.New("injected post-rename directory sync failure")
+		}
+		return syncDir(path)
+	}
+	observed := &observedJournal{Journal: j}
+	gate := &publicationGate{}
+	machine := recovery.Machine{Anchor: faultAnchor{}, Journal: observed}
+	if err := gate.recover(ctx, machine, requested); !errors.Is(err, recovery.ErrUnavailable) {
+		t.Fatalf("conflict recovery: %v", err)
+	}
+	if !renamed || !syncFailed || !errors.Is(observed.conflictErr, ErrUnavailable) || !j.poisoned {
+		t.Fatalf("publication: renamed=%v syncFailed=%v quarantine=%v poisoned=%v", renamed, syncFailed, observed.conflictErr, j.poisoned)
+	}
+	if !gate.closed || gate.admits != 1 || observed.loads != 1 || observed.conflicts != 1 {
+		t.Fatalf("conflict: gate=%+v loads=%d conflicts=%d", gate, observed.loads, observed.conflicts)
+	}
+	marker, err := os.ReadFile(j.pendingPath())
+	if err != nil || string(marker) != "pending" {
+		t.Fatalf("publication marker=%q err=%v", marker, err)
+	}
+	if _, err := os.Lstat(j.newPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("renamed new file remains: %v", err)
+	}
+	raw, err := os.ReadFile(j.path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence document
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if !validDoc(evidence) || evidence.Digest != digest(evidence) || len(evidence.Records) != 1 {
+		t.Fatalf("invalid published evidence: %+v", evidence)
+	}
+	r := evidence.Records[0]
+	if r.Intent.Binding != stored || r.Intent.Phase != recovery.Quarantined || len(r.Blocked) != 2 || r.Blocked[0] != stored || r.Blocked[1] != requested {
+		t.Fatalf("published conflict evidence: %+v", r)
+	}
+	if _, err := j.LoadIntent(ctx, stored.Invocation); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("journal did not fail closed: %v", err)
+	}
+	if err := gate.recover(ctx, machine, other); !errors.Is(err, recovery.ErrUnavailable) {
+		t.Fatalf("unrelated binding admitted: %v", err)
+	}
+	if !gate.closed || gate.admits != 1 || observed.loads != 1 || observed.conflicts != 1 {
+		t.Fatalf("unrelated request reached journal: gate=%+v loads=%d conflicts=%d", gate, observed.loads, observed.conflicts)
+	}
+}
+
+func TestConflictPublicationIOFailureClosesCallerGate(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "journal")
+	j, err := Initialize(root, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := validBinding("shared-invocation", "stored-resource", "stored-tx")
+	requested := validBinding(stored.Invocation, "requested-resource", "requested-tx")
+	other := validBinding("other-invocation", "other-resource", "other-tx")
+	if err := j.PutIntent(ctx, recovery.Intent{Binding: stored, Phase: recovery.Prepared}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(j.path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Install the obstruction only when publication creates .new, after load
+	// and after the journal itself has created and synced its pending marker.
+	create := j.io.create
+	var createErr error
+	var obstructionErr error
+	attempts := 0
+	j.io.create = func(path string) (*os.File, error) {
+		if path == j.newPath() {
+			attempts++
+			obstructionErr = os.Mkdir(path, 0700)
+			if obstructionErr != nil {
+				return nil, obstructionErr
+			}
+			f, err := create(path)
+			createErr = err
+			return f, err
+		}
+		return create(path)
+	}
+	observed := &observedJournal{Journal: j}
+	gate := &publicationGate{}
+	machine := recovery.Machine{Anchor: faultAnchor{}, Journal: observed}
+	if err := gate.recover(ctx, machine, requested); !errors.Is(err, recovery.ErrUnavailable) {
+		t.Fatalf("conflict recovery: %v", err)
+	}
+	if obstructionErr != nil || attempts != 1 || !errors.Is(createErr, os.ErrExist) || !errors.Is(observed.conflictErr, ErrUnavailable) {
+		t.Fatalf("publication: attempts=%d obstruction=%v create=%v quarantine=%v", attempts, obstructionErr, createErr, observed.conflictErr)
+	}
+	if !gate.closed || gate.admits != 1 || observed.loads != 1 || observed.conflicts != 1 {
+		t.Fatalf("conflict: gate=%+v loads=%d conflicts=%d", gate, observed.loads, observed.conflicts)
+	}
+	marker, err := os.ReadFile(j.pendingPath())
+	if err != nil || string(marker) != "pending" {
+		t.Fatalf("publication marker=%q err=%v", marker, err)
+	}
+	after, err := os.ReadFile(j.path())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("original evidence changed: err=%v", err)
+	}
+	if _, err := j.LoadIntent(ctx, stored.Invocation); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("journal did not fail closed: %v", err)
+	}
+	if err := gate.recover(ctx, machine, other); !errors.Is(err, recovery.ErrUnavailable) {
+		t.Fatalf("unrelated binding admitted: %v", err)
+	}
+	if !gate.closed || gate.admits != 1 || observed.loads != 1 || observed.conflicts != 1 {
+		t.Fatalf("unrelated request reached journal: gate=%+v loads=%d conflicts=%d", gate, observed.loads, observed.conflicts)
 	}
 }

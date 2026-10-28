@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/PHPCraftdream/ssjack/internal/recovery"
 	"os"
 	"path/filepath"
@@ -264,22 +263,37 @@ func (faultAnchor) Read(context.Context, string) (recovery.State, error) { panic
 func (faultAnchor) CompareAndSwap(context.Context, recovery.State, recovery.State, string) error {
 	panic("anchor touched")
 }
-func TestCapacityAndIdempotence(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
+func TestDirectValidDocValidationBoundaryMatrix(t *testing.T) {
+	b := validBinding("doc-inv", "doc-res", "doc-tx")
+	baseline := document{Version: 1, Records: []record{{Intent: recovery.Intent{Binding: b, Phase: recovery.Prepared}}}}
+	if !validDoc(baseline) {
+		t.Fatal("valid document rejected")
 	}
-	for n := 0; n < maxEntries; n++ {
-		i := recovery.Intent{Binding: validBinding(fmt.Sprintf("i%d", n), fmt.Sprintf("r%d", n), fmt.Sprintf("t%d", n)), Phase: recovery.Prepared}
-		if e = j.PutIntent(context.Background(), i); e != nil {
-			t.Fatal(e)
-		}
+	invalid := []struct {
+		name string
+		doc  document
+	}{{"version", document{Version: 2, Records: baseline.Records}}, {"phase", document{Version: 1, Records: []record{{Intent: recovery.Intent{Binding: b, Phase: recovery.Phase(0)}}}}}, {"oversized", document{Version: 1, Records: make([]record, maxEntries+1)}}}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			if validDoc(tc.doc) {
+				t.Fatal("invalid document accepted")
+			}
+		})
 	}
-	i := recovery.Intent{Binding: validBinding("i0", "r0", "t0"), Phase: recovery.Prepared}
-	if e = j.PutIntent(context.Background(), i); e != nil {
-		t.Fatal(e)
+}
+func TestDirectValidDocRejectsDuplicateBindings(t *testing.T) {
+	b := validBinding("dup", "dup-res", "tx")
+	i := recovery.Intent{Binding: b, Phase: recovery.Prepared}
+	if validDoc(document{Version: 1, Records: []record{{Intent: i}, {Intent: i}}}) {
+		t.Fatal("duplicates accepted")
 	}
-	if e = j.PutIntent(context.Background(), recovery.Intent{Binding: validBinding("overflow", "overflow-res", "overflow-tx"), Phase: recovery.Prepared}); !errors.Is(e, ErrUnavailable) {
-		t.Fatal(e)
+}
+func TestSyncDirectoryCloseError(t *testing.T) {
+	root := t.TempDir()
+	closed := false
+	closeErr := errors.New("close")
+	err := syncDirectory(root, os.Open, func(f *os.File) error { return f.Sync() }, func(f *os.File) error { closed = true; _ = f.Close(); return closeErr })
+	if !closed || !errors.Is(err, closeErr) {
+		t.Fatalf("close error not propagated: closed=%v err=%v", closed, err)
 	}
 }

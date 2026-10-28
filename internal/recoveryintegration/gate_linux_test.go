@@ -18,6 +18,12 @@ type markerJournal struct {
 	*recoveryjournal.Journal
 	marker string
 	calls  int
+	loads  int
+}
+
+func (j *markerJournal) LoadIntent(ctx context.Context, invocation string) (recovery.Intent, error) {
+	j.loads++
+	return j.Journal.LoadIntent(ctx, invocation)
 }
 
 func (j *markerJournal) QuarantineConflict(ctx context.Context, a, b recovery.Binding) error {
@@ -113,20 +119,22 @@ func TestCallerGateHoldsAfterConflictQuarantineFailure(t *testing.T) {
 	other.Expected = recovery.State{Resource: other.Resource, Generation: 4, Hash: original.Expected.Hash, Transaction: "prior-other"}
 	other.Next = recovery.State{Resource: other.Resource, Generation: 5, Hash: original.Next.Hash, Transaction: other.Transaction}
 	beforeAdmits, beforeJournal, beforeReads := gate.admits, wrapped.calls, a.reads
+	beforeLoads := wrapped.loads
 	if err := gate.recover(context.Background(), machine, other); !errors.Is(err, recovery.ErrUnavailable) {
 		t.Fatalf("closed gate admitted unrelated binding: %v", err)
 	}
-	if !gate.closed || gate.admits != beforeAdmits || wrapped.calls != beforeJournal || a.reads != beforeReads {
+	if !gate.closed || gate.admits != beforeAdmits || wrapped.calls != beforeJournal || wrapped.loads != beforeLoads || a.reads != beforeReads {
 		t.Fatalf("closed-gate evidence: closed=%v admits=%d journal=%d reads=%d", gate.closed, gate.admits, wrapped.calls, a.reads)
 	}
 	gate.reconcile()
 	if gate.closed {
 		t.Fatal("gate did not open after simulated trusted reconciliation")
 	}
+	beforeLoads = wrapped.loads
 	if err := gate.recover(context.Background(), machine, other); !errors.Is(err, recovery.ErrUnavailable) {
 		t.Fatalf("journal unexpectedly available after reconciliation: %v", err)
 	}
-	if !gate.closed || gate.admits != beforeAdmits+1 || wrapped.calls != beforeJournal || a.reads != beforeReads {
+	if !gate.closed || gate.admits != beforeAdmits+1 || wrapped.calls != beforeJournal || wrapped.loads != beforeLoads+1 || a.reads != beforeReads {
 		t.Fatalf("post-reconciliation evidence: closed=%v admits=%d journal=%d reads=%d", gate.closed, gate.admits, wrapped.calls, a.reads)
 	}
 	if _, err := os.Stat(filepath.Join(root, "journal.json.new")); !errors.Is(err, os.ErrNotExist) {
