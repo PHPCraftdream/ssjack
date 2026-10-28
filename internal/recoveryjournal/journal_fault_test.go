@@ -4,7 +4,6 @@ package recoveryjournal
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/PHPCraftdream/ssjack/internal/recovery"
