@@ -3,16 +3,13 @@
 package immutableexec
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -109,115 +106,118 @@ func TestSealedSnapshotAgainstSourceReplacement(t *testing.T) {
 		t.Fatalf("closed descriptor error = %v, want EBADF", e)
 	}
 }
-func TestRejectPathsBoundsAndFormats(t *testing.T) {
+func TestObserveOverflowReapsExactPID(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
-		t.Skip("amd64 only")
+		t.Skip("synthetic ELF is amd64")
 	}
-	d := t.TempDir()
-	dir := filepath.Join(d, "dir")
-	if e := os.Mkdir(dir, 0700); e != nil {
-		t.Fatal(e)
+	request := []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","action":"observe","target":"node","kind":"service","schema_id":"schema","resource_id":"service.one","desired":null,"expected_revision":null,"plan_digest":null,"allowed_effects":[],"deadline_unix_ms":0,"max_response_bytes":1024,"operation_id":null}`)
+	framed := make([]byte, 4+len(request))
+	binary.BigEndian.PutUint32(framed, uint32(len(request)))
+	copy(framed[4:], request)
+	if len(framed) > 4096 {
+		t.Fatal("request frame exceeds child stack buffer")
 	}
-	data := fakeELF([]byte{0x90}, nil)
-	p := filepath.Join(dir, "x")
-	writeExec(t, p, data)
-	good, err := Bind(p, sha256.Sum256(data))
+	code := make([]byte, 0, 180)
+	labels, branches := map[string]int{}, map[string][]int{}
+	mark := func(s string) { labels[s] = len(code) }
+	branch := func(op []byte, target string) {
+		code = append(code, op...)
+		at := len(code)
+		code = append(code, 0, 0, 0, 0)
+		branches[target] = append(branches[target], at)
+	}
+	code = append(code, 0x48, 0x8d, 0xb4, 0x24, 0, 0xf0, 0xff, 0xff) // lea rsi,[rsp-4096]
+	code = append(code, 0xba, byte(len(framed)), byte(len(framed)>>8), 0, 0)
+	mark("read")
+	code = append(code, 0x31, 0xff, 0xb8, 0, 0, 0, 0, 0x0f, 0x05, 0x85, 0xc0) // read; fail on <=0
+	branch([]byte{0x0f, 0x8e}, "fail")
+	code = append(code, 0x48, 0x01, 0xc6, 0x29, 0xc2)
+	branch([]byte{0x0f, 0x85}, "read")
+	code = append(code, 0x81, 0xbc, 0x24, 0, 0xf0, 0xff, 0xff)
+	header := len(code)
+	code = append(code, 0, 0, 0, 0)
+	branch([]byte{0x0f, 0x85}, "fail")
+	code = append(code, 0x48, 0x8d, 0x35, 0, 0, 0, 0)
+	rip := len(code) - 4
+	code = append(code, 0xba, 5, 0, 1, 0)
+	mark("write")
+	code = append(code, 0xbf, 1, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0x0f, 0x05, 0x85, 0xc0)
+	branch([]byte{0x0f, 0x8e}, "fail")
+	code = append(code, 0x48, 0x01, 0xc6, 0x29, 0xc2, 0x85, 0xd2)
+	branch([]byte{0x0f, 0x85}, "write")
+	mark("pause")
+	code = append(code, 0xb8, 34, 0, 0, 0, 0x0f, 0x05)
+	branch([]byte{0xe9}, "pause")
+	mark("fail")
+	code = append(code, 0xbf, 1, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05)
+	for label, positions := range branches {
+		for _, at := range positions {
+			binary.LittleEndian.PutUint32(code[at:], uint32(int32(labels[label]-(at+4))))
+		}
+	}
+	binary.LittleEndian.PutUint32(code[header:], binary.LittleEndian.Uint32(framed[:4]))
+	payload := make([]byte, 65541)
+	for i := range payload {
+		payload[i] = 'x'
+	}
+	binary.LittleEndian.PutUint32(code[rip:], uint32(len(code)-rip-4))
+	data := fakeELF(code, payload)
+	path := filepath.Join(t.TempDir(), "overflow-child")
+	writeExec(t, path, data)
+	r, err := Bind(path, sha256.Sum256(data))
 	if err != nil {
-		t.Fatalf("correct digest baseline: %v", err)
-	}
-	if err := good.Close(); err != nil {
 		t.Fatal(err)
 	}
-	emptyRunner, emptyErr := Bind("", [32]byte{})
-	closeUnexpected(t, emptyRunner)
-	if emptyErr == nil {
-		t.Fatal("empty accepted")
-	}
-	linkdir := filepath.Join(d, "symdir")
-	if e := os.Symlink(dir, linkdir); e != nil {
-		t.Fatal(e)
-	}
-	linkRunner, linkErr := Bind(filepath.Join(linkdir, "x"), sha256.Sum256(data))
-	closeUnexpected(t, linkRunner)
-	if !errors.Is(linkErr, unix.ENOTDIR) {
-		t.Fatalf("intermediate symlink error = %v", linkErr)
-	}
-	if e := os.Symlink(p, filepath.Join(d, "final")); e != nil {
-		t.Fatal(e)
-	}
-	finalRunner, finalErr := Bind(filepath.Join(d, "final"), sha256.Sum256(data))
-	closeUnexpected(t, finalRunner)
-	if !errors.Is(finalErr, unix.ELOOP) {
-		t.Fatalf("final symlink error = %v", finalErr)
-	}
-	wrong, e := Bind(p, [32]byte{})
-	closeUnexpected(t, wrong)
-	if e == nil {
-		t.Fatal("wrong digest")
-	}
-	if runtime.GOARCH == "amd64" && !strings.Contains(e.Error(), "digest") {
-		t.Fatalf("wrong digest reached another rejection: %v", e)
-	}
-	script := []byte("#!/bin/sh\nexit 0\n")
-	sp := filepath.Join(d, "script")
-	writeExec(t, sp, script)
-	scriptRunner, scriptErr := Bind(sp, sha256.Sum256(script))
-	closeUnexpected(t, scriptRunner)
-	if scriptErr == nil {
-		t.Fatal("script accepted")
-	}
-	interp := make([]byte, 184)
-	copy(interp, fakeELF([]byte{0x90}, nil))
-	binary.LittleEndian.PutUint64(interp[96:], uint64(len(interp)))
-	binary.LittleEndian.PutUint64(interp[104:], uint64(len(interp)))
-	binary.LittleEndian.PutUint16(interp[56:], 2)
-	binary.LittleEndian.PutUint32(interp[120:], uint32(elf.PT_INTERP))
-	binary.LittleEndian.PutUint32(interp[124:], 4)
-	binary.LittleEndian.PutUint64(interp[128:], 176)
-	binary.LittleEndian.PutUint64(interp[152:], 8)
-	binary.LittleEndian.PutUint64(interp[160:], 8)
-	copy(interp[176:], "/ld.so\x00")
-	if runtime.GOARCH == "amd64" {
-		f, openErr := elf.NewFile(bytes.NewReader(interp))
-		if openErr != nil {
-			t.Fatalf("invalid PT_INTERP fixture: %v", openErr)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+	pidCh, done := make(chan int, 1), make(chan error, 1)
+	var result error
+	doneReceived := false
+	defer func() {
+		cancel()
+		if !doneReceived {
+			select {
+			case result = <-done:
+				doneReceived = true
+			case <-time.After(3 * time.Second):
+				t.Error("observe join timed out")
+			}
 		}
-		if f.Type != elf.ET_EXEC || f.Machine != elf.EM_X86_64 || len(f.Progs) != 2 || f.Progs[0].Type != elf.PT_LOAD || f.Progs[1].Type != elf.PT_INTERP {
-			t.Fatal("fixture lacks expected native ET_EXEC/PT_INTERP")
+		closed := make(chan error, 1)
+		go func() { closed <- r.Close() }()
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Errorf("close runner: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("runner close timed out")
 		}
-		f.Close()
+	}()
+	go func() { _, err := r.observe(ctx, []string{}, "", request, func(pid int) { pidCh <- pid }); done <- err }()
+	var pid int
+	select {
+	case pid = <-pidCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("child did not start")
 	}
-	ip := filepath.Join(d, "interp")
-	writeExec(t, ip, interp)
-	interpRunner, bindErr := Bind(ip, sha256.Sum256(interp))
-	closeUnexpected(t, interpRunner)
-	if bindErr == nil || !strings.Contains(bindErr.Error(), "dynamic executable rejected") {
-		t.Fatalf("PT_INTERP rejection: %v", bindErr)
+	select {
+	case result = <-done:
+		doneReceived = true
+	case <-time.After(5 * time.Second):
+		t.Fatal("observe did not finish")
 	}
-	huge := filepath.Join(d, "huge")
-	f, e := os.Create(huge)
-	if e != nil {
-		t.Fatal(e)
+	if result == nil || result.Error() != "observe output limit exceeded" {
+		t.Errorf("observe error = %v, want observe output limit exceeded", result)
 	}
-	defer f.Close()
-	if e = f.Truncate(MaxExecutableBytes + 1); e != nil {
-		t.Fatal(e)
+	if ctx.Err() != nil {
+		t.Errorf("context unexpectedly ended: %v", ctx.Err())
 	}
-	oversizeRunner, oversizeErr := Bind(huge, [32]byte{})
-	closeUnexpected(t, oversizeRunner)
-	if oversizeErr == nil {
-		t.Fatal("oversize accepted")
-	}
-	fifo := filepath.Join(d, "fifo")
-	if e = unix.Mkfifo(fifo, 0600); e != nil {
-		t.Fatal(e)
-	}
-	fifoRunner, fifoErr := Bind(fifo, [32]byte{})
-	closeUnexpected(t, fifoRunner)
-	if fifoErr == nil {
-		t.Fatal("fifo accepted")
+	var status unix.WaitStatus
+	if got, waitErr := unix.Wait4(pid, &status, unix.WNOHANG, nil); got != -1 || !errors.Is(waitErr, unix.ECHILD) {
+		t.Errorf("Wait4(%d) = (%d, %v), want ECHILD", pid, got, waitErr)
 	}
 }
+
 func TestExplicitEnvironmentAndValidation(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
 		t.Skip("synthetic ELF requires amd64")

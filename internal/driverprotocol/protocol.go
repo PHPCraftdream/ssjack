@@ -25,6 +25,9 @@ type StructuralRequest struct {
 }
 type StructuralResponse struct{}
 
+// Action returns the validated request action.
+func (q StructuralRequest) Action() string { return q.action }
+
 // ParseJSON accepts bounded printable-ASCII JSON, rejecting duplicate keys and non-safe integers.
 func ParseJSON(data []byte) (any, error) {
 	if len(data) == 0 || len(data) > driverframe.MaxPayload || !utf8.Valid(data) {

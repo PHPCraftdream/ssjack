@@ -3,6 +3,7 @@
 package immutableexec
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -13,7 +14,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/driverframe"
+	"github.com/PHPCraftdream/ssjack/internal/driverprotocol"
 	"golang.org/x/sys/unix"
 )
 
@@ -216,6 +220,67 @@ func (r *Runner) run(ctx context.Context, env []string, dir string, started func
 	}
 	return c.Wait()
 }
+
+// Observe accepts one unframed structural observe request and returns only a
+// structural response marker. A protocol-valid failure outcome also returns
+// the marker; nil error does not imply success or authorization.
+func (r *Runner) Observe(ctx context.Context, env []string, dir string, requestBytes []byte) (driverprotocol.StructuralResponse, error) {
+	return r.observe(ctx, env, dir, requestBytes, nil)
+}
+
+func (r *Runner) observe(ctx context.Context, env []string, dir string, requestBytes []byte, started func(int)) (driverprotocol.StructuralResponse, error) {
+	request, err := validateObserveRequest(ctx, env, requestBytes)
+	if err != nil {
+		return driverprotocol.StructuralResponse{}, err
+	}
+	if r == nil || !r.mu.TryLock() {
+		return driverprotocol.StructuralResponse{}, errors.New("closed binding or runner busy")
+	}
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return driverprotocol.StructuralResponse{}, errors.New("closed binding")
+	}
+	if err := ctx.Err(); err != nil {
+		return driverprotocol.StructuralResponse{}, err
+	}
+	cmd := exec.CommandContext(ctx, "/proc/self/fd/3", r.args...)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.ExtraFiles = []*os.File{r.file}
+	cmd.Env, cmd.Dir = append([]string{}, env...), dir
+	var stdin bytes.Buffer
+	if err := driverframe.Write(&stdin, requestBytes); err != nil {
+		return driverprotocol.StructuralResponse{}, driverprotocol.ErrInvalid
+	}
+	cmd.Stdin = bytes.NewReader(stdin.Bytes())
+	var stdout bytes.Buffer
+	writers := &observeWriters{cmd: cmd, stdout: &stdout}
+	cmd.Stdout, cmd.Stderr = observeStream{writers, false}, observeStream{writers, true}
+	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return driverprotocol.StructuralResponse{}, ctx.Err()
+		}
+		return driverprotocol.StructuralResponse{}, errors.New("observe child could not start")
+	}
+	if started != nil {
+		started(cmd.Process.Pid)
+	}
+	writers.publishStarted()
+	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return driverprotocol.StructuralResponse{}, ctx.Err()
+	}
+	if writers.overflow {
+		return driverprotocol.StructuralResponse{}, errors.New("observe output limit exceeded")
+	} else if waitErr != nil {
+		return driverprotocol.StructuralResponse{}, errors.New("observe child failed")
+	}
+	response, err := driverprotocol.ReadStructuralResponse(request, bytes.NewReader(stdout.Bytes()))
+	if err != nil {
+		return driverprotocol.StructuralResponse{}, errors.New("invalid observe response")
+	}
+	return response, nil
+}
+
 func (r *Runner) Close() error {
 	if r == nil {
 		return nil
