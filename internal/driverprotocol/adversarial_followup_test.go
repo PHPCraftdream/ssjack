@@ -76,3 +76,114 @@ func TestRequestedStructuralAdversaries(t *testing.T) {
 		t.Fatalf("HTML escaping not reflected in canonical byte count: %q", encoded)
 	}
 }
+
+func TestSchemaInputWhitespaceAndAdjacentParserBounds(t *testing.T) {
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null"}`
+	_, digest := pinned(canonical)
+	oversized := []byte(strings.Replace(canonical, `,`, ", "+strings.Repeat(" ", maxSchemaBytes), 1))
+	if len(oversized) <= maxSchemaBytes {
+		t.Fatal("fixture does not cross raw schema limit")
+	}
+	if err := ValidatePinnedValue(oversized, "x", digest, "t", "k", "t", "k", "x", []byte(`null`), 100); err != ErrSchema {
+		t.Fatalf("oversized whitespace schema: got %v, want ErrSchema", err)
+	}
+	depth := strings.Repeat("[", MaxDepth) + "0" + strings.Repeat("]", MaxDepth)
+	if _, err := ParseJSON([]byte(depth)); err != nil {
+		t.Fatalf("exact depth rejected: %v", err)
+	}
+	if _, err := ParseJSON([]byte("[" + depth + "]")); err == nil {
+		t.Fatal("accepted depth above limit")
+	}
+	makeNodes := func(last int) []byte {
+		parts := make([]string, 16)
+		for i := range parts {
+			n := 255
+			if i == len(parts)-1 {
+				n = last
+			}
+			parts[i] = "[" + strings.TrimSuffix(strings.Repeat("0,", n), ",") + "]"
+		}
+		return []byte("[" + strings.Join(parts, ",") + "]")
+	}
+	if _, err := ParseJSON(makeNodes(254)); err != nil {
+		t.Fatalf("4096-node boundary rejected: %v", err)
+	}
+	if _, err := ParseJSON(makeNodes(255)); err == nil {
+		t.Fatal("accepted 4097 nodes")
+	}
+}
+
+func TestPinnedDesiredProjectionByteBoundaries(t *testing.T) {
+	desiredSchema, desiredDigest := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"a":{"type":"string","maxLength":4096},"b":{"type":"string","maxLength":4096},"c":{"type":"string","maxLength":4096},"d":{"type":"string","maxLength":4096},"e":{"type":"string","maxLength":4096},"f":{"type":"string","maxLength":4096},"g":{"type":"string","maxLength":4096},"h":{"type":"string","maxLength":4096}},"required":["a","b","c","d","e","f","g","h"],"additionalProperties":false}`)
+	requestFor := func(last int) []byte {
+		values := []int{4089, 4089, 4089, 4089, 4089, 4089, 4089, last}
+		keys := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+		var desired strings.Builder
+		desired.WriteByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				desired.WriteByte(',')
+			}
+			desired.WriteString(`"` + key + `":"` + strings.Repeat("a", values[i]) + `"`)
+		}
+		desired.WriteByte('}')
+		return []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","action":"plan","target":"target","kind":"kind","schema_id":"cache.desired","resource_id":"r","desired":` + desired.String() + `,"expected_revision":null,"plan_digest":null,"allowed_effects":[],"deadline_unix_ms":1,"max_response_bytes":65536,"operation_id":null}`)
+	}
+	exact, err := ParseJSON(requestFor(4088))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestObject, _ := object(exact)
+	encoded, err := canonicalBytes(requestObject["desired"])
+	if err != nil || len(encoded) != MaxDesired {
+		t.Fatalf("desired canonical size %d, err %v", len(encoded), err)
+	}
+	if _, err := ValidatePinnedRequest(requestFor(4088), desiredSchema, "cache.desired", desiredDigest, "target", "kind"); err != nil {
+		t.Fatalf("desired exact boundary rejected: %v", err)
+	}
+	if _, err := ValidatePinnedRequest(requestFor(4089), desiredSchema, "cache.desired", desiredDigest, "target", "kind"); err == nil {
+		t.Fatal("oversize desired accepted")
+	}
+
+	projectionSchema, projectionDigest := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"a":{"type":"string","maxLength":1018},"b":{"type":"string","maxLength":1018},"c":{"type":"string","maxLength":1018},"d":{"type":"string","maxLength":1018},"e":{"type":"string","maxLength":1018},"f":{"type":"string","maxLength":1018},"g":{"type":"string","maxLength":1018},"h":{"type":"string","maxLength":1018}},"required":["a","b","c","d","e","f","g","h"],"additionalProperties":false}`)
+	observe := []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","action":"observe","target":"target","kind":"kind","schema_id":"cache.desired","resource_id":"r","desired":null,"expected_revision":null,"plan_digest":null,"allowed_effects":[],"deadline_unix_ms":1,"max_response_bytes":65536,"operation_id":null}`)
+	q, err := ValidateStructuralRequest(observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseFor := func(last int) []byte {
+		values := []int{1017, 1017, 1017, 1017, 1017, 1017, 1017, last}
+		keys := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+		var projection strings.Builder
+		projection.WriteByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				projection.WriteByte(',')
+			}
+			projection.WriteString(`"` + key + `":"` + strings.Repeat("a", values[i]) + `"`)
+		}
+		projection.WriteByte('}')
+		return []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","outcome":"ok","error_code":null,"data":{"state":"present","revision":null,"projection":` + projection.String() + `}}`)
+	}
+	validate := func(last int) error {
+		_, e := ValidatePinnedProjection(q, responseFor(last), projectionSchema, "cache.desired", "cache.projection", projectionDigest, "target", "kind", "cache.projection")
+		return e
+	}
+	exactResponse, err := ParseJSON(responseFor(1016))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseObject, _ := object(exactResponse)
+	dataObject, _ := object(responseObject["data"])
+	projectionObject, _ := object(dataObject["projection"])
+	encodedProjection, err := canonicalBytes(projectionObject)
+	if err != nil || len(encodedProjection) != MaxProjection {
+		t.Fatalf("projection canonical size %d, err %v", len(encodedProjection), err)
+	}
+	if err := validate(1016); err != nil {
+		t.Fatalf("projection exact boundary rejected: %v", err)
+	}
+	if err := validate(1017); err == nil {
+		t.Fatal("oversize projection accepted")
+	}
+}

@@ -20,8 +20,8 @@ const MaxProjection = 8192
 var ErrInvalid = errors.New("invalid driver protocol JSON")
 
 type StructuralRequest struct {
-	id, action            string
-	maxStructuralResponse int
+	id, action, target, kind, schemaID string
+	maxStructuralResponse              int
 }
 type StructuralResponse struct{}
 
@@ -254,7 +254,7 @@ func ValidateStructuralRequest(data []byte) (StructuralRequest, error) {
 	default:
 		return empty, ErrInvalid
 	}
-	return StructuralRequest{m["request_id"].(string), action, int(m["max_response_bytes"].(int64))}, nil
+	return StructuralRequest{id: m["request_id"].(string), action: action, target: m["target"].(string), kind: m["kind"].(string), schemaID: m["schema_id"].(string), maxStructuralResponse: int(m["max_response_bytes"].(int64))}, nil
 }
 func mapObject(v any) bool { _, ok := object(v); return ok }
 func effectList(v []any) bool {
