@@ -1,0 +1,9 @@
+# Immutable executable binding
+
+The Linux binder is intentionally fail-closed to amd64. It accepts bounded little-endian ELF64 `ET_EXEC` images with bounded program headers and rejects `PT_INTERP`, `PT_DYNAMIC`, and all section-table metadata. Section contents are not inspected. Executable source size is capped at 64 MiB.
+
+The caller must authenticate and trust the expected SHA-256 digest; this establishes neither provenance nor authorization. Binding snapshots a pathname without symlink traversal, but source filesystem open/read operations may block and have no total time bound. Execution requires an explicit context deadline and a nonnil, validated environment; only `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, and `TERM` are allowed, without duplicates or malformed entries. The command context requests termination and waits for the direct child; it does not contain, cancel, or terminate descendant processes. The explicit deadline cannot provide a hard wall-clock bound if process startup, child termination/reaping, or a kernel operation is stuck (including uninterruptible kernel sleep). This is also not a sandbox.
+
+Trust includes the Linux kernel, procfs, caller arguments, environment, and working directory. In the inspected Go source (`syscall/exec_linux.go`, lines 615–618), Go explicitly warns that descriptors >=3 inherited from the parent need close-on-exec; `os/exec` documents `ExtraFiles` as intentional child inheritance. This implementation audits neither the Go runtime version nor all descriptor flags, so do not assume unrelated open descriptors are closed. Runtime dependencies/process identity are not attested. This is not a sandbox and has no production launch integration.
+
+Only fixed-size ELF header/program-entry buffers and at most 128 program headers are parsed. Other architectures and section-bearing ELF files are unsupported.
