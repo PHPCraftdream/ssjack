@@ -194,6 +194,8 @@ func (m Machine) quarantineConflict(ctx context.Context, stored, requested Bindi
 	}
 	return ErrQuarantined
 }
+func ValidBinding(b Binding) bool { return valid(b) }
+
 func valid(b Binding) bool {
 	id := func(s string) bool {
 		if len(s) == 0 || len(s) > 128 {
