@@ -130,58 +130,78 @@ func stateValue(v any) bool {
 	return ok && (s == "present" || s == "absent" || s == "unknown")
 }
 
-// Re-encode with sorted ASCII keys, no whitespace, and shortest integer forms before applying canonical-byte limits.
-func canonicalBytes(v any) ([]byte, error) { return appendCanonical(nil, v) }
-func appendCanonical(dst []byte, v any) ([]byte, error) {
-	switch x := v.(type) {
+// canonicalBytes is package-internal serialization for already bounded protocol values.
+func canonicalBytes(v any) ([]byte, error) { return appendCanonicalValue(nil, v) }
+func appendCanonicalValue(dst []byte, value any) ([]byte, error) {
+	switch x := value.(type) {
 	case nil:
 		return append(dst, "null"...), nil
 	case bool:
-		if x {
-			return append(dst, "true"...), nil
-		}
-		return append(dst, "false"...), nil
+		return appendCanonicalBool(dst, x), nil
 	case int64:
 		return strconv.AppendInt(dst, x, 10), nil
 	case string:
-		b, e := json.Marshal(x)
-		return append(dst, b...), e
+		return appendCanonicalString(dst, x)
 	case []any:
-		dst = append(dst, '[')
-		for i, item := range x {
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-			var e error
-			dst, e = appendCanonical(dst, item)
-			if e != nil {
-				return nil, e
-			}
-		}
-		return append(dst, ']'), nil
+		return appendCanonicalArray(dst, x)
 	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sortStrings(keys)
-		dst = append(dst, '{')
-		for i, k := range keys {
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-			b, _ := json.Marshal(k)
-			dst = append(dst, b...)
-			dst = append(dst, ':')
-			var e error
-			dst, e = appendCanonical(dst, x[k])
-			if e != nil {
-				return nil, e
-			}
-		}
-		return append(dst, '}'), nil
+		return appendCanonicalObject(dst, x)
+	default:
+		return nil, ErrInvalid
 	}
-	return nil, ErrInvalid
+}
+func appendCanonicalBool(dst []byte, value bool) []byte {
+	if value {
+		return append(dst, "true"...)
+	}
+	return append(dst, "false"...)
+}
+func appendCanonicalString(dst []byte, value string) ([]byte, error) {
+	b, err := json.Marshal(value)
+	return append(dst, b...), err
+}
+func appendCanonicalArray(dst []byte, values []any) ([]byte, error) {
+	dst = append(dst, '[')
+	for i, value := range values {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		var err error
+		dst, err = appendCanonicalValue(dst, value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(dst, ']'), nil
+}
+func appendCanonicalObject(dst []byte, values map[string]any) ([]byte, error) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortStrings(keys)
+	dst = append(dst, '{')
+	for i, key := range keys {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		b, _ := json.Marshal(key)
+		dst = append(dst, b...)
+		dst = append(dst, ':')
+		var err error
+		dst, err = appendCanonicalValue(dst, values[key])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(dst, '}'), nil
+}
+func sortStrings(values []string) {
+	for i := 1; i < len(values); i++ {
+		for j := i; j > 0 && values[j] < values[j-1]; j-- {
+			values[j], values[j-1] = values[j-1], values[j]
+		}
+	}
 }
 func hasHTMLSensitiveString(v any) bool {
 	switch x := v.(type) {
@@ -206,11 +226,74 @@ func hasHTMLSensitiveString(v any) bool {
 	}
 	return false
 }
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
-}
 func bounded(v any, n int) bool { b, e := canonicalBytes(v); return e == nil && len(b) <= n }
+
+func matches(s, v any, d int) bool {
+	if d > 16 {
+		return false
+	}
+	m, ok := object(s)
+	if !ok || !matchesEnum(m, v) {
+		return false
+	}
+	if x, ok := m["const"]; ok && !jsonEqual(x, v) {
+		return false
+	}
+	switch m["type"] {
+	case "object":
+		x, ok := object(v)
+		p, _ := object(m["properties"])
+		if !ok || len(x) != len(p) {
+			return false
+		}
+		for k, value := range x {
+			q, yes := p[k]
+			if !yes || !matches(q, value, d+1) {
+				return false
+			}
+		}
+		return true
+	case "array":
+		a, ok := v.([]any)
+		if !ok || (m["minItems"] != nil && int64(len(a)) < m["minItems"].(int64)) || (m["maxItems"] != nil && int64(len(a)) > m["maxItems"].(int64)) {
+			return false
+		}
+		for _, x := range a {
+			if !matches(m["items"], x, d+1) {
+				return false
+			}
+		}
+		return true
+	case "string":
+		x, ok := v.(string)
+		if !ok || !ascii(x) {
+			return false
+		}
+		n := int64(len(x))
+		if q, ok := m["minLength"].(int64); ok && n < q {
+			return false
+		}
+		if q, ok := m["maxLength"].(int64); ok && n > q {
+			return false
+		}
+		return true
+	case "integer":
+		x, ok := v.(int64)
+		if !ok {
+			return false
+		}
+		if q, ok := m["minimum"].(int64); ok && x < q {
+			return false
+		}
+		if q, ok := m["maximum"].(int64); ok && x > q {
+			return false
+		}
+		return true
+	case "boolean":
+		_, ok := v.(bool)
+		return ok
+	case "null":
+		return v == nil
+	}
+	return false
+}
