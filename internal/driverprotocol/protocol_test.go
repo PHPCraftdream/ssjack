@@ -208,7 +208,7 @@ func TestStructuralResponseFrameDuplicates(t *testing.T) {
 	}
 }
 func TestParserCanonicalAndFrames(t *testing.T) {
-	bad := [][]byte{[]byte(`{"x":1,"x":2}`), []byte(`{"x":1.0}`), []byte(`{"x":1e2}`), []byte(`{"x":-0}`), []byte(`{"x":9007199254740992}`), []byte(`{"x":"é"}`), []byte(`{"x":"\ud800"}`), []byte(`{} false`), []byte{0xff}, make([]byte, driverframe.MaxPayload+1)}
+	bad := [][]byte{[]byte(`{"x":1,"x":2}`), []byte(`{"x":1.0}`), []byte(`{"x":1e2}`), []byte(`{"x":-0}`), []byte(`{"x":9007199254740992}`), []byte(`{"x":"\ud800"}`), []byte(`{} false`), []byte{0xff}, make([]byte, driverframe.MaxPayload+1)}
 	for _, b := range bad {
 		if _, e := ParseJSON(b); e == nil {
 			t.Errorf("accepted %q", b)
@@ -242,5 +242,20 @@ func TestParserCanonicalAndFrames(t *testing.T) {
 	w.Reset()
 	if e = WriteStructuralFrame(&w, b); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestUnicodeJSONRegression(t *testing.T) {
+	valid := []string{`"é"`, `{"x":"é"}`, `"\ud83d\ude00"`, `"�"`, `{"é":"😀"}`, `"\\ud800"`}
+	for _, raw := range valid {
+		if _, err := ParseJSON([]byte(raw)); err != nil {
+			t.Errorf("rejected %s: %v", raw, err)
+		}
+	}
+	invalid := [][]byte{[]byte{0x22, 0xff, 0x22}, []byte(`"\ud800"`), []byte(`"\udc00"`), []byte(`"\ud800\u0041"`), []byte(`"e\u0301"`), []byte(`{"e\u0301":1}`), []byte(`{"é":1,"\u00e9":2}`), []byte(`{"😀":1,"\ud83d\ude00":2}`)}
+	for _, raw := range invalid {
+		if _, err := ParseJSON(raw); err == nil {
+			t.Errorf("accepted %q", raw)
+		}
 	}
 }

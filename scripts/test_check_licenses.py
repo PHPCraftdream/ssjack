@@ -55,6 +55,23 @@ class AuditTests(unittest.TestCase):
         changed_notices = notices.replace("## Patent notice\n```text\nPatent\n```", "## Patent notice\n```text\nDifferent Patent\n```")
         validate(self.inventory, changed_notices, self.policy, self.licenses, self.embedded, self.embeds)
 
+    def test_x_text_patents_are_checked(self):
+        path = "golang.org/x/text"
+        self.policy["modules"][path] = {
+            "version": "v0.38.0", "license_file": "LICENSE", "license_sha256": h("MIT"),
+            "source_sha256": h("MIT"), "source": "pinned", "source_review": "verified",
+            "notice_heading": "Example", "patents_sha256": h("Patent"),
+            "patents_source_sha256": h("Patent"), "patents_notice_heading": "Patent"}
+        self.inventory[0][path] = {"Version": "v0.38.0"}
+        self.licenses[path] = "MIT"
+        with self.assertRaises(KeyError):
+            self.check()
+        self.licenses[path + ":PATENTS"] = "Changed"
+        with self.assertRaisesRegex(ValueError, "PATENTS digest mismatch"):
+            self.check()
+        self.licenses[path + ":PATENTS"] = "Patent"
+        self.check()
+
     def test_rejects_inventory_version_license_and_notice_changes(self):
         self.inventory = [{"other.org/dep": {"Version": "v1"}}]
         with self.assertRaises(ValueError): self.check()

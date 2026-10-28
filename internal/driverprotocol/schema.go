@@ -28,7 +28,7 @@ func parseSchemaDocument(raw []byte) (any, error) {
 		return nil, ErrSchema
 	}
 	doc, err := ParseJSON(raw)
-	if err != nil || validateSchema(doc, true, 0) != nil || hasHTMLSensitiveString(doc) {
+	if err != nil || validateSchema(doc, true, 0) != nil || hasSchemaSerializationSensitiveString(doc) {
 		return nil, ErrSchema
 	}
 	return doc, nil

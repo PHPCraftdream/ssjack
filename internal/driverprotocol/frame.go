@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/PHPCraftdream/ssjack/internal/driverframe"
+	"github.com/PHPCraftdream/ssjack/internal/drivertext"
 )
 
 func ReadStructuralRequest(r io.Reader) (StructuralRequest, error) {
@@ -129,7 +131,6 @@ func stateValue(v any) bool {
 	s, ok := stringValue(v)
 	return ok && (s == "present" || s == "absent" || s == "unknown")
 }
-
 // canonicalBytes is package-internal serialization for already bounded protocol values.
 func canonicalBytes(v any) ([]byte, error) { return appendCanonicalValue(nil, v) }
 func appendCanonicalValue(dst []byte, value any) ([]byte, error) {
@@ -203,23 +204,23 @@ func sortStrings(values []string) {
 		}
 	}
 }
-func hasHTMLSensitiveString(v any) bool {
+func hasSchemaSerializationSensitiveString(v any) bool {
 	switch x := v.(type) {
 	case string:
 		for _, r := range x {
-			if r == '<' || r == '>' || r == '&' {
+			if r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' {
 				return true
 			}
 		}
 	case map[string]any:
 		for k, value := range x {
-			if hasHTMLSensitiveString(k) || hasHTMLSensitiveString(value) {
+			if hasSchemaSerializationSensitiveString(k) || hasSchemaSerializationSensitiveString(value) {
 				return true
 			}
 		}
 	case []any:
 		for _, value := range x {
-			if hasHTMLSensitiveString(value) {
+			if hasSchemaSerializationSensitiveString(value) {
 				return true
 			}
 		}
@@ -266,10 +267,10 @@ func matches(s, v any, d int) bool {
 		return true
 	case "string":
 		x, ok := v.(string)
-		if !ok || !ascii(x) {
+		if !ok || !drivertext.ValidText(x) {
 			return false
 		}
-		n := int64(len(x))
+		n := int64(utf8.RuneCountInString(x))
 		if q, ok := m["minLength"].(int64); ok && n < q {
 			return false
 		}

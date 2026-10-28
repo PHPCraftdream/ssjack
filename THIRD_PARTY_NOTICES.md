@@ -134,6 +134,7 @@ These components have the same Go Authors license text, reproduced once below:
 - golang.org/x/crypto v0.53.0: https://github.com/golang/crypto/blob/v0.53.0/LICENSE
 - golang.org/x/sys v0.46.0: https://github.com/golang/sys/blob/v0.46.0/LICENSE
 - golang.org/x/term v0.44.0: https://github.com/golang/term/blob/v0.44.0/LICENSE
+- golang.org/x/text v0.38.0: https://github.com/golang/text/blob/v0.38.0/LICENSE
 
 ```text
 Copyright 2009 The Go Authors.
@@ -165,7 +166,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-The Go runtime and the three Go extended libraries above also ship this identical additional grant. Sources: https://github.com/golang/go/blob/go1.26.0/PATENTS, https://github.com/golang/crypto/blob/v0.53.0/PATENTS, https://github.com/golang/sys/blob/v0.46.0/PATENTS, and https://github.com/golang/term/blob/v0.44.0/PATENTS. Pinned GitHub API content responses verified that the LICENSE bytes match across the Go module source files and that the PATENTS bytes match across their pinned refs. The archived notice blocks are checked against these source digests by CI; factual source matching is not legal approval.
+The Go runtime and the four Go extended libraries above also ship this identical additional grant. Sources: https://github.com/golang/go/blob/go1.26.0/PATENTS, https://github.com/golang/crypto/blob/v0.53.0/PATENTS, https://github.com/golang/sys/blob/v0.46.0/PATENTS, https://github.com/golang/term/blob/v0.44.0/PATENTS, and https://github.com/golang/text/blob/v0.38.0/PATENTS. The cached x/text v0.38.0 module LICENSE and PATENTS bytes match the recorded hashes; pinned upstream LICENSE and PATENTS bytes and the sum.golang.org module checksum were independently compared (see docs/LICENSE-COMPLIANCE.md). The archived notice blocks are checked against these source digests by CI; factual source matching is not legal approval.
 
 
 ```text

@@ -154,19 +154,16 @@ func TestSchemaEnumConstTypedEquality(t *testing.T) {
 }
 
 func TestSchemaValueBoundsAndTextAdversaries(t *testing.T) {
-	for _, raw := range []string{`"a\u0080"`, `"\n"`, `"\ud800"`, `"\udc00"`, `"\ud83d\ude00"`} {
+	for _, raw := range []string{`"a\u0080"`, `"\n"`, `"\u0001"`, `"\ud800"`, `"\udc00"`} {
 		if _, err := ParseJSON([]byte(raw)); err == nil {
-			t.Errorf("accepted nonprintable/non-ASCII %s", raw)
+			t.Errorf("accepted invalid text %s", raw)
 		}
 	}
-	v, _ := ParseJSON([]byte(`{"type":"string","maxLength":4}`))
-	for _, raw := range []string{`"é"`, `"\u0001"`, `"\ud800"`, `"\ud83d\ude00"`} {
+	v, _ := ParseJSON([]byte(`{"type":"string","maxLength":1}`))
+	for _, raw := range []string{`"é"`, `"\ud83d\ude00"`} {
 		x, err := ParseJSON([]byte(raw))
-		if err != nil {
-			continue // ParseJSON itself rejects non-ASCII and control data.
-		}
-		if matches(v, x, 0) {
-			t.Errorf("matched adversarial string %s", raw)
+		if err != nil || !matches(v, x, 0) {
+			t.Errorf("valid scalar rejected %s: %v", raw, err)
 		}
 	}
 	deepSchema := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","maxLength":1,"const":"x"}`

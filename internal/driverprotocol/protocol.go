@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/PHPCraftdream/ssjack/internal/driverframe"
+	"github.com/PHPCraftdream/ssjack/internal/drivertext"
 )
 
 const MaxDepth = 16
@@ -28,9 +29,9 @@ type StructuralResponse struct{}
 // Action returns the validated request action.
 func (q StructuralRequest) Action() string { return q.action }
 
-// ParseJSON accepts bounded printable-ASCII JSON, rejecting duplicate keys and non-safe integers.
+// ParseJSON accepts bounded NFC Unicode JSON, rejecting duplicate keys and non-safe integers.
 func ParseJSON(data []byte) (any, error) {
-	if len(data) == 0 || len(data) > driverframe.MaxPayload || !utf8.Valid(data) {
+	if len(data) == 0 || len(data) > driverframe.MaxPayload || !utf8.Valid(data) || !drivertext.ValidEscapes(data) {
 		return nil, ErrInvalid
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
@@ -64,7 +65,7 @@ func parseValue(d *json.Decoder, depth int, n *int) (any, error) {
 					return nil, ErrInvalid
 				}
 				k, ok := k0.(string)
-				if !ok || !ascii(k) {
+				if !ok || !drivertext.ValidText(k) {
 					return nil, ErrInvalid
 				}
 				if _, ok = m[k]; ok {
@@ -103,7 +104,7 @@ func parseValue(d *json.Decoder, depth int, n *int) (any, error) {
 		}
 		return nil, ErrInvalid
 	case string:
-		if !ascii(x) {
+		if !drivertext.ValidText(x) {
 			return nil, ErrInvalid
 		}
 		return x, nil
@@ -118,14 +119,6 @@ func parseValue(d *json.Decoder, depth int, n *int) (any, error) {
 		return x, nil
 	}
 	return nil, ErrInvalid
-}
-func ascii(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 || s[i] > 0x7e {
-			return false
-		}
-	}
-	return true
 }
 func object(v any) (map[string]any, bool) { m, ok := v.(map[string]any); return m, ok }
 func stringValue(v any) (string, bool)    { s, ok := v.(string); return s, ok }

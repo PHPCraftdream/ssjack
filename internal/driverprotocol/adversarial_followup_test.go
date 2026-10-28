@@ -27,10 +27,10 @@ func TestRequestedStructuralAdversaries(t *testing.T) {
 			}
 		}
 	}
-	for _, raw := range []string{`"é"`, `"\udc00"`, `"\ud83d\ude00"`} {
+	for _, raw := range []string{`"é"`, `"\udc00"`} {
 		_, err := ParseJSON([]byte(raw))
 		if err == nil {
-			t.Errorf("accepted non-ASCII Unicode adversary %s", raw)
+			t.Errorf("accepted invalid Unicode adversary %s", raw)
 		}
 	}
 	makeProps := func(n int) string {
@@ -185,5 +185,38 @@ func TestPinnedDesiredProjectionByteBoundaries(t *testing.T) {
 	}
 	if err := validate(1017); err == nil {
 		t.Fatal("oversize projection accepted")
+	}
+}
+
+func TestPinnedSchemaRejectsJSONSeparatorEscaping(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{},"required":[],"additionalProperties":false,"const":`
+	baseline, baselineDigest := pinned(root + `{"x":"y"}}`)
+	if err := ValidateSchemaDocument(baseline, "x", baselineDigest); err != nil {
+		t.Fatalf("baseline schema rejected: %v", err)
+	}
+	for _, sep := range []struct{ name, literal, escaped string }{
+		{"U+2028", "\u2028", `\u2028`},
+		{"U+2029", "\u2029", `\u2029`},
+	} {
+		for _, position := range []string{"key", "value"} {
+			for _, spelling := range []string{sep.literal, sep.escaped} {
+				t.Run(sep.name+"/"+position+"/"+spelling, func(t *testing.T) {
+					value := `{"` + spelling + `":0}`
+					if position == "value" {
+						value = `{"x":"` + spelling + `"}`
+					}
+					schema, digest := pinned(root + value + `}`)
+					if _, err := CanonicalSchemaDocument(schema); err != ErrSchema {
+						t.Fatalf("canonical schema: got %v, want ErrSchema", err)
+					}
+					if err := ValidateSchemaDocument(schema, "x", digest); err != ErrSchema {
+						t.Fatalf("schema pin: got %v, want ErrSchema", err)
+					}
+					if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(`{}`), MaxDesired); err != ErrSchema {
+						t.Fatalf("pinned value: got %v, want ErrSchema", err)
+					}
+				})
+			}
+		}
 	}
 }

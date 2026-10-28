@@ -11,7 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 POLICY = json.loads((ROOT / "license-policy.json").read_text(encoding="utf-8"))
 TARGETS = (("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"),
            ("darwin", "arm64"), ("windows", "amd64"), ("windows", "arm64"))
-X_MODULES = ("golang.org/x/crypto", "golang.org/x/sys", "golang.org/x/term")
+X_MODULES = ("golang.org/x/crypto", "golang.org/x/sys", "golang.org/x/term", "golang.org/x/text")
 
 
 def digest(text):
