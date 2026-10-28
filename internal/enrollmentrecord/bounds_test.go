@@ -92,7 +92,8 @@ func TestParseJSONDirectBounds(t *testing.T) {
 		name, input string
 		valid       bool
 	}{
-		{"unicode", `"é"`, false}, {"control", `"\u0001"`, false}, {"surrogate", `"\ud800"`, false},
+		{"unicode NFC", `"é"`, true}, {"unicode non-NFC", `"e\u0301"`, false},
+		{"control", `"\u0001"`, false}, {"surrogate", `"\ud800"`, false},
 		{"depth 16", strings.Repeat("[", 16) + `0` + strings.Repeat("]", 16), true},
 		{"depth 17", strings.Repeat("[", 17) + `0` + strings.Repeat("]", 17), false},
 	} {

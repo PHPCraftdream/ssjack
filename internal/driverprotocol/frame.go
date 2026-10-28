@@ -131,6 +131,7 @@ func stateValue(v any) bool {
 	s, ok := stringValue(v)
 	return ok && (s == "present" || s == "absent" || s == "unknown")
 }
+
 // canonicalBytes is package-internal serialization for already bounded protocol values.
 func canonicalBytes(v any) ([]byte, error) { return appendCanonicalValue(nil, v) }
 func appendCanonicalValue(dst []byte, value any) ([]byte, error) {
@@ -228,7 +229,6 @@ func hasSchemaSerializationSensitiveString(v any) bool {
 	return false
 }
 func bounded(v any, n int) bool { b, e := canonicalBytes(v); return e == nil && len(b) <= n }
-
 func matches(s, v any, d int) bool {
 	if d > 16 {
 		return false

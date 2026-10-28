@@ -72,6 +72,35 @@ class AuditTests(unittest.TestCase):
         self.licenses[path + ":PATENTS"] = "Patent"
         self.check()
 
+    def test_reviewed_non_release_module_still_checks_notices_and_inventory(self):
+        entry = self.policy["modules"]["example.org/dep"]
+        entry["release"] = False
+        self.inventory = [{}]
+        self.check()
+        self.licenses["example.org/dep"] = "changed"
+        with self.assertRaisesRegex(ValueError, "notice digest mismatch"):
+            self.check()
+        self.licenses["example.org/dep"] = "MIT"
+        with self.assertRaisesRegex(ValueError, "notice heading/text pairs"):
+            self.check("## Runtime\n```text\nGo\n```\n## Patent\n```text\nPatent\n```")
+        self.inventory = [{"example.org/dep": {"Version": "v1"}}]
+        with self.assertRaisesRegex(ValueError, "dependency inventory"):
+            self.check()
+        self.inventory = [{"unknown.org/dep": {"Version": "v1"}}]
+        with self.assertRaisesRegex(ValueError, "dependency inventory"):
+            self.check()
+
+    def test_inventory_mismatch_reports_all_differences(self):
+        self.policy["modules"]["missing.org/dep"] = {"version": "v3"}
+        self.inventory = [{"example.org/dep": {"Version": "v2"},
+                           "unknown.org/dep": {"Version": "v4"}}]
+        with self.assertRaises(ValueError) as error:
+            self.check()
+        message = str(error.exception)
+        self.assertIn("missing=['missing.org/dep@v3']", message)
+        self.assertIn("unexpected=['unknown.org/dep@v4']", message)
+        self.assertIn("example.org/dep: expected v1, actual v2", message)
+
     def test_rejects_inventory_version_license_and_notice_changes(self):
         self.inventory = [{"other.org/dep": {"Version": "v1"}}]
         with self.assertRaises(ValueError): self.check()

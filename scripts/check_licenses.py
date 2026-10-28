@@ -41,9 +41,13 @@ def validate(inventories, notices, policy, license_texts, embedded_texts, embed_
             if path in actual and actual[path] != version:
                 raise ValueError(f"dependency version differs across target inventories: {path}")
             actual[path] = version
-    expected = {p: e["version"] for p, e in policy["modules"].items()}
+    expected = {p: e["version"] for p, e in policy["modules"].items() if e.get("release", True)}
     if actual != expected:
-        raise ValueError("dependency inventory differs from exact policy")
+        missing = [f"{p}@{expected[p]}" for p in sorted(expected.keys() - actual.keys())]
+        unexpected = [f"{p}@{actual[p]}" for p in sorted(actual.keys() - expected.keys())]
+        versions = [f"{p}: expected {expected[p]}, actual {actual[p]}"
+                    for p in sorted(actual.keys() & expected.keys()) if actual[p] != expected[p]]
+        raise ValueError(f"dependency inventory differs from exact policy: missing={missing}; unexpected={unexpected}; version differences={versions}")
     expected_blocks = []
     for path, entry in policy["modules"].items():
         if entry.get("source_review") != "verified" or not entry.get("source"):
@@ -121,6 +125,13 @@ def main():
                     if path in X_MODULES:
                         licenses[path + ":PATENTS"] = (pathlib.Path(mod["Dir"]) / "PATENTS").read_bytes().decode("utf-8")
         inventories.append(inventory)
+    for path, entry in POLICY["modules"].items():
+        if not entry.get("release", True):
+            raw = subprocess.run(["go", "mod", "download", "-json", path + "@" + entry["version"]], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
+            directory = pathlib.Path(json.loads(raw)["Dir"])
+            licenses[path] = (directory / entry["license_file"]).read_bytes().decode("utf-8")
+            if path in X_MODULES:
+                licenses[path + ":PATENTS"] = (directory / "PATENTS").read_bytes().decode("utf-8")
     root = pathlib.Path(subprocess.run(["go", "env", "GOROOT"], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout.strip())
     for name in POLICY["toolchain"]:
         licenses["toolchain:" + name] = (root / name).read_bytes().decode("utf-8")
