@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/PHPCraftdream/ssjack/internal/recovery"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-	"github.com/PHPCraftdream/ssjack/internal/recovery"
 )
+
 func TestBoundedLockContentionWhileSyncBlocked(t *testing.T) {
 	j, e := Initialize(filepath.Join(t.TempDir(), "j"), 25*time.Millisecond)
 	if e != nil {
@@ -57,7 +58,9 @@ func TestLivePendingAndNewArtifactsPoisonJournal(t *testing.T) {
 func TestInitializeParentSyncFailure(t *testing.T) {
 	io := systemIO()
 	io.syncDir = func(string) error { return errors.New("parent sync") }
-	if _, e := initialize(filepath.Join(t.TempDir(), "j"), time.Second, io); !errors.Is(e, ErrUnavailable) { t.Fatalf("initialize: %v", e) }
+	if _, e := initialize(filepath.Join(t.TempDir(), "j"), time.Second, io); !errors.Is(e, ErrUnavailable) {
+		t.Fatalf("initialize: %v", e)
+	}
 }
 func TestDiskFaultsPoisonJournal(t *testing.T) {
 	renamed := false
@@ -254,7 +257,9 @@ func TestDiskFaultsPoisonJournal(t *testing.T) {
 		})
 	}
 }
+
 type faultAnchor struct{}
+
 func (faultAnchor) Read(context.Context, string) (recovery.State, error) { panic("anchor touched") }
 func (faultAnchor) CompareAndSwap(context.Context, recovery.State, recovery.State, string) error {
 	panic("anchor touched")
