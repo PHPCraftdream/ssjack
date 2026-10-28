@@ -15,12 +15,12 @@
     "PATENTS": {"sha256": "2728f4d067c60d35428020435045d9a8340391082b792d9529fa52bfa4f40993", "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc", "source": "https://github.com/golang/go/blob/go1.26.0/PATENTS", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries"}
   },
   "embedded": {
-    "LICENSE-MIT": {"kind": "file", "sha256": "d00d3450ce4e6ff60725b0e7dc407c18b58f006bb157c08ed0cda4d7a37800e8"},
-    "LICENSE-APACHE": {"kind": "file", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+    "LICENSE-MIT": {"kind": "file", "sha256": "0bfaa2eb2e1aac6f66914ad0606ca5c65cd4d21b51b5b8ce824506919908940b"},
+    "LICENSE-APACHE": {"kind": "file", "sha256": "283ea6cc2997a1a70da0049e09adf9317bb60ca1b51279b65196b83a69e1996b"},
     "THIRD_PARTY_NOTICES.md": {"kind": "notice"},
-    "plugins/ssjack-ui/.claude-plugin/plugin.json": {"kind": "file", "sha256": "3b50fc197c9b293dc5bee20e4851223f058114f8343b4f2ac4f6843fbe4137df"},
-    "plugins/ssjack-ui/hooks/hooks.json": {"kind": "file", "sha256": "ae69340778202da573caae98e922a69467ed1c60953d2bde1800085cc197c1b5"},
-    "plugins/ssjack-ui/hooks/register.tsx": {"kind": "file", "sha256": "089c20937cf5dde1f912a66807b1e4c9103493f75ee2858a07faca95d3dc508a"},
-    "plugins/ssjack-ui/hooks/format.ts": {"kind": "file", "sha256": "9e56b6e3023fbb579cbe608dd6913ebe0fb937c8b73a6458a88d51a298eb70b5"}
+    "plugins/ssjack-ui/.claude-plugin/plugin.json": {"kind": "file", "sha256": "9216edf8204641e8dc97052ae25126beaf0f94e573bd1b581cd4f433e9af5956"},
+    "plugins/ssjack-ui/hooks/hooks.json": {"kind": "file", "sha256": "cb00289411841ac04db5314d4b9f838a1a1527019adc3aedd9155550cf729c23"},
+    "plugins/ssjack-ui/hooks/register.tsx": {"kind": "file", "sha256": "2ea87ba48fe267b07df892c0c5d183e36606676c2067bae78500b369f62c6b56"},
+    "plugins/ssjack-ui/hooks/format.ts": {"kind": "file", "sha256": "4c019325b5f1977a20137133e3b04120c9f02cb6db383e44127081dd919761a4"}
   }
 }

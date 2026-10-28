@@ -84,6 +84,15 @@ class AuditTests(unittest.TestCase):
         self.policy["modules"]["example.org/dep"]["source_review"] = "review-required"
         with self.assertRaises(ValueError): self.check()
 
+    def test_embedded_policy_fingerprints_match_every_embedded_file(self):
+        from check_licenses import ROOT, digest
+        policy = __import__("json").loads((ROOT / "license-policy.json").read_text(encoding="utf-8"))
+        file_entries = {name: entry for name, entry in policy["embedded"].items() if entry["kind"] == "file"}
+        self.assertGreaterEqual(len(file_entries), 6)
+        for name, entry in file_entries.items():
+            with self.subTest(name=name):
+                self.assertEqual(entry["sha256"], digest((ROOT / name).read_text(encoding="utf-8")))
+
     def test_rejects_embedded_drift_or_inventory_change(self):
         with self.assertRaises(ValueError):
             validate(self.inventory, "", self.policy, self.licenses, self.embedded, {"unexpected"})
