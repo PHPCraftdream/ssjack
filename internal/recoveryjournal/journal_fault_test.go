@@ -4,16 +4,16 @@ package recoveryjournal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/PHPCraftdream/ssjack/internal/recovery"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+	"github.com/PHPCraftdream/ssjack/internal/recovery"
 )
-
 func TestBoundedLockContentionWhileSyncBlocked(t *testing.T) {
 	j, e := Initialize(filepath.Join(t.TempDir(), "j"), 25*time.Millisecond)
 	if e != nil {
@@ -54,16 +54,13 @@ func TestLivePendingAndNewArtifactsPoisonJournal(t *testing.T) {
 		})
 	}
 }
-
 func TestInitializeParentSyncFailure(t *testing.T) {
 	io := systemIO()
 	io.syncDir = func(string) error { return errors.New("parent sync") }
-	if _, e := initialize(filepath.Join(t.TempDir(), "j"), time.Second, io); !errors.Is(e, ErrUnavailable) {
-		t.Fatalf("initialize: %v", e)
-	}
+	if _, e := initialize(filepath.Join(t.TempDir(), "j"), time.Second, io); !errors.Is(e, ErrUnavailable) { t.Fatalf("initialize: %v", e) }
 }
-
 func TestDiskFaultsPoisonJournal(t *testing.T) {
+	renamed := false
 	faults := []struct {
 		name      string
 		set       func(*diskIO, string)
@@ -178,7 +175,10 @@ func TestDiskFaultsPoisonJournal(t *testing.T) {
 		{"rename-succeeds-error", func(io *diskIO, root string) {
 			io.rename = func(a, b string) error {
 				if filepath.Ext(a) == ".new" {
-					_ = os.Rename(a, b)
+					if err := os.Rename(a, b); err != nil {
+						return err
+					}
+					renamed = true
 					return errors.New("ambiguous rename")
 				}
 				return os.Rename(a, b)
@@ -216,10 +216,15 @@ func TestDiskFaultsPoisonJournal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			renamed = false
 			tc.set(&j.io, root)
-			err = j.PutIntent(context.Background(), prepared("fault", "fault-res"))
-			if !errors.Is(err, ErrUnavailable) {
-				t.Fatalf("fault returned %v", err)
+			i := prepared("fault", "fault-res")
+			err = (recovery.Machine{Anchor: faultAnchor{}, Journal: j}).Recover(context.Background(), i.Binding)
+			if tc.name == "rename-succeeds-error" && !renamed {
+				t.Fatal("rename hook not reached")
+			}
+			if !errors.Is(err, recovery.ErrUnavailable) || !j.poisoned {
+				t.Fatalf("fault returned %v, poisoned=%v", err, j.poisoned)
 			}
 			if _, err = j.LoadIntent(context.Background(), "fault"); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("journal not poisoned: %v", err)
@@ -227,6 +232,15 @@ func TestDiskFaultsPoisonJournal(t *testing.T) {
 			after, err := os.ReadFile(j.path())
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.name == "rename-succeeds-error" {
+				var doc document
+				if err = json.Unmarshal(after, &doc); err != nil {
+					t.Fatal(err)
+				}
+				if len(doc.Records) != 1 || doc.Records[0].Intent != i {
+					t.Fatalf("persisted intent: %+v", doc.Records)
+				}
 			}
 			changed := string(after) != string(before)
 			if changed != tc.published {
@@ -240,7 +254,11 @@ func TestDiskFaultsPoisonJournal(t *testing.T) {
 		})
 	}
 }
-
+type faultAnchor struct{}
+func (faultAnchor) Read(context.Context, string) (recovery.State, error) { panic("anchor touched") }
+func (faultAnchor) CompareAndSwap(context.Context, recovery.State, recovery.State, string) error {
+	panic("anchor touched")
+}
 func TestDiskTamperingPoisonsJournal(t *testing.T) {
 	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
 	if e != nil {
