@@ -1,0 +1,26 @@
+{
+  "factual_source_review": "verified",
+  "legal_review": "required-not-asserted",
+  "modules": {
+    "github.com/ktav-lang/golang": {"version": "v0.8.1", "license_file": "LICENSE", "license_sha256": "c8cc42767f1500211bbfc5c1b2ca2769d784e1e9b301f1507d21fa0c30476818", "source_sha256": "dab3570e779bf2a81f0331e5346b8f663278e624df1daf052751fa5ca2dbab5d", "source": "https://github.com/ktav-lang/golang/blob/v0.8.1/LICENSE", "source_review": "verified", "notice_heading": "Ktav pure-Go implementation"},
+    "github.com/modelcontextprotocol/go-sdk": {"version": "v1.0.0", "license_file": "LICENSE", "license_sha256": "3692f72c75fb7c910a39965cce60fb1ff7b029068e0d6ef3354bcd05474406a8", "source_sha256": "46e22f28e5e8a03a09b0a7f144640797fdab852e494be12ae8d19bd55cebff0d", "source": "https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/LICENSE", "source_review": "verified", "notice_heading": "Go MCP SDK"},
+    "github.com/google/jsonschema-go": {"version": "v0.3.0", "license_file": "LICENSE", "license_sha256": "0fbd0ba52f6c09ab5aa6f5341c9c158e21dd9b5f23a6a835c40af88caecc184e", "source_sha256": "2d56c53449691d85d9aea245eb8dac12713e9075d70d5557b82ae1e94805b357", "source": "https://github.com/google/jsonschema-go/blob/v0.3.0/LICENSE", "source_review": "verified", "notice_heading": "JSON Schema Go"},
+    "github.com/yosida95/uritemplate/v3": {"version": "v3.0.2", "license_file": "LICENSE", "license_sha256": "881631f6023fd4cfb0b21a60e53c0c824cac18ed15baeda01c84334d168a3968", "source_sha256": "0761aadfb1921103752869ee942d4a71bdd54494697684d4b13dc17ad9781191", "source": "https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE", "source_review": "verified", "notice_heading": "URI Template"},
+    "golang.org/x/crypto": {"version": "v0.53.0", "license_file": "LICENSE", "license_sha256": "22975ebe413674bc619428a26e53412013dccffa69e2f27100dbd8d946fde287", "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad", "source": "https://github.com/golang/crypto/blob/v0.53.0/LICENSE", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries", "patents_sha256": "2728f4d067c60d35428020435045d9a8340391082b792d9529fa52bfa4f40993", "patents_source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc", "patents_notice_heading": "Go runtime and Go extended libraries"},
+    "golang.org/x/sys": {"version": "v0.46.0", "license_file": "LICENSE", "license_sha256": "22975ebe413674bc619428a26e53412013dccffa69e2f27100dbd8d946fde287", "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad", "source": "https://github.com/golang/sys/blob/v0.46.0/LICENSE", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries", "patents_sha256": "2728f4d067c60d35428020435045d9a8340391082b792d9529fa52bfa4f40993", "patents_source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc", "patents_notice_heading": "Go runtime and Go extended libraries"},
+    "golang.org/x/term": {"version": "v0.44.0", "license_file": "LICENSE", "license_sha256": "22975ebe413674bc619428a26e53412013dccffa69e2f27100dbd8d946fde287", "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad", "source": "https://github.com/golang/term/blob/v0.44.0/LICENSE", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries", "patents_sha256": "2728f4d067c60d35428020435045d9a8340391082b792d9529fa52bfa4f40993", "patents_source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc", "patents_notice_heading": "Go runtime and Go extended libraries"}
+  },
+  "toolchain": {
+    "LICENSE": {"sha256": "22975ebe413674bc619428a26e53412013dccffa69e2f27100dbd8d946fde287", "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad", "source": "https://github.com/golang/go/blob/go1.26.0/LICENSE", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries"},
+    "PATENTS": {"sha256": "2728f4d067c60d35428020435045d9a8340391082b792d9529fa52bfa4f40993", "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc", "source": "https://github.com/golang/go/blob/go1.26.0/PATENTS", "source_review": "verified", "notice_heading": "Go runtime and Go extended libraries"}
+  },
+  "embedded": {
+    "LICENSE-MIT": {"kind": "file", "sha256": "d00d3450ce4e6ff60725b0e7dc407c18b58f006bb157c08ed0cda4d7a37800e8"},
+    "LICENSE-APACHE": {"kind": "file", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+    "THIRD_PARTY_NOTICES.md": {"kind": "notice"},
+    "plugins/ssjack-ui/.claude-plugin/plugin.json": {"kind": "file", "sha256": "3b50fc197c9b293dc5bee20e4851223f058114f8343b4f2ac4f6843fbe4137df"},
+    "plugins/ssjack-ui/hooks/hooks.json": {"kind": "file", "sha256": "ae69340778202da573caae98e922a69467ed1c60953d2bde1800085cc197c1b5"},
+    "plugins/ssjack-ui/hooks/register.tsx": {"kind": "file", "sha256": "089c20937cf5dde1f912a66807b1e4c9103493f75ee2858a07faca95d3dc508a"},
+    "plugins/ssjack-ui/hooks/format.ts": {"kind": "file", "sha256": "9e56b6e3023fbb579cbe608dd6913ebe0fb937c8b73a6458a88d51a298eb70b5"}
+  }
+}

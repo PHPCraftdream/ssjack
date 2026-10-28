@@ -93,6 +93,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  licenses:
+    name: License policy audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exercise fail-closed audit rejection cases
+        run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
+      - name: Check exact release dependency and notice policy (factual source consistency only)
+        run: python3 scripts/check_licenses.py
+
   race:
     name: Go race detector
     runs-on: ubuntu-latest
