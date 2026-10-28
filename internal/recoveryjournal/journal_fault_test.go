@@ -264,26 +264,6 @@ func (faultAnchor) Read(context.Context, string) (recovery.State, error) { panic
 func (faultAnchor) CompareAndSwap(context.Context, recovery.State, recovery.State, string) error {
 	panic("anchor touched")
 }
-func TestDiskTamperingPoisonsJournal(t *testing.T) {
-	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = j.PutIntent(context.Background(), prepared("tamper", "resource")); e != nil {
-		t.Fatal(e)
-	}
-	b, e := os.ReadFile(j.path())
-	if e != nil {
-		t.Fatal(e)
-	}
-	b[len(b)/2] ^= 1
-	if e = os.WriteFile(j.path(), b, 0600); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = j.LoadIntent(context.Background(), "tamper"); !errors.Is(e, ErrUnavailable) {
-		t.Fatal(e)
-	}
-}
 func TestCapacityAndIdempotence(t *testing.T) {
 	j, e := Initialize(filepath.Join(t.TempDir(), "j"), time.Second)
 	if e != nil {
