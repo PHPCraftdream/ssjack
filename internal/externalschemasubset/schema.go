@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
@@ -92,8 +91,12 @@ func schema(v any, root bool) bool {
 		return false
 	}
 	typ, _, ok := schemaType(m["type"])
-	if !ok && !valueOnly(m) {
-		return false
+	if !ok {
+		if _, hasType := m["type"]; !hasType && m["additionalProperties"] == false {
+			typ = "object"
+		} else if !valueOnly(m) {
+			return false
+		}
 	}
 	for k := range m {
 		switch k {
@@ -209,92 +212,4 @@ func schema(v any, root bool) bool {
 		return false
 	}
 	return true
-}
-func matches(m map[string]any, v any) bool {
-	if c, ok := m["const"]; ok {
-		ck, err := key(c)
-		if err != nil {
-			return false
-		}
-		vk, err := key(v)
-		if err != nil || ck != vk {
-			return false
-		}
-	}
-	if e, ok := m["enum"]; ok {
-		vk, err := key(v)
-		if err != nil {
-			return false
-		}
-		found := false
-		for _, x := range e.([]any) {
-			k, err := key(x)
-			if err != nil {
-				return false
-			}
-			if k == vk {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	typ, nullable, ok := schemaType(m["type"])
-	if !ok {
-		return valueOnly(m)
-	}
-	if v == nil && nullable {
-		return true
-	}
-	switch typ {
-	case "object":
-		o, ok := v.(map[string]any)
-		if !ok || !within(m, "minProperties", "maxProperties", int64(len(o))) {
-			return false
-		}
-		p, _ := properties(m)
-		if len(o) != len(p) {
-			return false
-		}
-		for k, s := range p {
-			x, ok := o[k]
-			if !ok || !matches(s.(map[string]any), x) {
-				return false
-			}
-		}
-		return true
-	case "array":
-		a, ok := v.([]any)
-		if !ok || !within(m, "minItems", "maxItems", int64(len(a))) {
-			return false
-		}
-		seen := map[string]bool{}
-		for _, x := range a {
-			if !matches(m["items"].(map[string]any), x) {
-				return false
-			}
-			if m["uniqueItems"] == true {
-				k, err := key(x)
-				if err != nil || seen[k] {
-					return false
-				}
-				seen[k] = true
-			}
-		}
-		return true
-	case "string":
-		s, ok := v.(string)
-		return ok && within(m, "minLength", "maxLength", int64(utf8.RuneCountInString(s)))
-	case "integer":
-		n, ok := number(v)
-		return ok && within(m, "minimum", "maximum", n) && numericMatches(m, n)
-	case "boolean":
-		_, ok := v.(bool)
-		return ok
-	case "null":
-		return v == nil
-	}
-	return false
 }

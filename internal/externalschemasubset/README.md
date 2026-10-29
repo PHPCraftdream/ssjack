@@ -10,7 +10,7 @@ digest binding. The proposed dialect is described in
 ## Schema shape and supported keywords
 
 Every schema, including each nested schema, must be a JSON object. It must have
-`type` unless it has a type-less `enum` or `const`. Supported types are
+`type` unless it has a type-less `enum`, `const`, or explicit closed object shape. Supported types are
 `object`, `array`, `string`, `integer`, `boolean`, or `null`, or a two-element
 array containing one non-null type and `null` in either order.
 The root must contain exactly
@@ -18,13 +18,19 @@ The root must contain exactly
 must not contain `$schema`. Boolean schemas are rejected.
 Unknown keywords and keywords used with the wrong type are rejected.
 
-A type-less enum and/or const may have annotations, but no type-specific
+A type-less enum and/or const without an object shape may have annotations, but no type-specific
 keywords. It matches only the exact finite bounded JSON values enumerated, or
 their intersection when both constraints are present. Object values must match
 in full: extra properties, including nested ones, do not match unless the entire
 value is separately enumerated. A malformed or unsupported explicit `type` is
-rejected. An untyped schema without enum or const (including an empty or
-annotation-only schema) is rejected rather than allowing arbitrary objects.
+rejected. An untyped schema without enum, const, or an explicit closed object shape
+(including an empty or annotation-only schema) is rejected rather than allowing arbitrary objects.
+
+An untyped closed object shape requires `additionalProperties:false` and follows
+all object shape rules in the table below, including nested schemas and property
+bounds. Object keywords apply only to objects: non-object values pass those
+keywords. `enum` and `const`, if present, still constrain every value. No other
+type-specific keywords may be combined with this shape.
 
 All types may have `title` and `description` strings, `default` as any bounded
 JSON value, and `examples` as an array of bounded JSON values. These annotations
@@ -56,7 +62,7 @@ String length counts Unicode code points. A valid schema need not be satisfiable
 
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
-explicit `type` except for finite enum or const nodes, closed object shape, array
+explicit `type` except for finite enum/const nodes or untyped closed object shapes, closed object shape, array
 `items`/`maxItems`, and string `maxLength`. The rejection of unconstrained
 typeless schemas is the conservative proposed-v1 resolution, not a restriction
 unique to this subset; other restrictions may reject documents permitted by the
