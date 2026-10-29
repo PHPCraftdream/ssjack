@@ -122,7 +122,7 @@ func schemaType(v any) (string, bool, bool) {
 	return a, true, true
 }
 func validSchemaKeys(m map[string]any, root bool) bool {
-	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
+	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "title": true, "description": true, "default": true, "examples": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
 	for key := range m {
 		if !allowed[key] || (!root && key == "$schema") {
 			return false
@@ -190,6 +190,16 @@ func validSchemaConstraints(m map[string]any, typ string) bool {
 	for key, value := range m {
 		if !applicableSchemaKeyword(key, typ) {
 			return false
+		}
+		switch key {
+		case "title", "description":
+			if _, ok := value.(string); !ok {
+				return false
+			}
+		case "examples":
+			if _, ok := value.([]any); !ok {
+				return false
+			}
 		}
 		lo, hi := keywordBounds(key)
 		if lo == hi {
@@ -267,7 +277,7 @@ func matchesEnum(m map[string]any, v any) bool {
 
 func applicableSchemaKeyword(k, typ string) bool {
 	switch k {
-	case "type", "enum", "const":
+	case "type", "enum", "const", "title", "description", "default", "examples":
 		return true
 	case "$schema":
 		return typ != ""

@@ -462,6 +462,127 @@ func TestPinnedNumericIndependentKeywords(t *testing.T) {
 	}
 }
 
+func TestPinnedAnnotations(t *testing.T) {
+	plain := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":["null","object"],"properties":{"v":{"type":"array","maxItems":1,"items":{"type":["string","null"],"maxLength":1}}},"required":["v"],"additionalProperties":false}`
+	annotated := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"root","description":"text","default":{"arbitrary":[true,null,1]},"examples":[null,{},[1]],"type":["null","object"],"properties":{"v":{"title":"array","default":false,"type":"array","maxItems":1,"items":{"description":"item","examples":[42],"type":["string","null"],"maxLength":1}}},"required":["v"],"additionalProperties":false}`
+	for _, schema := range []string{plain, annotated} {
+		b, d := pinned(schema)
+		if err := ValidateSchemaDocument(b, "x", d); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+		for _, tc := range []struct {
+			value string
+			want  error
+		}{
+			{`null`, nil}, {`{"v":[null]}`, nil}, {`{"v":["x"]}`, nil},
+			{`{"v":["xx"]}`, ErrInvalid}, {`{}`, ErrInvalid}, {`{"v":[42]}`, ErrInvalid},
+		} {
+			if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+				t.Errorf("%s: got %v, want %v", tc.value, err, tc.want)
+			}
+		}
+	}
+	_, digest := pinned(plain)
+	if err := ValidateSchemaDocument([]byte(annotated), "x", digest); err != ErrSchema {
+		t.Errorf("annotations must change digest: %v", err)
+	}
+	b, d := pinned(annotated)
+	reordered := strings.Replace(annotated, `"title":"root","description":"text"`, `"description":"text","title":"root"`, 1)
+	if err := ValidateSchemaDocument([]byte(reordered), "x", d); err != nil {
+		t.Errorf("canonical key order: %v", err)
+	}
+	changed := strings.Replace(string(b), `"title":"root"`, `"title":"other"`, 1)
+	if err := ValidateSchemaDocument([]byte(changed), "x", d); err != ErrSchema {
+		t.Errorf("changed annotation pin: %v", err)
+	}
+}
+
+func TestPinnedAnnotationConstraintIntersection(t *testing.T) {
+	plain := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"n":{"type":"integer","enum":[1,2],"const":2}},"required":["n"],"additionalProperties":false}`
+	annotated := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"root","type":"object","properties":{"n":{"description":"number","examples":[1,2],"type":"integer","enum":[1,2],"const":2}},"required":["n"],"additionalProperties":false}`
+	for _, schema := range []struct{ name, raw string }{{"plain", plain}, {"annotated", annotated}} {
+		t.Run(schema.name, func(t *testing.T) {
+			b, d := pinned(schema.raw)
+			for _, tc := range []struct {
+				name, value string
+				want        error
+			}{
+				{"intersection", `{"n":2}`, nil},
+				{"enum only", `{"n":1}`, ErrInvalid},
+				{"outside enum", `{"n":3}`, ErrInvalid},
+				{"wrong type", `{"n":"2"}`, ErrInvalid},
+				{"extra property", `{"n":2,"extra":true}`, ErrInvalid},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+						t.Errorf("got %v, want %v", err, tc.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPinnedAnnotationEnumIndependence(t *testing.T) {
+	for _, annotation := range []string{"", `"default":3,"examples":[3],`} {
+		schema := `{"$schema":"https://json-schema.org/draft/2020-12/schema",` + annotation + `"type":"integer","enum":[1,2]}`
+		b, d := pinned(schema)
+		for _, tc := range []struct {
+			value string
+			want  error
+		}{{`1`, nil}, {`2`, nil}, {`3`, ErrInvalid}} {
+			if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+				t.Errorf("annotation %q value %s: got %v, want %v", annotation, tc.value, err, tc.want)
+			}
+		}
+	}
+}
+
+func TestPinnedMalformedAnnotationsWithMatchingValues(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, tc := range []struct{ name, schema, value string }{
+		{"title", `"type":"null","title":null`, `null`},
+		{"description", `"type":"boolean","description":1`, `true`},
+		{"examples", `"type":"integer","examples":{}`, `1`},
+		{"nested", `"type":"object","properties":{"x":{"type":"boolean","examples":"bad"}},"required":["x"],"additionalProperties":false`, `{"x":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, d := pinned(root + tc.schema + `}`)
+			if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != ErrSchema {
+				t.Errorf("got %v, want ErrSchema", err)
+			}
+		})
+	}
+}
+
+func TestPinnedAnnotationInvalidShapesAndBounds(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, fragment := range []string{
+		`"type":"null","title":null`, `"type":"boolean","description":1`,
+		`"type":["null","integer"],"examples":null`, `"type":"integer","examples":{}`,
+		`"type":"array","maxItems":0,"items":{"type":"null","title":false}`,
+		`"type":["null","object"],"properties":{"x":{"type":"boolean","examples":"bad"}},"required":["x"],"additionalProperties":false`,
+	} {
+		b, d := pinned(root + fragment + `}`)
+		if err := ValidateSchemaDocument(b, "x", d); err != ErrSchema {
+			t.Errorf("%s: got %v", fragment, err)
+		}
+		if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(`null`), MaxDesired); err != ErrSchema {
+			t.Errorf("matching-independent rejection %s: %v", fragment, err)
+		}
+	}
+	for _, fragment := range []string{
+		`"default":` + `[` + strings.Repeat(`0,`, 256) + `0]`,
+		`"examples":` + `[` + strings.Repeat(`null,`, 256) + `null]`,
+		`"default":"` + strings.Repeat("x", 65536) + `"`,
+		`"default":1.5`, `"examples":["\u0001"]`,
+	} {
+		if _, err := CanonicalSchemaDocument([]byte(root + `"type":"null",` + fragment + `}`)); err != ErrSchema {
+			t.Errorf("unbounded or invalid annotation: %v", err)
+		}
+	}
+}
+
 func TestPinnedNumericInvalidSchemas(t *testing.T) {
 	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
 	for _, fragment := range []string{
