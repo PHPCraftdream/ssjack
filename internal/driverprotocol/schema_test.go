@@ -370,3 +370,114 @@ func TestPinnedNullableInvalidSchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestPinnedNumericConstraintsIndependentDigest(t *testing.T) {
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMaximum":5,"exclusiveMinimum":-5,"maximum":4,"minimum":-4,"multipleOf":2,"type":["null","integer"]}`
+	h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest := hex.EncodeToString(h[:])
+	schema := []byte(`{"type":["null","integer"],"multipleOf":2,"minimum":-4,"maximum":4,"exclusiveMinimum":-5,"exclusiveMaximum":5,"$schema":"https://json-schema.org/draft/2020-12/schema"}`)
+	if err := ValidateSchemaDocument(schema, "x", digest); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{
+		{`null`, nil}, {`-4`, nil}, {`0`, nil}, {`4`, nil},
+		{`-5`, ErrInvalid}, {`5`, ErrInvalid}, {`-3`, ErrInvalid}, {`3`, ErrInvalid}, {`true`, ErrInvalid},
+	} {
+		if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.value, err, tc.want)
+		}
+	}
+	changed := []byte(strings.Replace(string(schema), `"multipleOf":2`, `"multipleOf":1`, 1))
+	if err := ValidatePinnedValue(changed, "x", digest, "t", "k", "t", "k", "x", []byte(`0`), MaxDesired); err != ErrSchema {
+		t.Errorf("changed schema pin: %v", err)
+	}
+}
+
+func TestPinnedNumericNestedAndSafeEdges(t *testing.T) {
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"n":{"items":{"exclusiveMaximum":9007199254740991,"exclusiveMinimum":-9007199254740991,"multipleOf":9007199254740991,"type":["integer","null"]},"maxItems":3,"type":"array"}},"required":["n"],"type":"object"}`
+	h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest := hex.EncodeToString(h[:])
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{
+		{`{"n":[null,0]}`, nil}, {`{"n":[9007199254740991]}`, ErrInvalid},
+		{`{"n":[-9007199254740991]}`, ErrInvalid}, {`{"n":[1]}`, ErrInvalid},
+	} {
+		if err := ValidatePinnedValue([]byte(canonical), "x", digest, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.value, err, tc.want)
+		}
+	}
+	canonical = `{"$schema":"https://json-schema.org/draft/2020-12/schema","multipleOf":9007199254740991,"type":"integer"}`
+	h = sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest = hex.EncodeToString(h[:])
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{{`-9007199254740991`, nil}, {`9007199254740991`, nil}, {`9007199254740990`, ErrInvalid}} {
+		if err := ValidatePinnedValue([]byte(canonical), "x", digest, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.value, err, tc.want)
+		}
+	}
+}
+
+func TestPinnedNumericIndependentKeywords(t *testing.T) {
+	cases := []struct {
+		name, canonical string
+		accept, reject  []string
+	}{
+		{"minimum", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMinimum":-2,"type":"integer"}`, []string{`-1`, `9007199254740991`}, []string{`-2`, `-3`}},
+		{"maximum", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMaximum":2,"type":"integer"}`, []string{`1`, `-9007199254740991`}, []string{`2`, `3`}},
+		{"minimum safe low", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMinimum":-9007199254740991,"type":["integer","null"]}`, []string{`null`, `-9007199254740990`}, []string{`-9007199254740991`}},
+		{"minimum safe high", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMinimum":9007199254740991,"type":"integer"}`, nil, []string{`9007199254740990`, `9007199254740991`}},
+		{"maximum safe high", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMaximum":9007199254740991,"type":["null","integer"]}`, []string{`null`, `9007199254740990`}, []string{`9007199254740991`}},
+		{"maximum safe low", `{"$schema":"https://json-schema.org/draft/2020-12/schema","exclusiveMaximum":-9007199254740991,"type":"integer"}`, nil, []string{`-9007199254740990`, `-9007199254740991`}},
+		{"multiple", `{"$schema":"https://json-schema.org/draft/2020-12/schema","multipleOf":2,"type":"integer"}`, []string{`-4`, `0`, `4`, `-9007199254740990`, `9007199254740990`}, []string{`-3`, `3`, `-9007199254740991`, `9007199254740991`}},
+		{"enum intersection", `{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":[null,-2,-1,0,2],"exclusiveMinimum":-2,"multipleOf":2,"type":["null","integer"]}`, []string{`null`, `0`, `2`}, []string{`-2`, `-1`, `4`}},
+		{"const intersection", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":2,"exclusiveMaximum":2,"type":"integer"}`, nil, []string{`1`, `2`, `3`}},
+		{"const accepted", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":2,"exclusiveMaximum":3,"type":"integer"}`, []string{`2`}, []string{`1`, `3`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + tc.canonical))
+			digest := hex.EncodeToString(h[:])
+			schema := []byte(tc.canonical)
+			if err := ValidateSchemaDocument(schema, "x", digest); err != nil {
+				t.Fatalf("schema: %v", err)
+			}
+			for _, group := range []struct {
+				values []string
+				want   error
+			}{{tc.accept, nil}, {tc.reject, ErrInvalid}} {
+				for _, value := range group.values {
+					if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(value), MaxDesired); err != group.want {
+						t.Errorf("%s: got %v, want %v", value, err, group.want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPinnedNumericInvalidSchemas(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, fragment := range []string{
+		`"type":"integer","multipleOf":0`, `"type":"integer","multipleOf":-1`,
+		`"type":"integer","multipleOf":9007199254740992`, `"type":"integer","multipleOf":1.0`,
+		`"type":"integer","multipleOf":null`, `"type":"integer","exclusiveMinimum":true`,
+		`"type":"integer","exclusiveMaximum":-9007199254740992`, `"type":"integer","exclusiveMinimum":1.0`,
+		`"type":"boolean","multipleOf":2`, `"type":["null","boolean"],"exclusiveMaximum":2`,
+		`"type":"array","maxItems":1,"items":{"type":"integer","multipleOf":0}`,
+		`"type":"array","maxItems":1,"items":{"type":"integer","multipleOf":9007199254740992}`,
+		`"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":-9007199254740992}},"required":["n"],"additionalProperties":false`,
+		`"type":"object","properties":{"n":{"type":"integer","exclusiveMaximum":9007199254740992}},"required":["n"],"additionalProperties":false`,
+		`"type":"object","properties":{"n":{"type":"integer","exclusiveMaximum":false}},"required":["n"],"additionalProperties":false`,
+	} {
+		if _, err := CanonicalSchemaDocument([]byte(root + fragment + `}`)); err != ErrSchema {
+			t.Errorf("%s: got %v, want ErrSchema", fragment, err)
+		}
+	}
+}

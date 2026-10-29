@@ -122,7 +122,7 @@ func schemaType(v any) (string, bool, bool) {
 	return a, true, true
 }
 func validSchemaKeys(m map[string]any, root bool) bool {
-	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true}
+	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
 	for key := range m {
 		if !allowed[key] || (!root && key == "$schema") {
 			return false
@@ -210,8 +210,10 @@ func keywordBounds(key string) (int64, int64) {
 		return 0, 4096
 	case "maxLength":
 		return 1, 4096
-	case "minimum", "maximum":
+	case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum":
 		return -9007199254740991, 9007199254740991
+	case "multipleOf":
+		return 1, 9007199254740991
 	}
 	return 0, 0
 }
@@ -275,7 +277,7 @@ func applicableSchemaKeyword(k, typ string) bool {
 		return typ == "array"
 	case "minLength", "maxLength":
 		return typ == "string"
-	case "minimum", "maximum":
+	case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
 		return typ == "integer"
 	}
 	return false

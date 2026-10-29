@@ -305,6 +305,15 @@ func matches(s, v any, d int) bool {
 		if q, ok := m["maximum"].(int64); ok && x > q {
 			return false
 		}
+		if q, ok := m["exclusiveMinimum"].(int64); ok && x <= q {
+			return false
+		}
+		if q, ok := m["exclusiveMaximum"].(int64); ok && x >= q {
+			return false
+		}
+		if q, ok := m["multipleOf"].(int64); ok && (q <= 0 || x%q != 0) {
+			return false
+		}
 		return true
 	case "boolean":
 		_, ok := v.(bool)
