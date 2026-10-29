@@ -14,7 +14,6 @@ func TestSchemaRejections(t *testing.T) {
 		root + `"type":"object","properties":{},"required":[],"additionalProperties":[]}`,
 		root + `"type":"string","maxLength":5,"pattern":"x"}`,
 		root + `"type":"integer","minimum":false}`,
-		root + `"type":"integer","minimum":3,"maximum":2}`,
 		root + `"type":"string","maxLength":0}`,
 		root + `"type":"array","items":true,"maxItems":1}`,
 		root + `"type":"array","items":{"type":"null"},"maxItems":257}`,
@@ -31,6 +30,57 @@ func TestSchemaRejections(t *testing.T) {
 	for _, s := range cases {
 		if !errors.Is(ValidateSchema([]byte(s)), ErrSchema) {
 			t.Errorf("accepted schema %s", s)
+		}
+	}
+}
+
+func TestReversedBoundPairs(t *testing.T) {
+	cases := []struct {
+		name, shape, below, above, accepted string
+	}{
+		{"object", `"type":"object","properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":false,"minProperties":1,"maxProperties":0`, `{}`, `{"x":null}`, ``},
+		{"array", `"type":"array","items":{"type":"null"},"minItems":1,"maxItems":0`, `[]`, `[null]`, ``},
+		{"string", `"type":"string","minLength":2,"maxLength":1`, `"a"`, `"ab"`, ``},
+		{"integer", `"type":"integer","minimum":3,"maximum":2`, `2`, `3`, ``},
+		{"nullable", `"type":["integer","null"],"minimum":3,"maximum":2`, `2`, `3`, `null`},
+		{"untyped object", `"properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":false,"minProperties":1,"maxProperties":0`, `{}`, `{"x":null}`, `true`},
+		{"nested nullable", `"type":"array","items":{"type":["string","null"],"minLength":2,"maxLength":1},"maxItems":1`, `["a"]`, `["ab"]`, `[null]`},
+		{"equal bounds", `"type":"integer","minimum":2,"maximum":2`, `1`, `3`, `2`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := []byte(root + tc.shape + `}`)
+			if err := ValidateSchema(s); err != nil {
+				t.Fatalf("schema rejected: %v", err)
+			}
+			for _, value := range []string{tc.below, tc.above} {
+				if err := Validate(s, []byte(value), 65536); !errors.Is(err, ErrValue) {
+					t.Errorf("expected rejection of %s: %v", value, err)
+				}
+			}
+			if tc.accepted != "" {
+				if err := Validate(s, []byte(tc.accepted), 65536); err != nil {
+					t.Fatalf("valid value rejected: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestReversedPairsStillEnforceIndividualBounds(t *testing.T) {
+	for _, shape := range []string{
+		`"type":"object","additionalProperties":false,"minProperties":129,"maxProperties":0`,
+		`"type":"array","items":{"type":"null"},"minItems":257,"maxItems":0`,
+		`"type":"string","minLength":2,"maxLength":0`,
+		`"type":"integer","minimum":9007199254740992,"maximum":0`,
+		`"type":"integer","minimum":3,"maximum":2,"multipleOf":0`,
+	} {
+		s := []byte(root + shape + `}`)
+		if err := ValidateSchema(s); !errors.Is(err, ErrSchema) {
+			t.Errorf("accepted invalid schema %s: %v", s, err)
+		}
+		if err := Validate(s, []byte(`null`), 65536); !errors.Is(err, ErrSchema) {
+			t.Errorf("Validate accepted invalid schema %s: %v", s, err)
 		}
 	}
 }

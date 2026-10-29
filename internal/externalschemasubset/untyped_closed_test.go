@@ -99,6 +99,21 @@ func TestExtraRequiredInvalidShapes(t *testing.T) {
 	}
 }
 
+func TestUntypedClosedReversedBounds(t *testing.T) {
+	s := []byte(root + `"additionalProperties":false,"minProperties":2,"maxProperties":1}`)
+	if err := ValidateSchema(s); err != nil {
+		t.Fatalf("schema rejected: %v", err)
+	}
+	if err := Validate(s, []byte(`{}`), 65536); !errors.Is(err, ErrValue) {
+		t.Errorf("object: got %v, want ErrValue", err)
+	}
+	for _, value := range []string{`null`, `true`, `[]`} {
+		if err := Validate(s, []byte(value), 65536); err != nil {
+			t.Errorf("non-object %s rejected: %v", value, err)
+		}
+	}
+}
+
 func TestUntypedClosedRejections(t *testing.T) {
 	for _, shape := range []string{
 		`"properties":{}`, `"additionalProperties":true`, `"additionalProperties":{}`,
@@ -106,7 +121,6 @@ func TestUntypedClosedRejections(t *testing.T) {
 		`"additionalProperties":false,"properties":null`, `"additionalProperties":false,"required":null`,
 		`"additionalProperties":false,"properties":{"x":{"type":"null"}}`,
 		`"additionalProperties":false,"minProperties":129`,
-		`"additionalProperties":false,"minProperties":2,"maxProperties":1`,
 		`"additionalProperties":false,"items":{"type":"null"},"maxItems":1`,
 		`"additionalProperties":false,"maxLength":3`, `"additionalProperties":false,"minimum":0`,
 		`"additionalProperties":false,"$ref":"x"`, `"additionalProperties":false,"enum":[]`,

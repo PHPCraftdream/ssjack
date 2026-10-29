@@ -51,8 +51,13 @@ is canonical JSON equality, including for `uniqueItems`.
 | integer | none beyond `type` | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`: safe integers; `multipleOf`: positive safe integer |
 | boolean, null | none beyond `type` | none beyond `enum` and `const` |
 
-Inclusive range endpoints are ordered; exclusive and inclusive numeric constraints
-are applied independently, and contradictory constraints may be unsatisfiable.
+The proposed external dialect specifies individual bounds (schemas.md, external
+schema dialect), but does not require min/max pairs to be ordered. Consequently
+reversed `minProperties`/`maxProperties`, `minItems`/`maxItems`,
+`minLength`/`maxLength`, and `minimum`/`maximum` are accepted when each bound
+is individually valid. They cannot match their applicable type, but nullable
+schemas can still match null and untyped closed object shapes can match non-objects.
+Exclusive and inclusive numeric constraints apply independently.
 Object values must contain exactly the declared properties;
 array items each match `items`, and `uniqueItems:true` requires distinct items.
 String length counts Unicode code points. A valid schema need not be satisfiable

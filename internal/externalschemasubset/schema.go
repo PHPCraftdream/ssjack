@@ -73,11 +73,6 @@ func bound(m map[string]any, key string, lo, hi int64) bool {
 	n, ok := number(v)
 	return ok && n >= lo && n <= hi
 }
-func ordered(m map[string]any, a, b string) bool {
-	x, xok := number(m[a])
-	y, yok := number(m[b])
-	return !xok || !yok || x <= y
-}
 func schema(v any, root bool) bool {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -170,7 +165,7 @@ func schema(v any, root bool) bool {
 				return false
 			}
 		}
-		if !bound(m, "minProperties", 0, 128) || !bound(m, "maxProperties", 0, 128) || !ordered(m, "minProperties", "maxProperties") {
+		if !bound(m, "minProperties", 0, 128) || !bound(m, "maxProperties", 0, 128) {
 			return false
 		}
 	case "array":
@@ -180,7 +175,7 @@ func schema(v any, root bool) bool {
 		if _, ok := m["maxItems"]; !ok {
 			return false
 		}
-		if !bound(m, "minItems", 0, 256) || !bound(m, "maxItems", 0, 256) || !ordered(m, "minItems", "maxItems") {
+		if !bound(m, "minItems", 0, 256) || !bound(m, "maxItems", 0, 256) {
 			return false
 		}
 		if v, ok := m["uniqueItems"]; ok {
@@ -192,14 +187,14 @@ func schema(v any, root bool) bool {
 		if _, ok := m["maxLength"]; !ok {
 			return false
 		}
-		if !bound(m, "minLength", 0, 4096) || !bound(m, "maxLength", 1, 4096) || !ordered(m, "minLength", "maxLength") {
+		if !bound(m, "minLength", 0, 4096) || !bound(m, "maxLength", 1, 4096) {
 			return false
 		}
 	case "integer":
 		if !numericShape(m) {
 			return false
 		}
-		if !bound(m, "minimum", -9007199254740991, 9007199254740991) || !bound(m, "maximum", -9007199254740991, 9007199254740991) || !ordered(m, "minimum", "maximum") {
+		if !bound(m, "minimum", -9007199254740991, 9007199254740991) || !bound(m, "maximum", -9007199254740991, 9007199254740991) {
 			return false
 		}
 	case "boolean", "null":
