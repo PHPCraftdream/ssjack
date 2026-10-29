@@ -72,7 +72,9 @@ func TestRecordSchemaBounds(t *testing.T) {
 		valid       bool
 	}{
 		{"valid", good, true}, {"malformed", `{"type":`, false}, {"deep", deep, false},
-		{"oversized", good + strings.Repeat(" ", 65536), false},
+		{"whitespace above former raw cap", good + strings.Repeat(" ", 65536), true},
+		{"raw limit exact", good + strings.Repeat(" ", 262144-len(good)), true},
+		{"raw limit exceeded", good + strings.Repeat(" ", 262145-len(good)), false},
 		{"unsupported ref", `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null","$ref":"x"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
