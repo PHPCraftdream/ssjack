@@ -92,13 +92,21 @@ func schema(v any, root bool) bool {
 	} else if _, ok := m["$schema"]; ok {
 		return false
 	}
-	typ, ok := m["type"].(string)
+	typ, _, ok := schemaType(m["type"])
 	if !ok {
 		return false
 	}
 	for k := range m {
 		switch k {
-		case "$schema", "type", "enum", "const":
+		case "$schema", "type", "enum", "const", "default":
+		case "title", "description":
+			if _, ok := m[k].(string); !ok {
+				return false
+			}
+		case "examples":
+			if _, ok := m[k].([]any); !ok {
+				return false
+			}
 		case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
 			if typ != "object" {
 				return false
@@ -111,7 +119,7 @@ func schema(v any, root bool) bool {
 			if typ != "string" {
 				return false
 			}
-		case "minimum", "maximum":
+		case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
 			if typ != "integer" {
 				return false
 			}
@@ -186,6 +194,9 @@ func schema(v any, root bool) bool {
 			return false
 		}
 	case "integer":
+		if !numericShape(m) {
+			return false
+		}
 		if !bound(m, "minimum", -9007199254740991, 9007199254740991) || !bound(m, "maximum", -9007199254740991, 9007199254740991) || !ordered(m, "minimum", "maximum") {
 			return false
 		}
@@ -196,27 +207,6 @@ func schema(v any, root bool) bool {
 	return true
 }
 
-// key canonicalizes without HTML escaping, keeping bounded canonical values below
-// the canonicalizer's input cap even when U+2028 or U+2029 are escaped.
-func key(v any) (string, error) {
-	var b bytes.Buffer
-	e := json.NewEncoder(&b)
-	e.SetEscapeHTML(false)
-	if err := e.Encode(v); err != nil {
-		return "", err
-	}
-	c, err := canonicaljson.Canonicalize(b.Bytes())
-	return string(c), err
-}
-func within(m map[string]any, min, max string, n int64) bool {
-	if x, ok := number(m[min]); ok && n < x {
-		return false
-	}
-	if x, ok := number(m[max]); ok && n > x {
-		return false
-	}
-	return true
-}
 func matches(m map[string]any, v any) bool {
 	if c, ok := m["const"]; ok {
 		ck, err := key(c)
@@ -248,7 +238,14 @@ func matches(m map[string]any, v any) bool {
 			return false
 		}
 	}
-	switch m["type"] {
+	typ, nullable, ok := schemaType(m["type"])
+	if !ok {
+		return false
+	}
+	if v == nil && nullable {
+		return true
+	}
+	switch typ {
 	case "object":
 		o, ok := v.(map[string]any)
 		if !ok || !within(m, "minProperties", "maxProperties", int64(len(o))) {
@@ -289,7 +286,7 @@ func matches(m map[string]any, v any) bool {
 		return ok && within(m, "minLength", "maxLength", int64(utf8.RuneCountInString(s)))
 	case "integer":
 		n, ok := number(v)
-		return ok && within(m, "minimum", "maximum", n)
+		return ok && within(m, "minimum", "maximum", n) && numericMatches(m, n)
 	case "boolean":
 		_, ok := v.(bool)
 		return ok

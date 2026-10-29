@@ -10,10 +10,9 @@ const root = `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
 
 func TestSchemaRejections(t *testing.T) {
 	cases := []string{
-		`true`, `{}`, `{"$schema":[],"type":"null"}`, root + `"type":["string","null"],"maxLength":5}`,
+		`true`, `{}`, `{"$schema":[],"type":"null"}`, root + `"type":["string"],"maxLength":5}`,
 		root + `"type":"object","properties":{},"required":[],"additionalProperties":[]}`,
 		root + `"type":"string","maxLength":5,"pattern":"x"}`,
-		root + `"type":"integer","multipleOf":2}`,
 		root + `"type":"integer","minimum":false}`,
 		root + `"type":"integer","minimum":3,"maximum":2}`,
 		root + `"type":"string","maxLength":0}`,
@@ -26,7 +25,6 @@ func TestSchemaRejections(t *testing.T) {
 		root + `"type":"array","items":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null"},"maxItems":1}`,
 		root + `"type":"integer","enum":[1,1]}`,
 		root + `"type":"integer","enum":null}`,
-		root + `"type":"integer","title":"ignored"}`,
 		root + `"type":"integer","type":"boolean"}`,
 		root + `"type":"integer","minimum":1.0}`,
 	}
