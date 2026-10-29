@@ -345,3 +345,64 @@ func TestPinnedSchemaSizeBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestPinnedLargeFiniteValues(t *testing.T) {
+	text := strings.Repeat("x", 3000) + "<>&\u2028\u2029"
+	quoted := `"` + text + `"`
+	value := `{"a":[` + quoted + `,` + quoted + `],"b":true}`
+	alternate := `{"b":true,"a":["` + strings.Repeat("x", 3000) + `\u003c\u003e\u0026\u2028\u2029",` + quoted + `]}`
+	other := strings.Replace(value, `"b":true`, `"b":false`, 1)
+	shape := `"additionalProperties":false,"properties":{"a":{"items":{"maxLength":4096,"type":"string"},"maxItems":2,"type":"array"},"b":{"type":"boolean"}},"required":["a","b"],"type":"object"`
+	prefix := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, finite := range []string{`"enum":[` + value + `],`, `"const":` + value + `,`, `"const":` + value + `,"enum":[` + other + `,` + value + `],`} {
+		canonical := prefix + `"additionalProperties":false,` + finite + strings.TrimPrefix(shape, `"additionalProperties":false,`) + `}`
+		rawSchema := strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`, "\u2028", `\u2028`, "\u2029", `\u2029`).Replace(canonical)
+		h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+		digest := hex.EncodeToString(h[:])
+		for _, schema := range []string{canonical, rawSchema} {
+			if err := ValidateSchemaDocument([]byte(schema), "x", digest); err != nil {
+				t.Errorf("large finite schema: %v", err)
+			}
+		}
+		for _, tc := range []struct {
+			input string
+			limit int
+			want  error
+		}{
+			{value, MaxDesired, nil}, {alternate, MaxDesired, nil}, {other, MaxDesired, ErrInvalid},
+			{value, len(value) - 1, ErrInvalid},
+		} {
+			if err := ValidatePinnedValue([]byte(canonical), "x", digest, "t", "k", "t", "k", "x", []byte(tc.input), tc.limit); err != tc.want {
+				t.Errorf("large finite value: got %v, want %v", err, tc.want)
+			}
+		}
+		changed := strings.Replace(canonical, `"b":true`, `"b":false`, 1)
+		if err := ValidatePinnedValue([]byte(changed), "x", digest, "t", "k", "t", "k", "x", []byte(value), MaxDesired); err != ErrSchema {
+			t.Errorf("stale finite pin: %v", err)
+		}
+	}
+	duplicate := prefix + shape + `,"enum":[` + value + `,` + alternate + `]}`
+	if _, err := CanonicalSchemaDocument([]byte(duplicate)); err != ErrSchema {
+		t.Errorf("duplicate large values: %v", err)
+	}
+	oversized := prefix + `"const":"` + strings.Repeat("x", 65536) + `","type":"boolean"}`
+	if _, err := CanonicalSchemaDocument([]byte(oversized)); err != ErrSchema {
+		t.Errorf("oversized finite schema: %v", err)
+	}
+	tooMany := prefix + `"const":[` + strings.TrimSuffix(strings.Repeat("0,", 257), ",") + `],"type":"boolean"}`
+	if _, err := CanonicalSchemaDocument([]byte(tooMany)); err != ErrSchema {
+		t.Errorf("oversized finite array: %v", err)
+	}
+	tooManyEnum := prefix + `"enum":[` + strings.TrimSuffix(strings.Repeat("0,", 257), ",") + `],"type":"boolean"}`
+	if _, err := CanonicalSchemaDocument([]byte(tooManyEnum)); err != ErrSchema {
+		t.Errorf("oversized enum: %v", err)
+	}
+	deep := prefix + `"const":` + strings.Repeat("[", MaxDepth) + `0` + strings.Repeat("]", MaxDepth) + `,"type":"boolean"}`
+	if _, err := CanonicalSchemaDocument([]byte(deep)); err != ErrSchema {
+		t.Errorf("over-depth finite value: %v", err)
+	}
+	rawOversized := prefix + `"const":true,"type":"boolean"}` + strings.Repeat(" ", 262144)
+	if _, err := CanonicalSchemaDocument([]byte(rawOversized)); err != ErrSchema {
+		t.Errorf("oversized raw finite schema: %v", err)
+	}
+}

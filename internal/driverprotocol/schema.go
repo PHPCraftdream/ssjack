@@ -214,7 +214,7 @@ func validSchemaConstraints(m map[string]any, typ string) bool {
 			return false
 		}
 	}
-	return orderedBounds(m) && validSchemaEnum(m) && validSchemaConst(m)
+	return orderedBounds(m) && validSchemaEnum(m)
 }
 func keywordBounds(key string) (int64, int64) {
 	switch key {
@@ -253,9 +253,6 @@ func validSchemaEnum(m map[string]any) bool {
 		return false
 	}
 	for i, x := range a {
-		if !bounded(x, 4096) {
-			return false
-		}
 		for _, y := range a[:i] {
 			if jsonEqual(x, y) {
 				return false
@@ -263,10 +260,6 @@ func validSchemaEnum(m map[string]any) bool {
 		}
 	}
 	return true
-}
-func validSchemaConst(m map[string]any) bool {
-	x, exists := m["const"]
-	return !exists || bounded(x, 4096)
 }
 func matchesEnum(m map[string]any, v any) bool {
 	values, ok := m["enum"].([]any)
