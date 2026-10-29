@@ -154,7 +154,7 @@ func schema(v any, root bool) bool {
 		if _, exists := m["required"]; !exists && len(p) == 0 {
 			r, ok = nil, true
 		}
-		if !ok || len(r) != len(p) {
+		if !ok {
 			return false
 		}
 		seen := map[string]bool{}
@@ -163,13 +163,10 @@ func schema(v any, root bool) bool {
 			if !ok || seen[k] {
 				return false
 			}
-			if _, ok = p[k]; !ok {
-				return false
-			}
 			seen[k] = true
 		}
-		for _, v := range p {
-			if !schema(v, false) {
+		for k, v := range p {
+			if !seen[k] || !schema(v, false) {
 				return false
 			}
 		}

@@ -136,6 +136,13 @@ func matches(m map[string]any, v any) bool {
 			return false
 		}
 		p, _ := properties(m)
+		if required, ok := m["required"].([]any); ok {
+			for _, name := range required {
+				if _, exists := o[name.(string)]; !exists {
+					return false
+				}
+			}
+		}
 		if len(o) != len(p) {
 			return false
 		}

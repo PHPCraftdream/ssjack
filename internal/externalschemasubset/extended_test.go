@@ -175,7 +175,6 @@ func TestOmittedEmptyObjectKeywords(t *testing.T) {
 		`"type":"object"`,
 		`"type":"object","properties":null,"additionalProperties":false`,
 		`"type":"object","required":null,"additionalProperties":false`,
-		`"type":"object","required":["x"],"additionalProperties":false`,
 		`"type":"object","properties":{"x":{"type":"null"}},"additionalProperties":false`,
 		`"type":"object","additionalProperties":true`,
 	} {

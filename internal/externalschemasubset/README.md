@@ -45,7 +45,7 @@ is canonical JSON equality, including for `uniqueItems`.
 
 | Type | Mandatory shape | Other supported keywords |
 | --- | --- | --- |
-| object | `additionalProperties:false`; `properties` and `required` may be omitted only as empty equivalents, otherwise `required` contains each property name exactly once and no others; every property value is a nested schema | `minProperties`, `maxProperties`: integers 0–128 |
+| object | `additionalProperties:false`; `properties` and `required` may be omitted only as empty equivalents; `required` contains every declared property name and may contain extra names, without duplicates; every property value is a nested schema | `minProperties`, `maxProperties`: integers 0–128 |
 | array | `items` is one nested schema; `maxItems` is an integer 0–256 | `minItems`: integer 0–256; `uniqueItems`: boolean |
 | string | `maxLength` is an integer 1–4096 | `minLength`: integer 0–4096 |
 | integer | none beyond `type` | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`: safe integers; `multipleOf`: positive safe integer |
