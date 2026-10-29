@@ -207,3 +207,53 @@ func TestInnerTagAndHeaderBinding(t *testing.T) {
 	clear(validTags)
 	clear(sealed)
 }
+
+func snapshotWire(t *testing.T, m *Master, h appstoreheader.Header, badCatalog, badTranscript bool) ([]byte, ExpectedSnapshot) {
+	t.Helper()
+	if h.PlaintextSize() != 1048579 || h.ChunkCount() != 2 {
+		t.Fatal("snapshot fixture expects catalog plus three bytes")
+	}
+	catalog := make([]byte, 1048576)
+	defer clear(catalog)
+	copy(catalog[:8], "SSCAT001")
+	store, snapshot := h.StoreID(), h.SnapshotID()
+	copy(catalog[8:24], store[:])
+	copy(catalog[24:40], snapshot[:])
+	binary.BigEndian.PutUint32(catalog[40:44], 1)
+	copy(catalog[44:60], bytes.Repeat([]byte{3}, 16))
+	copy(catalog[60:76], bytes.Repeat([]byte{4}, 16))
+	binary.BigEndian.PutUint64(catalog[76:84], 3)
+	copy(catalog[92:108], "bin")
+	if badCatalog {
+		binary.BigEndian.PutUint64(catalog[76:84], 4)
+	}
+	header := h.Bytes()
+	wire := append([]byte(nil), header[:]...)
+	for index, plain := range [][]byte{catalog, []byte("abc")} {
+		ciphertext, err := m.sealRecord(context.Background(), h, uint32(index), false, plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = binary.BigEndian.AppendUint32(wire, uint32(index))
+		wire = binary.BigEndian.AppendUint32(wire, uint32(len(plain)))
+		wire = binary.BigEndian.AppendUint32(wire, uint32(len(ciphertext)))
+		wire = append(wire, ciphertext...)
+		clear(ciphertext)
+	}
+	transcript := sha256.Sum256(wire[220:])
+	final := finalRecord(h)
+	copy(final[16:48], transcript[:])
+	if badTranscript {
+		final[16] ^= 1
+	}
+	ciphertext, err := m.sealRecord(context.Background(), h, ^uint32(0), true, final)
+	clear(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire = append(wire, "FIN1"...)
+	wire = binary.BigEndian.AppendUint64(wire, 16048)
+	wire = append(wire, ciphertext...)
+	clear(ciphertext)
+	return wire, ExpectedSnapshot{StoreID: store, SnapshotID: snapshot, EncodedHash: sha256.Sum256(wire)}
+}
