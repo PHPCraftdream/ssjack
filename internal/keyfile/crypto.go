@@ -2,6 +2,7 @@ package keyfile
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"runtime"
 
+	"github.com/PHPCraftdream/ssjack/internal/kdfgate"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
@@ -27,6 +29,11 @@ func masterKey(password []byte, salts [][]byte, derive deriveFunc) ([]byte, erro
 	if len(password) == 0 || len(password) > 16*1024 {
 		return nil, errors.New("passphrase must contain 1 to 16384 bytes")
 	}
+	release, err := kdfgate.Acquire(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	combined := make([]byte, 0, 4*32)
 	defer func() { clear(combined) }()
 	for _, salt := range salts {

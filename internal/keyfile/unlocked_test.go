@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/PHPCraftdream/ssjack/internal/kdfgate"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -125,5 +126,39 @@ func TestUnlockedGenerationReusesHeavyMasterAndBindsIdentity(t *testing.T) {
 	u.Close()
 	if _, _, err := u.GenerateIdentity(); err == nil {
 		t.Fatal("closed context generated a private key")
+	}
+}
+
+func TestMasterKeyHoldsProcessKDFAdmission(t *testing.T) {
+	salts := make([][]byte, 4)
+	for i := range salts {
+		salts[i] = bytes.Repeat([]byte{byte(i + 1)}, 32)
+	}
+	for _, invalid := range []bool{false, true} {
+		calls := 0
+		master, err := masterKey([]byte("synthetic shared-admission test"), salts, func(password, salt []byte) []byte {
+			calls++
+			if release, admitted := kdfgate.TryAcquire(); admitted {
+				release()
+				t.Error("derive ran outside process-wide admission")
+			}
+			if invalid {
+				return make([]byte, 31)
+			}
+			return testDerive(password, salt)
+		})
+		clear(master)
+		if invalid {
+			if err == nil || calls != 1 {
+				t.Fatal("invalid KDF output did not stop the batch")
+			}
+		} else if err != nil || calls != 4 {
+			t.Fatalf("four independent derivations changed: %d %v", calls, err)
+		}
+		release, admitted := kdfgate.TryAcquire()
+		if !admitted {
+			t.Fatal("master derivation leaked admission after return")
+		}
+		release()
 	}
 }
