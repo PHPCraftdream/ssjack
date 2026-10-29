@@ -97,11 +97,36 @@ func validateSchema(v any, root bool, depth int) error {
 	if !ok || !validSchemaKeys(m, root) || !validSchemaRoot(m, root) {
 		return ErrSchema
 	}
+	if _, present := m["type"]; !present {
+		typ := ""
+		if hasObjectSchemaKeyword(m) {
+			typ = "object"
+			if !validSchemaShape(m, typ, depth) {
+				return ErrSchema
+			}
+		} else if _, enum := m["enum"]; !enum {
+			if _, constant := m["const"]; !constant {
+				return ErrSchema
+			}
+		}
+		if !validSchemaConstraints(m, typ) {
+			return ErrSchema
+		}
+		return nil
+	}
 	typ, _, ok := schemaType(m["type"])
 	if !ok || !validSchemaShape(m, typ, depth) || !validSchemaConstraints(m, typ) {
 		return ErrSchema
 	}
 	return nil
+}
+func hasObjectSchemaKeyword(m map[string]any) bool {
+	for _, key := range []string{"properties", "required", "additionalProperties", "minProperties", "maxProperties"} {
+		if _, ok := m[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 func schemaType(v any) (string, bool, bool) {
 	if typ, ok := stringValue(v); ok {
@@ -188,7 +213,8 @@ func requiredKeys(required []any, properties map[string]any) bool {
 }
 func validSchemaConstraints(m map[string]any, typ string) bool {
 	for key, value := range m {
-		if !applicableSchemaKeyword(key, typ) {
+		_, hasType := m["type"]
+		if !(key == "$schema" && !hasType) && !applicableSchemaKeyword(key, typ) {
 			return false
 		}
 		switch key {

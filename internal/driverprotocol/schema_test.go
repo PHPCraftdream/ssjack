@@ -56,7 +56,7 @@ func TestPinnedPropertyCountsMalformed(t *testing.T) {
 				t.Errorf("%s=%s: %v", key, value, err)
 			}
 		}
-		for _, body := range []string{`"type":"boolean"`, `"type":["null","string"],"maxLength":1`, `"type":"array","maxItems":0`, `"type":"integer"`, `"type":"null"`, `"properties":{},"required":[],"additionalProperties":false`, `"type":"object","required":[],"additionalProperties":false`, `"type":"object","properties":{"a":{"type":"null"}},"required":[],"additionalProperties":false`} {
+		for _, body := range []string{`"type":"boolean"`, `"type":["null","string"],"maxLength":1`, `"type":"array","maxItems":0`, `"type":"integer"`, `"type":"null"`, `"properties":{},"additionalProperties":false`, `"type":"object","required":[],"additionalProperties":false`, `"type":"object","properties":{"a":{"type":"null"}},"required":[],"additionalProperties":false`} {
 			if _, err := CanonicalSchemaDocument([]byte(root + body + `,"` + key + `":0}`)); err != ErrSchema {
 				t.Errorf("%s on %s: %v", key, body, err)
 			}

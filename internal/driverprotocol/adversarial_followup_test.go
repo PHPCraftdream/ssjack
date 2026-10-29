@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
 
 func TestRequestedStructuralAdversaries(t *testing.T) {
@@ -404,5 +406,145 @@ func TestPinnedLargeFiniteValues(t *testing.T) {
 	rawOversized := prefix + `"const":true,"type":"boolean"}` + strings.Repeat(" ", 262144)
 	if _, err := CanonicalSchemaDocument([]byte(rawOversized)); err != ErrSchema {
 		t.Errorf("oversized raw finite schema: %v", err)
+	}
+}
+
+func TestPinnedTypelessIndependent(t *testing.T) {
+	cases := []struct {
+		name, canonical string
+		accept, reject  []string
+	}{
+		{"enum", `{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":[null,true,1,"x",[1,2],{"a":["x",null],"b":true}]}`, []string{`null`, `true`, `1`, `"\u0078"`, `[1,2]`, `{"b":true,"a":["\u0078",null]}`}, []string{`false`, `"1"`, `[2,1]`, `{"a":["y",null],"b":true}`, `{"a":["x",null],"b":true,"c":0}`}},
+		{"const null", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":null}`, []string{`null`}, []string{`false`, `{}`, `[]`}},
+		{"enum array", `{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":[[1,{"a":2,"b":3}],[4]]}`, []string{`[1,{"b":3,"a":2}]`, `[4]`}, []string{`[1,{"a":2,"b":4}]`, `[1]`, `[]`}},
+		{"const array", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":[[1,2],{"a":[true,null]}]}`, []string{`[[1,2],{"a":[true,null]}]`}, []string{`[[2,1],{"a":[true,null]}]`, `[[1,2],{"a":[null,true]}]`}},
+		{"const object", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":{"a":[1,"x"],"b":true}}`, []string{`{"b":true,"a":[1,"\u0078"]}`}, []string{`{"a":["x",1],"b":true}`, `{"a":[1,"x"],"b":1}`, `{"a":[1,"x"]}`}},
+		{"intersection", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":1,"enum":[null,1,2]}`, []string{`1`}, []string{`null`, `2`, `true`}},
+		{"disjoint", `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":1,"enum":[null,2]}`, nil, []string{`1`, `2`, `null`}},
+		{"closed empty", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{},"required":[]}`, []string{`{}`, `null`, `[]`}, []string{`{"a":1}`}},
+		{"closed", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"maxProperties":1,"minProperties":1,"properties":{"a":{"const":true}},"required":["a"]}`, []string{`null`, `false`, `1`, `"x"`, `[]`, `{"a":true}`}, []string{`{}`, `{"a":false}`, `{"a":true,"b":0}`}},
+		{"reversed properties", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"maxProperties":0,"minProperties":2,"properties":{"a":{"const":true}},"required":["a"]}`, []string{`null`, `[]`}, []string{`{"a":true}`}},
+		{"closed enum", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"enum":[null,{"a":true},{"a":false}],"properties":{"a":{"const":true}},"required":["a"]}`, []string{`null`, `{"a":true}`}, []string{`false`, `{"a":false}`, `{}`}},
+		{"closed const", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"const":{"a":true},"properties":{"a":{"enum":[true]}},"required":["a"]}`, []string{`{"a":true}`}, []string{`null`, `{"a":false}`, `{}`}},
+		{"nested", `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"v":{"items":{"additionalProperties":false,"properties":{"x":{"description":"inner","enum":[null,1]}},"required":["x"]},"maxItems":2,"type":"array"}},"required":["v"],"title":"root","type":["null","object"]}`, []string{`null`, `{"v":[null,{"x":1}]}`, `{"v":[false,{"x":null}]}`}, []string{`{"v":[{}]}`, `{"v":[{"x":2}]}`, `{"v":[{"x":1,"y":0}]}`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + tc.canonical))
+			d := hex.EncodeToString(h[:])
+			b := []byte(tc.canonical)
+			if err := ValidateSchemaDocument(b, "x", d); err != nil {
+				t.Fatalf("schema: %v", err)
+			}
+			for _, group := range []struct {
+				values []string
+				want   error
+			}{{tc.accept, nil}, {tc.reject, ErrInvalid}} {
+				for _, value := range group.values {
+					if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(value), MaxDesired); err != group.want {
+						t.Errorf("%s: got %v want %v", value, err, group.want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPinnedTypelessInvalidIndependent(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, body := range []string{
+		`"title":"only"`, `"enum":[]`, `"enum":[1,1]`, `"enum":null`, `"enum":{}`,
+		`"const":[` + strings.TrimSuffix(strings.Repeat("0,", 257), ",") + `]`,
+		`"const":` + strings.Repeat("[", MaxDepth) + `0` + strings.Repeat("]", MaxDepth),
+		`"additionalProperties":true,"properties":{},"required":[]`,
+		`"properties":{"a":{"const":1}}`,
+		`"patternProperties":{}`,
+		`"additionalProperties":false,"properties":{"a":{}},"required":["a"]`,
+		`"additionalProperties":false,"maxProperties":"1","properties":{},"required":[]`,
+		`"additionalProperties":false,"minProperties":-1,"properties":{},"required":[]`,
+		`"additionalProperties":false,"maxProperties":129,"properties":{},"required":[]`,
+		`"additionalProperties":true,"const":1,"properties":{},"required":[]`,
+		`"additionalProperties":false,"const":1,"required":[]`,
+		`"additionalProperties":false,"const":1,"properties":{}`,
+		`"additionalProperties":false,"enum":[1],"properties":{"a":{"const":1}},"required":[]`,
+		`"additionalProperties":false,"const":1,"properties":{},"required":["a"]`,
+		`"additionalProperties":false,"const":1,"properties":{"a":{"const":1}},"required":["a","a"]`,
+		`"const":1,"patternProperties":{}`,
+		`"const":1,"items":{"type":"null"}`, `"const":1,"maxItems":0`, `"const":1,"minItems":0`, `"const":1,"uniqueItems":true`,
+		`"const":1,"maxLength":1`, `"const":1,"minLength":0`, `"const":1,"minimum":0`, `"const":1,"maximum":2`,
+		`"const":1,"exclusiveMinimum":0`, `"const":1,"exclusiveMaximum":2`, `"const":1,"multipleOf":1`,
+		`"const":1,"type":null`, `"const":1,"type":"number"`, `"const":1,"type":[]`, `"const":1,"type":["null"]`, `"const":1,"type":["null","number"]`,
+		`"const":1,"title":null`, `"const":1,"description":false`, `"const":1,"examples":{}`,
+		`"additionalProperties":false,"properties":{"x":{"const":1,"examples":null}},"required":["x"]`,
+		`"additionalProperties":false,"properties":{"x":{"$schema":"https://json-schema.org/draft/2020-12/schema","const":1}},"required":["x"]`,
+	} {
+		canonical := root + body + `}`
+		if !strings.HasPrefix(body, `"const":[`) {
+			got, err := canonicaljson.Canonicalize([]byte(canonical))
+			if err != nil || string(got) != canonical {
+				t.Fatalf("canonicalization %s: %q, %v", body, got, err)
+			}
+		}
+		h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+		d := hex.EncodeToString(h[:])
+		if err := ValidateSchemaDocument([]byte(canonical), "x", d); err != ErrSchema {
+			t.Errorf("schema %s: %v", body, err)
+		}
+		if err := ValidatePinnedValue([]byte(canonical), "x", d, "t", "k", "t", "k", "x", []byte(`1`), MaxDesired); err != ErrSchema {
+			t.Errorf("value %s: %v", body, err)
+		}
+	}
+}
+
+func TestPinnedTypelessDialectNegatives(t *testing.T) {
+	for _, tc := range []struct {
+		raw, canonical string
+	}{
+		{`{"$schema":"https://json-schema.org/draft/2020-12/schema"}`, `{"$schema":"https://json-schema.org/draft/2020-12/schema"}`},
+		{`{"const":1}`, `{"const":1}`},
+		{`{"$schema":"wrong","const":1}`, `{"$schema":"wrong","const":1}`},
+		{`{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":[{"b":2,"a":1},{"a":1,"b":2}]}`, `{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":[{"a":1,"b":2},{"a":1,"b":2}]}`},
+	} {
+		got, err := canonicaljson.Canonicalize([]byte(tc.raw))
+		if err != nil || string(got) != tc.canonical {
+			t.Fatalf("canonicalization %s: %q, %v", tc.raw, got, err)
+		}
+		h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + tc.canonical))
+		d := hex.EncodeToString(h[:])
+		if err := ValidateSchemaDocument([]byte(tc.raw), "x", d); err != ErrSchema {
+			t.Errorf("schema %s: %v", tc.raw, err)
+		}
+		if err := ValidatePinnedValue([]byte(tc.raw), "x", d, "t", "k", "t", "k", "x", []byte(`1`), MaxDesired); err != ErrSchema {
+			t.Errorf("value %s: %v", tc.raw, err)
+		}
+	}
+}
+
+func TestPinnedTypelessIdentityAndCaps(t *testing.T) {
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":"abc"}`
+	h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	d := hex.EncodeToString(h[:])
+	b := []byte(canonical)
+	for _, tc := range []struct {
+		schema, digest, target, kind, id string
+	}{
+		{strings.Replace(canonical, `"abc"`, `"abd"`, 1), d, "t", "k", "x"},
+		{canonical, strings.Repeat("0", 64), "t", "k", "x"},
+		{canonical, d, "other", "k", "x"}, {canonical, d, "t", "other", "x"}, {canonical, d, "t", "k", "other"},
+	} {
+		if err := ValidatePinnedValue([]byte(tc.schema), "x", tc.digest, "t", "k", tc.target, tc.kind, tc.id, []byte(`"abc"`), 5); err != ErrSchema {
+			t.Errorf("identity or pin: %v", err)
+		}
+	}
+	if err := ValidateSchemaDocument([]byte(strings.Replace(canonical, `"abc"`, `"abd"`, 1)), "x", d); err != ErrSchema {
+		t.Errorf("stale schema: %v", err)
+	}
+	for _, tc := range []struct {
+		cap  int
+		want error
+	}{{5, nil}, {4, ErrInvalid}} {
+		if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(`"abc"`), tc.cap); err != tc.want {
+			t.Errorf("cap %d: %v", tc.cap, err)
+		}
 	}
 }

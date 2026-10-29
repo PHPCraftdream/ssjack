@@ -249,9 +249,21 @@ func matches(s, v any, d int) bool {
 	if x, ok := m["const"]; ok && !jsonEqual(x, v) {
 		return false
 	}
-	typ, nullable, ok := schemaType(m["type"])
-	if !ok {
-		return false
+	typ := ""
+	nullable := false
+	if t, present := m["type"]; present {
+		typ, nullable, ok = schemaType(t)
+		if !ok {
+			return false
+		}
+	} else {
+		if !hasObjectSchemaKeyword(m) {
+			return true
+		}
+		if _, ok := object(v); !ok {
+			return true
+		}
+		typ = "object"
 	}
 	if nullable && v == nil {
 		return true
