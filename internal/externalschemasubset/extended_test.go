@@ -29,7 +29,7 @@ func TestTypelessEnum(t *testing.T) {
 	for _, x := range []string{
 		`"enum":[]`, `"enum":[1,1]`, `"enum":[1],"type":null`,
 		`"enum":[1],"type":""`, `"enum":[1],"minimum":0`,
-		`"enum":[1],"$ref":"x"`, `"const":1`,
+		`"enum":[1],"$ref":"x"`,
 		`"enum":[1],"examples":{}`, `"enum":[1],"properties":{}`,
 	} {
 		if err := ValidateSchema([]byte(root + x + `}`)); !errors.Is(err, ErrSchema) {
@@ -46,6 +46,63 @@ func TestTypelessEnum(t *testing.T) {
 		err := Validate([]byte(schema), []byte(tc.value), 65536)
 		if (err == nil) != tc.valid {
 			t.Errorf("root enum %s: %v", tc.value, err)
+		}
+	}
+}
+
+func TestTypelessConst(t *testing.T) {
+	for _, tc := range []struct {
+		constant, equal, different string
+	}{
+		{`null`, `null`, `false`},
+		{`false`, `false`, `0`},
+		{`1`, `1`, `true`},
+		{`"x"`, `"\u0078"`, `"y"`},
+		{`[1,2]`, `[1,2]`, `[2,1]`},
+		{`{"a":1,"b":[null]}`, `{"b":[null],"a":1}`, `{"a":1,"b":[]}`},
+	} {
+		s := root + `"const":` + tc.constant + `,"title":"t","default":null,"examples":[]}`
+		if err := ValidateSchema([]byte(s)); err != nil {
+			t.Errorf("const %s: %v", tc.constant, err)
+		}
+		if err := Validate([]byte(s), []byte(tc.equal), 65536); err != nil {
+			t.Errorf("equal %s: %v", tc.equal, err)
+		}
+		if err := Validate([]byte(s), []byte(tc.different), 65536); !errors.Is(err, ErrValue) {
+			t.Errorf("different %s: %v", tc.different, err)
+		}
+	}
+	for _, x := range []string{
+		`"const":null,"type":null`, `"const":1,"type":""`,
+		`"const":1,"type":"unknown"`, `"const":1,"minimum":0`,
+		`"const":[],"items":{"type":"null"}`, `"const":{},"properties":{}`,
+		`"const":1,"$ref":"x"`, `"const":1,"allOf":[]`,
+		`"const":1,"examples":{}`, `"const":1,"enum":[]`,
+		`"const":1.0`, `"const":{"x":1,"x":1}`,
+	} {
+		s := root + x + `}`
+		if !errors.Is(ValidateSchema([]byte(s)), ErrSchema) || !errors.Is(Validate([]byte(s), []byte(`1`), 100), ErrSchema) {
+			t.Errorf("accepted schema %s", s)
+		}
+	}
+	s := root + `"type":"array","items":{"const":{"x":null}},"maxItems":1}`
+	if err := Validate([]byte(s), []byte(`[{"x":null}]`), 100); err != nil {
+		t.Errorf("nested const: %v", err)
+	}
+	if !errors.Is(Validate([]byte(s), []byte(`[{"x":false}]`), 100), ErrValue) {
+		t.Error("nested mismatch accepted")
+	}
+	for _, tc := range []struct {
+		schema, value string
+		limit         int
+	}{
+		{root + `"const":1,"enum":[2]}`, `1`, 100},
+		{root + `"const":1}`, `1.0`, 100},
+		{root + `"const":1}`, `1`, 0},
+		{root + `"const":"abc"}`, `"abc"`, 4},
+	} {
+		if !errors.Is(Validate([]byte(tc.schema), []byte(tc.value), tc.limit), ErrValue) {
+			t.Errorf("accepted value %s for %s", tc.value, tc.schema)
 		}
 	}
 }

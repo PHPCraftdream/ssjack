@@ -6,10 +6,11 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
 
-func enumOnly(m map[string]any) bool {
+func valueOnly(m map[string]any) bool {
 	_, hasType := m["type"]
 	_, hasEnum := m["enum"]
-	return !hasType && hasEnum
+	_, hasConst := m["const"]
+	return !hasType && (hasEnum || hasConst)
 }
 
 func schemaType(v any) (string, bool, bool) {

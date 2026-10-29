@@ -10,7 +10,7 @@ digest binding. The proposed dialect is described in
 ## Schema shape and supported keywords
 
 Every schema, including each nested schema, must be a JSON object. It must have
-`type` unless it has a type-less `enum`. Supported types are
+`type` unless it has a type-less `enum` or `const`. Supported types are
 `object`, `array`, `string`, `integer`, `boolean`, or `null`, or a two-element
 array containing one non-null type and `null` in either order.
 The root must contain exactly
@@ -18,9 +18,9 @@ The root must contain exactly
 must not contain `$schema`. Boolean schemas are rejected.
 Unknown keywords and keywords used with the wrong type are rejected.
 
-A type-less enum may also have `const` and annotations, but no type-specific
-keywords. It matches any bounded JSON value in the enum that also satisfies
-`const`, if present. A malformed or unsupported explicit `type` is rejected.
+A type-less enum and/or const may have annotations, but no type-specific
+keywords. It matches any bounded JSON value satisfying each present constraint.
+A malformed or unsupported explicit `type` is rejected.
 
 All types may have `title` and `description` strings, `default` as any bounded
 JSON value, and `examples` as an array of bounded JSON values. These annotations
@@ -52,7 +52,7 @@ String length counts Unicode code points. A valid schema need not be satisfiable
 
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
-explicit `type` except for enum nodes, closed object shape, array `items`/`maxItems`, and string
+explicit `type` except for enum or const nodes, closed object shape, array `items`/`maxItems`, and string
 `maxLength`; these restrictions may reject documents permitted by the proposed
 dialect. It does not determine schema satisfiability.
 
