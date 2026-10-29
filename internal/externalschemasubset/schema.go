@@ -112,12 +112,8 @@ func schema(v any, root bool) bool {
 			if typ != "array" {
 				return false
 			}
-		case "minLength", "maxLength":
-			if typ != "string" {
-				return false
-			}
-		case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
-			if typ != "integer" {
+		case "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
+			if _, explicit := m["type"]; !explicit {
 				return false
 			}
 		default:
@@ -137,6 +133,11 @@ func schema(v any, root bool) bool {
 			}
 			seen[k] = true
 		}
+	}
+	if !bound(m, "minLength", 0, 4096) || !bound(m, "maxLength", 1, 4096) ||
+		!bound(m, "minimum", -9007199254740991, 9007199254740991) ||
+		!bound(m, "maximum", -9007199254740991, 9007199254740991) || !numericShape(m) {
+		return false
 	}
 	switch typ {
 	case "object":
@@ -189,16 +190,7 @@ func schema(v any, root bool) bool {
 		if _, ok := m["maxLength"]; !ok {
 			return false
 		}
-		if !bound(m, "minLength", 0, 4096) || !bound(m, "maxLength", 1, 4096) {
-			return false
-		}
 	case "integer":
-		if !numericShape(m) {
-			return false
-		}
-		if !bound(m, "minimum", -9007199254740991, 9007199254740991) || !bound(m, "maximum", -9007199254740991, 9007199254740991) {
-			return false
-		}
 	case "boolean", "null":
 	case "":
 		return valueOnly(m)

@@ -190,7 +190,7 @@ func TestExtendedShapes(t *testing.T) {
 		`"type":["null","null"]`, `"type":["integer","boolean"]`, `"type":["integer","null","boolean"]`, `"type":["null",1]`, `"type":[]`,
 		`"type":"integer","title":null`, `"type":"integer","description":3`, `"type":"integer","examples":{}`,
 		`"type":"integer","multipleOf":0`, `"type":"integer","multipleOf":-2`, `"type":"integer","multipleOf":true`, `"type":"integer","exclusiveMinimum":false`, `"type":"integer","exclusiveMaximum":1.0`,
-		`"type":"boolean","multipleOf":2`, `"type":["string","null"],"maxLength":4,"maximum":1`,
+		`"type":"boolean","multipleOf":0`, `"type":["string","null"],"maxLength":4,"maximum":false`,
 		`"type":["object","null"],"properties":{},"required":[],"additionalProperties":true`,
 	}
 	for _, x := range bad {
@@ -200,6 +200,52 @@ func TestExtendedShapes(t *testing.T) {
 		}
 		if !errors.Is(Validate([]byte(s), []byte(`null`), 100), ErrSchema) {
 			t.Errorf("Validate accepted schema %s", s)
+		}
+	}
+}
+
+func TestApplicableScalarKeywords(t *testing.T) {
+	cases := []struct {
+		shape, value string
+		valid        bool
+	}{
+		{`"type":"boolean","multipleOf":2,"maxLength":3`, `true`, true},
+		{`"type":"integer","minimum":2,"maxLength":3`, `1`, false},
+		{`"type":"integer","minimum":2,"maxLength":3`, `2`, true},
+		{`"type":["string","null"],"maxLength":2,"maximum":1,"enum":[null,"ab"]`, `null`, true},
+		{`"type":["string","null"],"maxLength":2,"maximum":1,"enum":[null,"ab","abc"]`, `"abc"`, false},
+		{`"type":"array","maxItems":1,"items":{"type":"integer","minLength":2,"multipleOf":2}`, `[2]`, true},
+		{`"type":"array","maxItems":1,"items":{"type":"integer","minLength":2,"multipleOf":2}`, `[3]`, false},
+		{`"type":"object","properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":false,"maxLength":2,"minimum":1`, `{"x":null}`, true},
+		{`"type":"object","properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":false,"maxLength":2,"minimum":1`, `{"x":null,"extra":true}`, false},
+		{`"type":"object","properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":false,"maxLength":2,"minimum":1`, `{}`, false},
+		{`"type":["string","null"],"maxLength":2,"minimum":1,"enum":["x"]`, `null`, false},
+		{`"type":"boolean","minimum":1`, `1`, false},
+	}
+	for _, tc := range cases {
+		s := []byte(root + tc.shape + `}`)
+		if err := ValidateSchema(s); err != nil {
+			t.Errorf("schema %s: %v", tc.shape, err)
+			continue
+		}
+		err := Validate(s, []byte(tc.value), 65536)
+		if tc.valid && err != nil || !tc.valid && !errors.Is(err, ErrValue) {
+			t.Errorf("schema %s value %s: %v", tc.shape, tc.value, err)
+		}
+	}
+	for _, shape := range []string{
+		`"type":"boolean","maxLength":0`, `"type":"null","minLength":4097`,
+		`"type":"boolean","minimum":false`, `"type":"boolean","multipleOf":0`,
+		`"type":"boolean","exclusiveMaximum":1.0`, `"type":"string","minimum":1`,
+		`"type":"boolean","items":{"type":"null"}`, `"type":"boolean","additionalProperties":false`,
+		`"type":"boolean","maximum":1,"$ref":"x"`,
+		`"type":"array","maxItems":1,"items":{"type":"boolean","multipleOf":0}`,
+		`"type":"object","properties":{"x":{"type":"boolean","multipleOf":0}},"required":["x"],"additionalProperties":false,"maxLength":2`,
+		`"type":"object","properties":{"x":{"type":"null","$ref":"x"}},"required":["x"],"additionalProperties":false,"minimum":1`,
+	} {
+		s := []byte(root + shape + `}`)
+		if !errors.Is(ValidateSchema(s), ErrSchema) || !errors.Is(Validate(s, []byte(`true`), 65536), ErrSchema) {
+			t.Errorf("invalid schema accepted: %s", shape)
 		}
 	}
 }

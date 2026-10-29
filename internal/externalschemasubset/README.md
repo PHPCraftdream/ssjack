@@ -16,10 +16,11 @@ array containing one non-null type and `null` in either order.
 The root must contain exactly
 `"$schema":"https://json-schema.org/draft/2020-12/schema"`; nested schemas
 must not contain `$schema`. Boolean schemas are rejected.
-Unknown keywords and keywords used with the wrong type are rejected by this
-subset. Full JSON Schema instead generally ignores type-specific assertions for
-instances of other types; whether the proposed external contract rejects
-mismatched keywords on explicitly typed schemas remains unresolved.
+Unknown keywords are rejected. On explicitly typed schemas only, string-length
+and integer assertions may accompany a different type; their values are always
+validated, but they constrain only instances of their applicable type. Object
+and array keywords still require their corresponding type or the permitted
+untyped closed object shape. Full proposed-contract treatment remains unresolved.
 
 A type-less enum and/or const without an object shape may have annotations, but no type-specific
 keywords. It matches only the exact finite bounded JSON values enumerated, or
