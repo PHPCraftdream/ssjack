@@ -13,7 +13,18 @@ Artifact maps contain 1–128 entries and dependency maps 0–128; keys are boun
 canonical JSON strings and values are lowercase digests. No Name grammar is imposed
 on map keys by the documented map type.
 
-This is descriptive, not an authorization or a complete plan validator. It does
+`ValidateAt(raw, now)` additionally checks one explicit clock observation after
+complete structural admission: `created_at < expires_at` and
+`created_at <= now < expires_at`. Creation is inclusive; expiration is exclusive,
+including sub-millisecond clock observations. A zero clock is rejected. Input is
+size-capped and copied before validation; every failure returns no digest. Success
+returns the same canonical plan digest as `Validate`. No lifetime cap is invented.
+There is no wall-clock lookup, trusted clock, rollback detector or automatic
+revalidation at a later action. The caller must supply a trustworthy observation
+and recheck at the actual gate; this result is not a freshness capability or
+permission to execute. Existing `Validate` remains clock-independent.
+
+`Validate` is descriptive, not an authorization or a complete plan validator. It does
 not authenticate enrollment or principal, resolve aliases, compare identity, schema,
 policy or digests to trusted enrollment, validate desired against its schema,
 evaluate effects or policy, verify timestamps against each other or a clock,
