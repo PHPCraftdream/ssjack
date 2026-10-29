@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
+	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/driverframe"
 	"github.com/PHPCraftdream/ssjack/internal/drivertext"
 )
@@ -63,7 +64,7 @@ func ValidatePinnedProjection(req StructuralRequest, data, schemaBytes []byte, r
 	if !ok {
 		return StructuralResponse{}, ErrInvalid
 	}
-	b, err := canonicalBytes(projection)
+	b, err := canonicalValueBytes(projection)
 	if err != nil {
 		return StructuralResponse{}, ErrInvalid
 	}
@@ -228,7 +229,15 @@ func hasSchemaSerializationSensitiveString(v any) bool {
 	}
 	return false
 }
-func bounded(v any, n int) bool { b, e := canonicalBytes(v); return e == nil && len(b) <= n }
+func canonicalValueBytes(v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return canonicaljson.Canonicalize(b)
+}
+
+func bounded(v any, n int) bool { b, e := canonicalValueBytes(v); return e == nil && len(b) <= n }
 func matches(s, v any, d int) bool {
 	if d > 16 {
 		return false

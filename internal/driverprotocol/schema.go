@@ -89,7 +89,7 @@ func ValidatePinnedRequest(data, sb []byte, id, digest, target, kind string) (St
 	if x == nil {
 		return StructuralRequest{}, ErrInvalid
 	}
-	b, err := canonicalBytes(x)
+	b, err := canonicalValueBytes(x)
 	if err != nil || r.target != target || r.kind != kind {
 		return StructuralRequest{}, ErrSchema
 	}

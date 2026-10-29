@@ -188,6 +188,76 @@ func TestPinnedDesiredProjectionByteBoundaries(t *testing.T) {
 	}
 }
 
+func TestCanonicalValueSpelling(t *testing.T) {
+	for _, raw := range []string{`{"<":"<&>\u2028\u2029\"\\"}`, `{"\u003c":"\u003c\u0026\u003e\u2028\u2029\u0022\u005c"}`} {
+		v, err := ParseJSON([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := canonicalValueBytes(v)
+		want := "{\"<\":\"<&>\u2028\u2029\\\"\\\\\"}"
+		if err != nil || string(b) != want {
+			t.Fatalf("canonical value %q: %v", b, err)
+		}
+		if !bounded(v, len(want)) || bounded(v, len(want)-1) {
+			t.Fatal("incorrect canonical bound")
+		}
+	}
+}
+
+func TestSensitiveValueByteBoundaries(t *testing.T) {
+	schema, digest := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"a":{"type":"string","maxLength":4096},"b":{"type":"string","maxLength":4096},"c":{"type":"string","maxLength":4096},"d":{"type":"string","maxLength":4096},"e":{"type":"string","maxLength":4096},"f":{"type":"string","maxLength":4096},"g":{"type":"string","maxLength":4096},"h":{"type":"string","maxLength":4096}},"required":["a","b","c","d","e","f","g","h"],"additionalProperties":false}`)
+	value := func(total int) string {
+		parts := make([]string, 8)
+		for i := range parts {
+			n := (total - 57) / 8
+			if i == 7 {
+				n += (total - 57) % 8
+			}
+			parts[i] = `"` + string(rune('a'+i)) + `":"<>&` + "\u2028\u2029" + strings.Repeat("x", n-9) + `"`
+		}
+		return `{` + strings.Join(parts, ",") + `}`
+	}
+	request := func(v string) []byte {
+		return []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","action":"plan","target":"target","kind":"kind","schema_id":"cache.desired","resource_id":"r","desired":` + v + `,"expected_revision":null,"plan_digest":null,"allowed_effects":[],"deadline_unix_ms":1,"max_response_bytes":65536,"operation_id":null}`)
+	}
+	observe := []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","action":"observe","target":"target","kind":"kind","schema_id":"cache.desired","resource_id":"r","desired":null,"expected_revision":null,"plan_digest":null,"allowed_effects":[],"deadline_unix_ms":1,"max_response_bytes":65536,"operation_id":null}`)
+	q, err := ValidateStructuralRequest(observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := func(v string) []byte {
+		return []byte(`{"protocol":1,"request_id":"AAAAAAAAAAAAAAAAAAAAAA","outcome":"ok","error_code":null,"data":{"state":"present","revision":null,"projection":` + v + `}}`)
+	}
+	for _, tc := range []struct {
+		limit      int
+		projection bool
+	}{{MaxDesired, false}, {MaxProjection, true}} {
+		for _, extra := range []int{0, 1} {
+			v := value(tc.limit + extra)
+			if len(v) != tc.limit+extra {
+				t.Fatalf("fixture size %d, want %d", len(v), tc.limit+extra)
+			}
+			if tc.projection {
+				_, err = ValidateStructuralResponse(q, response(v))
+				if (err == nil) != (extra == 0) {
+					t.Errorf("structural projection extra %d: %v", extra, err)
+				}
+				_, err = ValidatePinnedProjection(q, response(v), schema, "cache.desired", "cache.projection", digest, "target", "kind", "cache.projection")
+			} else {
+				_, err = ValidateStructuralRequest(request(v))
+				if (err == nil) != (extra == 0) {
+					t.Errorf("structural desired extra %d: %v", extra, err)
+				}
+				_, err = ValidatePinnedRequest(request(v), schema, "cache.desired", digest, "target", "kind")
+			}
+			if (err == nil) != (extra == 0) {
+				t.Errorf("pinned projection=%v extra %d: %v", tc.projection, extra, err)
+			}
+		}
+	}
+}
+
 func TestPinnedSchemaRejectsJSONSeparatorEscaping(t *testing.T) {
 	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{},"required":[],"additionalProperties":false,"const":`
 	baseline, baselineDigest := pinned(root + `{"x":"y"}}`)
