@@ -128,3 +128,124 @@ func TestKeysDoNotReplaceDurableCanonicalBinding(t *testing.T) {
 		t.Fatal("canonical-binding collision witness changed")
 	}
 }
+
+func intentFixture(t *testing.T) (appstoreanchorrequest.Request, []byte) {
+	t.Helper()
+	store := id(1)
+	g := genesisWire()
+	e := entry(t, 0, 3, 4)
+	reservation, err := appstoreanchorrequest.PlanReservation(state(t, g), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := hash(7)
+	commit, err := appstoreanchorrequest.PlanCommit(reservation, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eraw := binary.BigEndian.AppendUint64(nil, 0)
+	eraw = append(eraw, bytes.Repeat([]byte{3}, 16)...)
+	eraw = append(eraw, bytes.Repeat([]byte{4}, 16)...)
+	reserved := append([]byte(nil), g...)
+	head := sum("SSAPP-JOURNAL-ENTRY-v1", store[:], g[104:136], eraw)
+	binary.BigEndian.PutUint64(reserved[96:104], 1)
+	copy(reserved[104:136], head[:])
+	expected := sum("SSAPP-ANCHOR-STATE-v1", reserved)
+	next := append([]byte(nil), reserved...)
+	binary.BigEndian.PutUint64(next[24:32], 1)
+	copy(next[32:48], bytes.Repeat([]byte{3}, 16))
+	copy(next[48:80], candidate[:])
+	transaction := id(4)
+	copy(next[80:96], transaction[:])
+	key := sum("SSAPP-COMMIT-v1", store[:], transaction[:], candidate[:])
+	want := append([]byte("SSAPCMT1"), transaction[:]...)
+	want = append(want, expected[:]...)
+	want = append(want, next...)
+	want = append(want, key[:]...)
+	return commit, append(want, candidate[:]...)
+}
+
+func TestIntentIndependentBytesAndExactCASReconstruction(t *testing.T) {
+	commit, want := intentFixture(t)
+	intent, err := appstoreanchorrequest.NewIntent(commit)
+	if err != nil || !intent.Valid() || len(want) != 312 {
+		t.Fatalf("intent construction: %v", err)
+	}
+	b := intent.Bytes()
+	if !bytes.Equal(b[:], want) {
+		t.Fatal("independent intent wire mismatch")
+	}
+	parsed, err := appstoreanchorrequest.ParseIntent(want, id(1))
+	if err != nil || parsed != intent {
+		t.Fatalf("intent parse: %v", err)
+	}
+	replayed, ok := parsed.Request()
+	if !ok || replayed != commit || !bytes.Equal(replayed.Bytes(), commit.Bytes()) || replayed.RequestID() != commit.RequestID() {
+		t.Fatal("intent synthesized a different CAS")
+	}
+	clear(want)
+	b[0] = 0
+	if intent.Bytes()[0] != 'S' || parsed.Bytes()[0] != 'S' {
+		t.Fatal("intent aliases input or accessor")
+	}
+	var zero appstoreanchorrequest.Intent
+	r, ok := zero.Request()
+	if zero.Valid() || ok || r.Valid() {
+		t.Fatal("zero intent grants a request")
+	}
+}
+
+func TestIntentMalformedFieldsAndScope(t *testing.T) {
+	_, original := intentFixture(t)
+	for _, raw := range [][]byte{nil, original[:311], append(append([]byte(nil), original...), 0)} {
+		i, err := appstoreanchorrequest.ParseIntent(raw, id(1))
+		if !errors.Is(err, appstoreanchorrequest.ErrInvalid) || i != (appstoreanchorrequest.Intent{}) {
+			t.Fatal("invalid length exposed intent")
+		}
+	}
+	for _, scope := range [][16]byte{{}, id(2)} {
+		i, err := appstoreanchorrequest.ParseIntent(original, scope)
+		if !errors.Is(err, appstoreanchorrequest.ErrInvalid) || i != (appstoreanchorrequest.Intent{}) {
+			t.Fatal("wrong intent scope")
+		}
+	}
+	for name, mutate := range map[string]func([]byte){
+		"magic":             func(b []byte) { b[0] = 'X' },
+		"transaction":       func(b []byte) { b[8] ^= 1 },
+		"zero-transaction":  func(b []byte) { clear(b[8:24]) },
+		"zero-expected":     func(b []byte) { clear(b[24:56]) },
+		"same-state":        func(b []byte) { h := sum("SSAPP-ANCHOR-STATE-v1", b[56:248]); copy(b[24:56], h[:]) },
+		"state-magic":       func(b []byte) { b[56] = 'X' },
+		"state-reserved":    func(b []byte) { b[56+136] = 1 },
+		"key":               func(b []byte) { b[248] ^= 1 },
+		"candidate":         func(b []byte) { b[280] ^= 1 },
+		"zero-candidate":    func(b []byte) { clear(b[280:312]) },
+		"state-file":        func(b []byte) { b[56+48] ^= 1 },
+		"state-transaction": func(b []byte) { b[56+80] ^= 1 },
+		"genesis":           func(b []byte) { copy(b[56:248], genesisWire()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := append([]byte(nil), original...)
+			mutate(b)
+			i, err := appstoreanchorrequest.ParseIntent(b, id(1))
+			if !errors.Is(err, appstoreanchorrequest.ErrInvalid) || i != (appstoreanchorrequest.Intent{}) {
+				t.Fatalf("malformed intent exposed data: %v", err)
+			}
+		})
+	}
+}
+
+func TestIntentRejectsOtherRequestKinds(t *testing.T) {
+	read, _ := appstoreanchorrequest.NewRead(id(1), id(2))
+	create, _ := appstoreanchorrequest.NewCreate(id(1))
+	reserve, err := appstoreanchorrequest.PlanReservation(state(t, genesisWire()), entry(t, 0, 3, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []appstoreanchorrequest.Request{{}, read, create, reserve} {
+		i, err := appstoreanchorrequest.NewIntent(r)
+		if !errors.Is(err, appstoreanchorrequest.ErrInvalid) || i != (appstoreanchorrequest.Intent{}) {
+			t.Fatal("non-commit intent admitted")
+		}
+	}
+}
