@@ -30,7 +30,7 @@ def select(packages, changed):
         if owners:
             selected.update(owners)
             continue
-        if path.startswith("docs/") or path.endswith(".md"):
+        if path.endswith(".md"):
             continue
         directory = str(PurePosixPath(path).parent)
         if path.endswith(".go") and directory in by_dir:

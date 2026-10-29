@@ -57,6 +57,14 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.selected(), [])
         self.assertEqual(self.selected("docs/usage.md"), [])
 
+    def test_documentation_directory_does_not_hide_code(self):
+        self.graph.append({"directory": "docs/example", "import": "example.test/app/docs/example",
+                           "dependencies": []})
+        self.assertEqual(self.selected("docs/example/main.go"), ["./docs/example"])
+        result = plan.select(self.graph, ["docs/deleted/main.go"])
+        self.assertEqual(len(result["packages"]), len(self.graph))
+        self.assertTrue(result["reasons"])
+
     def test_embedded_subdirectory_selects_owner(self):
         self.graph[4]["inputs"] = ["internal/independent/assets/file.json",
                                    "internal/independent/assets/README.md"]
