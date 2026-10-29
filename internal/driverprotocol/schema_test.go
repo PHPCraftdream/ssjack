@@ -20,6 +20,80 @@ func pinned(schema string) ([]byte, string) {
 	h := sha256.Sum256(append(append([]byte("ssjack-schema-v1"), 0), c...))
 	return b, hex.EncodeToString(h[:])
 }
+func TestPinnedUniqueItems(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	cases := []struct {
+		name, schema   string
+		accept, reject []string
+	}{
+		{"strings", `"type":"array","items":{"type":"string","maxLength":4},"minItems":1,"maxItems":3,"uniqueItems":true`, []string{`["a","b"]`}, []string{`[]`, `["a","\u0061"]`, `["a","b","c","d"]`, `[1]`}},
+		{"false", `"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":false`, []string{`[1,1]`, `[]`}, []string{`[1,1,1]`, `[true]`}},
+		{"omitted", `"type":"array","items":{"type":"integer"},"maxItems":2`, []string{`[1,1]`}, []string{`[1,true]`}},
+		{"nullable", `"type":["null","array"],"items":{"type":["null","integer"]},"maxItems":3,"uniqueItems":true`, []string{`null`, `[]`, `[null,1]`}, []string{`[null,null]`, `[1,1]`, `[true,1]`}},
+		{"empty", `"type":"array","maxItems":0,"uniqueItems":true`, []string{`[]`}, []string{`[null]`, `null`}},
+		{"objects", `"type":"array","items":{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"string","maxLength":2}},"required":["a","b"],"additionalProperties":false},"maxItems":2,"uniqueItems":true`, []string{`[{"a":1,"b":"x"},{"a":2,"b":"x"}]`}, []string{`[{"a":1,"b":"x"},{"b":"\u0078","a":1}]`, `[{"a":1}]`}},
+		{"nested", `"type":"array","items":{"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true},"maxItems":2,"uniqueItems":true`, []string{`[[1,2],[2,1]]`, `[[],[1]]`}, []string{`[[1,2],[1,2]]`, `[[1,1]]`, `[[],[]]`}},
+		{"enum const", `"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true,"enum":[[1,2],[1,1]],"const":[1,2]`, []string{`[1,2]`}, []string{`[1,1]`, `[2,1]`}},
+		{"enum independent", `"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true,"enum":[[1,2],[1,1]]`, []string{`[1,2]`}, []string{`[2,1]`, `[1,1]`}},
+		{"const independent", `"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true,"const":[1,2]`, []string{`[1,2]`}, []string{`[2,1]`, `[1,1]`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, d := pinned(root + tc.schema + `}`)
+			if err := ValidateSchemaDocument(b, "x", d); err != nil {
+				t.Fatal(err)
+			}
+			for _, group := range []struct {
+				values []string
+				want   error
+			}{{tc.accept, nil}, {tc.reject, ErrInvalid}} {
+				for _, value := range group.values {
+					if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(value), MaxDesired); err != group.want {
+						t.Errorf("%s: got %v, want %v", value, err, group.want)
+					}
+				}
+			}
+			if err := ValidatePinnedValue(b, "x", strings.Repeat("0", 64), "t", "k", "t", "k", "x", []byte(`[]`), MaxDesired); err != ErrSchema {
+				t.Errorf("wrong digest: %v", err)
+			}
+		})
+	}
+}
+
+func TestPinnedUniqueItemsDistinctTypes(t *testing.T) {
+	b, d := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","items":{"type":["integer","null"],"enum":[1,null]},"maxItems":3,"uniqueItems":true}`)
+	if err := ValidateSchemaDocument(b, "x", d); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{{`[1,null]`, nil}, {`[1,1]`, ErrInvalid}, {`[null,null]`, ErrInvalid}, {`[1,"1"]`, ErrInvalid}, {`[1,true]`, ErrInvalid}} {
+		if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.value, err, tc.want)
+		}
+	}
+}
+
+func TestPinnedUniqueItemsMalformed(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, schema := range []string{
+		`"type":"array","maxItems":0,"uniqueItems":null`, `"type":"array","maxItems":0,"uniqueItems":0`,
+		`"type":"array","maxItems":0,"uniqueItems":"true"`, `"type":"array","maxItems":0,"uniqueItems":[]`,
+		`"type":"array","maxItems":0,"uniqueItems":{}`, `"type":"boolean","uniqueItems":false`,
+		`"type":"array","minItems":1,"maxItems":0,"uniqueItems":true`,
+		`"type":"array","maxItems":1,"items":{"type":"array","maxItems":0,"uniqueItems":null}`,
+	} {
+		b, d := pinned(root + schema + `}`)
+		if err := ValidateSchemaDocument(b, "x", d); err != ErrSchema {
+			t.Errorf("%s: got %v", schema, err)
+		}
+		if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(`[]`), MaxDesired); err != ErrSchema {
+			t.Errorf("%s value: got %v", schema, err)
+		}
+	}
+}
+
 func TestPinnedSemanticValidation(t *testing.T) {
 	b, d := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":4}},"required":["n"],"additionalProperties":false}`)
 	if e := ValidatePinnedValue(b, "cache.desired", d, "target", "kind", "target", "kind", "cache.desired", []byte(`{"n":2}`), 32768); e != nil {
@@ -129,7 +203,7 @@ func TestSchemaKeywordShapesAndTypes(t *testing.T) {
 			}
 		}
 	}
-	for _, raw := range []string{`{"type":"string","maxLength":1,"$ref":"#"}`, `{"type":"string","maxLength":1,"$vocabulary":{}}`, `{"type":"array","items":{"type":"integer"},"maxItems":2,"uniqueItems":true}`, `{"type":["null","string"]}`, `{"type":"number"}`, `{"type":"object","properties":{},"required":null,"additionalProperties":false}`} {
+	for _, raw := range []string{`{"type":"string","maxLength":1,"$ref":"#"}`, `{"type":"string","maxLength":1,"$vocabulary":{}}`, `{"type":["null","string"]}`, `{"type":"number"}`, `{"type":"object","properties":{},"required":null,"additionalProperties":false}`} {
 		v, err := ParseJSON([]byte(raw))
 		if err != nil {
 			t.Fatal(err)

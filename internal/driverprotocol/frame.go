@@ -275,9 +275,16 @@ func matches(s, v any, d int) bool {
 		if !ok || (m["minItems"] != nil && int64(len(a)) < m["minItems"].(int64)) || (m["maxItems"] != nil && int64(len(a)) > m["maxItems"].(int64)) {
 			return false
 		}
-		for _, x := range a {
+		for i, x := range a {
 			if !matches(m["items"], x, d+1) {
 				return false
+			}
+			if unique, _ := m["uniqueItems"].(bool); unique {
+				for _, previous := range a[:i] {
+					if jsonEqual(x, previous) {
+						return false
+					}
+				}
 			}
 		}
 		return true
