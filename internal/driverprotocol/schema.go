@@ -4,34 +4,29 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"unicode/utf8"
+
+	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
 
 const maxSchemaBytes = 65536
 
 var ErrSchema = errors.New("invalid enrolled schema")
 
-// CanonicalSchemaDocument returns bytes for the bounded schema subset only; this is partial and not v1 canonicalization.
+// CanonicalSchemaDocument returns JCS-SSJACK-1 bytes for the bounded schema subset.
 func CanonicalSchemaDocument(raw []byte) ([]byte, error) {
-	doc, err := parseSchemaDocument(raw)
-	if err != nil {
-		return nil, err
-	}
-	b, err := canonicalBytes(doc)
-	if err != nil || len(b) > maxSchemaBytes {
-		return nil, ErrSchema
-	}
-	return b, nil
+	_, canonical, err := parseSchemaDocument(raw)
+	return canonical, err
 }
-func parseSchemaDocument(raw []byte) (any, error) {
-	if len(raw) == 0 || len(raw) > maxSchemaBytes || !utf8.Valid(raw) {
-		return nil, ErrSchema
+func parseSchemaDocument(raw []byte) (any, []byte, error) {
+	canonical, err := canonicaljson.Canonicalize(raw)
+	if err != nil {
+		return nil, nil, ErrSchema
 	}
-	doc, err := ParseJSON(raw)
-	if err != nil || validateSchema(doc, true, 0) != nil || hasSchemaSerializationSensitiveString(doc) {
-		return nil, ErrSchema
+	doc, err := ParseJSON(canonical)
+	if err != nil || validateSchema(doc, true, 0) != nil {
+		return nil, nil, ErrSchema
 	}
-	return doc, nil
+	return doc, canonical, nil
 }
 func ValidateSchemaDocument(sb []byte, id, digest string) error {
 	if !grammar(id, "name") || !grammar(digest, "digest") {
@@ -51,13 +46,9 @@ func ValidatePinnedValue(sb []byte, id, digest, target, kind, actualTarget, actu
 	if !grammar(id, "name") || !grammar(target, "name") || !grammar(kind, "name") || actualID != id || target != actualTarget || kind != actualKind {
 		return ErrSchema
 	}
-	doc, err := parseSchemaDocument(sb)
+	doc, canonical, err := parseSchemaDocument(sb)
 	if err != nil {
 		return err
-	}
-	canonical, err := canonicalBytes(doc)
-	if err != nil || len(canonical) > maxSchemaBytes {
-		return ErrSchema
 	}
 	h := sha256.Sum256(append(append([]byte("ssjack-schema-v1"), 0), canonical...))
 	if digest != hex.EncodeToString(h[:]) {

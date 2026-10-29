@@ -196,9 +196,12 @@ func TestSchemaValueBoundsAndTextAdversaries(t *testing.T) {
 
 func TestPinnedIdentityAndChangedSchemaDigest(t *testing.T) {
 	b, d := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","maxLength":3}`)
-	htmlSchema, htmlDigest := pinned(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","maxLength":3,"const":"<>&"}`)
-	if err := ValidatePinnedValue(htmlSchema, "x", htmlDigest, "t", "k", "t", "k", "x", []byte(`"<>&"`), 100); err != ErrSchema {
-		t.Fatalf("HTML-sensitive schema: got %v, want ErrSchema", err)
+	htmlSchema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","maxLength":3,"const":"<>&"}`)
+	htmlCanonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":"<>&","maxLength":3,"type":"string"}`
+	htmlHash := sha256.Sum256([]byte("ssjack-schema-v1\x00" + htmlCanonical))
+	htmlDigest := hex.EncodeToString(htmlHash[:])
+	if err := ValidatePinnedValue(htmlSchema, "x", htmlDigest, "t", "k", "t", "k", "x", []byte(`"<>&"`), 100); err != nil {
+		t.Fatalf("HTML-sensitive schema: %v", err)
 	}
 	if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(`"ok"`), 100); err != nil {
 		t.Fatalf("valid baseline rejected: %v", err)

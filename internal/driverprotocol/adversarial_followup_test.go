@@ -1,6 +1,8 @@
 package driverprotocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,8 +82,8 @@ func TestRequestedStructuralAdversaries(t *testing.T) {
 func TestSchemaInputWhitespaceAndAdjacentParserBounds(t *testing.T) {
 	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null"}`
 	_, digest := pinned(canonical)
-	oversized := []byte(strings.Replace(canonical, `,`, ", "+strings.Repeat(" ", maxSchemaBytes), 1))
-	if len(oversized) <= maxSchemaBytes {
+	oversized := []byte(strings.Replace(canonical, `,`, ", "+strings.Repeat(" ", 262144), 1))
+	if len(oversized) <= 262144 {
 		t.Fatal("fixture does not cross raw schema limit")
 	}
 	if err := ValidatePinnedValue(oversized, "x", digest, "t", "k", "t", "k", "x", []byte(`null`), 100); err != ErrSchema {
@@ -258,35 +260,88 @@ func TestSensitiveValueByteBoundaries(t *testing.T) {
 	}
 }
 
-func TestPinnedSchemaRejectsJSONSeparatorEscaping(t *testing.T) {
+func TestPinnedSchemaCanonicalContract(t *testing.T) {
 	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{},"required":[],"additionalProperties":false,"const":`
-	baseline, baselineDigest := pinned(root + `{"x":"y"}}`)
-	if err := ValidateSchemaDocument(baseline, "x", baselineDigest); err != nil {
-		t.Fatalf("baseline schema rejected: %v", err)
-	}
-	for _, sep := range []struct{ name, literal, escaped string }{
-		{"U+2028", "\u2028", `\u2028`},
-		{"U+2029", "\u2029", `\u2029`},
+	for _, pair := range []struct{ literal, escaped string }{
+		{"<", `\u003c`}, {">", `\u003e`}, {"&", `\u0026`},
+		{"\u2028", `\u2028`}, {"\u2029", `\u2029`},
 	} {
+		valueSchema := `{"$schema":"https://json-schema.org/draft/2020-12/schema","const":"` + pair.literal + `","maxLength":1,"type":"string"}`
+		valueHash := sha256.Sum256([]byte("ssjack-schema-v1\x00" + valueSchema))
+		if err := ValidatePinnedValue([]byte(valueSchema), "x", hex.EncodeToString(valueHash[:]), "t", "k", "t", "k", "x", []byte(`"`+pair.escaped+`"`), 100); err != nil {
+			t.Errorf("sensitive matching value: %v", err)
+		}
 		for _, position := range []string{"key", "value"} {
-			for _, spelling := range []string{sep.literal, sep.escaped} {
-				t.Run(sep.name+"/"+position+"/"+spelling, func(t *testing.T) {
-					value := `{"` + spelling + `":0}`
-					if position == "value" {
-						value = `{"x":"` + spelling + `"}`
-					}
-					schema, digest := pinned(root + value + `}`)
-					if _, err := CanonicalSchemaDocument(schema); err != ErrSchema {
-						t.Fatalf("canonical schema: got %v, want ErrSchema", err)
-					}
-					if err := ValidateSchemaDocument(schema, "x", digest); err != ErrSchema {
-						t.Fatalf("schema pin: got %v, want ErrSchema", err)
-					}
-					if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(`{}`), MaxDesired); err != ErrSchema {
-						t.Fatalf("pinned value: got %v, want ErrSchema", err)
-					}
-				})
+			value := func(s string) string {
+				if position == "key" {
+					return `{"` + s + `":0}`
+				}
+				return `{"x":"` + s + `"}`
 			}
+			canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"const":` + value(pair.literal) + `,"properties":{},"required":[],"type":"object"}`
+			h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+			digest := hex.EncodeToString(h[:])
+			wrong := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical + " "))
+			for _, spelling := range []string{pair.literal, pair.escaped} {
+				schema := []byte(root + value(spelling) + `}`)
+				got, err := CanonicalSchemaDocument(schema)
+				if err != nil || string(got) != canonical {
+					t.Errorf("%s canonical %q: %v", position, got, err)
+				}
+				if err := ValidateSchemaDocument(schema, "x", digest); err != nil {
+					t.Errorf("schema: %v", err)
+				}
+				if err := ValidateSchemaDocument(schema, "x", hex.EncodeToString(wrong[:])); err != ErrSchema {
+					t.Errorf("wrong digest: %v", err)
+				}
+				if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(value(pair.literal)), MaxDesired); err != ErrInvalid {
+					t.Errorf("closed object mismatch: %v", err)
+				}
+				if err := ValidatePinnedValue(schema, "x", hex.EncodeToString(wrong[:]), "t", "k", "t", "k", "x", []byte(value(pair.literal)), MaxDesired); err != ErrSchema {
+					t.Errorf("wrong value digest: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestPinnedSchemaSizeBoundaries(t *testing.T) {
+	base := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null"}`
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"null"}`
+	h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest := hex.EncodeToString(h[:])
+	for _, extra := range []int{0, 1} {
+		raw := []byte(base + strings.Repeat(" ", 262144-len(base)+extra))
+		_, err := CanonicalSchemaDocument(raw)
+		if (err == nil) != (extra == 0) {
+			t.Errorf("raw boundary %d: %v", extra, err)
+		}
+		if err := ValidateSchemaDocument(raw, "x", digest); (err == nil) != (extra == 0) {
+			t.Errorf("raw pin %d: %v", extra, err)
+		}
+		if err := ValidatePinnedValue(raw, "x", digest, "t", "k", "t", "k", "x", []byte(`null`), 100); (err == nil) != (extra == 0) {
+			t.Errorf("raw value %d: %v", extra, err)
+		}
+	}
+	makeSchema := func(n int, suffix string) string {
+		key := strings.Repeat("a", n)
+		return `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"` + key + `":{"const":"` + suffix + `","type":"boolean"}},"required":["` + key + `"],"type":"object"}`
+	}
+	baseLen := len(makeSchema(0, ""))
+	for _, extra := range []int{0, 1} {
+		remaining := 65536 + extra - baseLen
+		schema := makeSchema(remaining/2, strings.Repeat("x", remaining%2))
+		h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + schema))
+		digest := hex.EncodeToString(h[:])
+		got, err := CanonicalSchemaDocument([]byte(schema))
+		if (err == nil) != (extra == 0) || (err == nil && string(got) != schema) {
+			t.Errorf("canonical boundary %d: %v", extra, err)
+		}
+		if err := ValidateSchemaDocument([]byte(schema), "x", digest); (err == nil) != (extra == 0) {
+			t.Errorf("canonical pin %d: %v", extra, err)
+		}
+		if err := ValidatePinnedValue([]byte(schema), "x", digest, "t", "k", "t", "k", "x", []byte(`{}`), 100); extra == 0 && err != ErrInvalid || extra == 1 && err != ErrSchema {
+			t.Errorf("canonical value %d: %v", extra, err)
 		}
 	}
 }
