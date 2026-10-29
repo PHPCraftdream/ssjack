@@ -169,13 +169,15 @@ func schema(v any, root bool) bool {
 			return false
 		}
 	case "array":
-		if !schema(m["items"], false) {
+		max, ok := number(m["maxItems"])
+		if !ok || max < 0 || max > 256 || !bound(m, "minItems", 0, 256) {
 			return false
 		}
-		if _, ok := m["maxItems"]; !ok {
-			return false
-		}
-		if !bound(m, "minItems", 0, 256) || !bound(m, "maxItems", 0, 256) {
+		if items, exists := m["items"]; exists {
+			if !schema(items, false) {
+				return false
+			}
+		} else if max != 0 {
 			return false
 		}
 		if v, ok := m["uniqueItems"]; ok {

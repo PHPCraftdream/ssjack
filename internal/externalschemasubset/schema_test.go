@@ -123,6 +123,60 @@ func TestValues(t *testing.T) {
 	}
 }
 
+func TestZeroMaxItemsWithoutItems(t *testing.T) {
+	cases := []struct {
+		name, shape    string
+		valid, invalid []string
+	}{
+		{"array", `"type":"array","maxItems":0`, []string{`[]`}, []string{`[null]`, `null`, `{}`}},
+		{"nullable", `"type":["null","array"],"maxItems":0`, []string{`[]`, `null`}, []string{`[1]`}},
+		{"nested closed object", `"type":"object","properties":{"a":{"type":"array","maxItems":0}},"required":["a"],"additionalProperties":false`, []string{`{"a":[]}`}, []string{`{"a":[1]}`, `{"a":[],"extra":true}`, `{}`}},
+		{"nested array", `"type":"array","items":{"type":["array","null"],"maxItems":0},"maxItems":2`, []string{`[[],null]`}, []string{`[[1]]`}},
+		{"contradictory minimum", `"type":"array","minItems":1,"maxItems":0`, nil, []string{`[]`, `[1]`}},
+		{"present valid items", `"type":"array","items":{"type":"null"},"maxItems":0`, []string{`[]`}, []string{`[null]`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := []byte(root + tc.shape + `}`)
+			if err := ValidateSchema(s); err != nil {
+				t.Fatalf("schema rejected: %v", err)
+			}
+			for _, value := range tc.valid {
+				if err := Validate(s, []byte(value), 65536); err != nil {
+					t.Errorf("%s: %v", value, err)
+				}
+			}
+			for _, value := range tc.invalid {
+				if err := Validate(s, []byte(value), 65536); !errors.Is(err, ErrValue) {
+					t.Errorf("%s: expected ErrValue, got %v", value, err)
+				}
+			}
+		})
+	}
+}
+
+func TestZeroMaxItemsSchemaRejections(t *testing.T) {
+	for _, shape := range []string{
+		`"type":"array"`, `"type":"array","maxItems":1`,
+		`"type":["array","null"],"maxItems":1`,
+		`"type":"array","maxItems":null`, `"type":"array","maxItems":false`,
+		`"type":"array","maxItems":-1`, `"type":"array","maxItems":257`,
+		`"type":"array","maxItems":0.0`, `"type":"array","maxItems":0,"minItems":257`,
+		`"type":"array","maxItems":0,"items":null`, `"type":"array","maxItems":0,"items":true`,
+		`"type":"array","maxItems":0,"items":[]`, `"type":"array","maxItems":0,"items":{}`,
+		`"type":"array","maxItems":0,"items":{"type":"object","additionalProperties":true}`,
+		`"type":"object","properties":{"a":{"type":"array","maxItems":0,"items":false}},"required":["a"],"additionalProperties":false`,
+	} {
+		s := []byte(root + shape + `}`)
+		if err := ValidateSchema(s); !errors.Is(err, ErrSchema) {
+			t.Errorf("accepted %s: %v", s, err)
+		}
+		if err := Validate(s, []byte(`[]`), 65536); !errors.Is(err, ErrSchema) {
+			t.Errorf("Validate accepted %s: %v", s, err)
+		}
+	}
+}
+
 func TestEqualityAndBounds(t *testing.T) {
 	s := root + `"type":"object","properties":{"x":{"type":"integer"}},"required":["x"],"additionalProperties":false,"enum":[{"x":1}],"const":{"x":1}}`
 	if err := Validate([]byte(s), []byte(`{"x":1}`), 100); err != nil {

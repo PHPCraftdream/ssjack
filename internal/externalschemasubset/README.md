@@ -46,7 +46,7 @@ is canonical JSON equality, including for `uniqueItems`.
 | Type | Mandatory shape | Other supported keywords |
 | --- | --- | --- |
 | object | `additionalProperties:false`; `properties` and `required` may be omitted only as empty equivalents; `required` contains every declared property name and may contain extra names, without duplicates; every property value is a nested schema | `minProperties`, `maxProperties`: integers 0–128 |
-| array | `items` is one nested schema; `maxItems` is an integer 0–256 | `minItems`: integer 0–256; `uniqueItems`: boolean |
+| array | `maxItems` is an integer 0–256; `items` is one nested schema, required unless `maxItems` is 0 | `minItems`: integer 0–256; `uniqueItems`: boolean |
 | string | `maxLength` is an integer 1–4096 | `minLength`: integer 0–4096 |
 | integer | none beyond `type` | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`: safe integers; `multipleOf`: positive safe integer |
 | boolean, null | none beyond `type` | none beyond `enum` and `const` |
@@ -60,6 +60,8 @@ schemas can still match null and untyped closed object shapes can match non-obje
 Exclusive and inclusive numeric constraints apply independently.
 Object values must contain exactly the declared properties;
 array items each match `items`, and `uniqueItems:true` requires distinct items.
+Omitting `items` is allowed only for explicitly valid `maxItems:0`; if present,
+`items` must still be a valid nested schema. Nonempty arrays cannot match that maximum.
 String length counts Unicode code points. A valid schema need not be satisfiable
 (for example, property counts or `const` can conflict with other constraints).
 
@@ -68,7 +70,7 @@ String length counts Unicode code points. A valid schema need not be satisfiable
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
 explicit `type` except for finite enum/const nodes or untyped closed object shapes, closed object shape, array
-`items`/`maxItems`, and string `maxLength`. The rejection of unconstrained
+`maxItems` (and `items` except at zero), and string `maxLength`. The rejection of unconstrained
 typeless schemas is the conservative proposed-v1 resolution, not a restriction
 unique to this subset; other restrictions may reject documents permitted by the
 proposed dialect. It does not determine schema satisfiability.
