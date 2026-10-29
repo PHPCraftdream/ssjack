@@ -105,15 +105,11 @@ func schema(v any, root bool) bool {
 				return false
 			}
 		case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
-			if _, explicit := m["type"]; !explicit && typ != "object" {
+			if _, hasType := m["type"]; !hasType && typ != "object" {
 				return false
 			}
-		case "items", "minItems", "maxItems", "uniqueItems":
-			if _, explicit := m["type"]; !explicit {
-				return false
-			}
-		case "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
-			if _, explicit := m["type"]; !explicit {
+		case "items", "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
+			if _, hasType := m["type"]; !hasType {
 				return false
 			}
 		default:

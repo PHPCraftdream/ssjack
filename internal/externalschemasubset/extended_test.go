@@ -28,9 +28,9 @@ func TestTypelessEnum(t *testing.T) {
 	}
 	for _, x := range []string{
 		`"enum":[]`, `"enum":[1,1]`, `"enum":[1],"type":null`,
-		`"enum":[1],"type":""`, `"enum":[1],"minimum":0`,
+		`"enum":[1],"type":""`, `"enum":[1],"minimum":false`,
 		`"enum":[1],"$ref":"x"`,
-		`"enum":[1],"examples":{}`, `"enum":[1],"properties":{}`,
+		`"enum":[1],"examples":{}`, `"enum":[1],"properties":null`,
 	} {
 		if err := ValidateSchema([]byte(root + x + `}`)); !errors.Is(err, ErrSchema) {
 			t.Errorf("accepted %s: %v", x, err)
@@ -74,8 +74,8 @@ func TestTypelessConst(t *testing.T) {
 	}
 	for _, x := range []string{
 		`"const":null,"type":null`, `"const":1,"type":""`,
-		`"const":1,"type":"unknown"`, `"const":1,"minimum":0`,
-		`"const":[],"items":{"type":"null"}`, `"const":{},"properties":{}`,
+		`"const":1,"type":"unknown"`, `"const":1,"minimum":false`,
+		`"const":[],"items":false`, `"const":{},"properties":null`,
 		`"const":1,"$ref":"x"`, `"const":1,"allOf":[]`,
 		`"const":1,"examples":{}`, `"const":1,"enum":[]`,
 		`"const":1.0`, `"const":{"x":1,"x":1}`,

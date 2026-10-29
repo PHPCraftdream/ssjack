@@ -121,8 +121,11 @@ func TestUntypedClosedRejections(t *testing.T) {
 		`"additionalProperties":false,"properties":null`, `"additionalProperties":false,"required":null`,
 		`"additionalProperties":false,"properties":{"x":{"type":"null"}}`,
 		`"additionalProperties":false,"minProperties":129`,
-		`"additionalProperties":false,"items":{"type":"null"},"maxItems":1`,
-		`"additionalProperties":false,"maxLength":3`, `"additionalProperties":false,"minimum":0`,
+		`"additionalProperties":false,"items":false,"maxItems":1`,
+		`"additionalProperties":false,"items":{"type":"null"}`, `"additionalProperties":false,"maxItems":1`,
+		`"additionalProperties":false,"uniqueItems":true`, `"additionalProperties":false,"multipleOf":2`,
+		`"enum":[1],"minimum":0`, `"const":1,"properties":{}`, `"enum":[null],"additionalProperties":true`,
+		`"additionalProperties":false,"maxLength":0`, `"additionalProperties":false,"minimum":null`,
 		`"additionalProperties":false,"$ref":"x"`, `"additionalProperties":false,"enum":[]`,
 		`"additionalProperties":false,"properties":{"x":{}},"required":["x"]`,
 	} {

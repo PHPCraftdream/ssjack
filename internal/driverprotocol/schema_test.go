@@ -47,7 +47,7 @@ func TestPinnedPropertyCounts(t *testing.T) {
 	}
 }
 
-func TestPinnedPropertyCountsMalformed(t *testing.T) {
+func TestPinnedPropertyCountsKeywordShapesAndApplicability(t *testing.T) {
 	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
 	shape := `"type":"object","properties":{},"required":[],"additionalProperties":false,`
 	for _, key := range []string{"minProperties", "maxProperties"} {
@@ -56,8 +56,8 @@ func TestPinnedPropertyCountsMalformed(t *testing.T) {
 				t.Errorf("%s=%s: %v", key, value, err)
 			}
 		}
-		for _, body := range []string{`"type":"boolean"`, `"type":["null","string"],"maxLength":1`, `"type":"array","maxItems":0`, `"type":"integer"`, `"type":"null"`, `"properties":{},"additionalProperties":false`, `"type":"object","required":[],"additionalProperties":false`, `"type":"object","properties":{"a":{"type":"null"}},"required":[],"additionalProperties":false`} {
-			if _, err := CanonicalSchemaDocument([]byte(root + body + `,"` + key + `":0}`)); err != ErrSchema {
+		for _, body := range []string{`"type":"boolean"`, `"type":["null","string"],"maxLength":1`, `"type":"array","maxItems":0`, `"type":"integer"`, `"type":"null"`, `"properties":{},"additionalProperties":false`, `"type":"object","required":[],"additionalProperties":false`} {
+			if _, err := CanonicalSchemaDocument([]byte(root + body + `,"` + key + `":0}`)); err != nil {
 				t.Errorf("%s on %s: %v", key, body, err)
 			}
 		}
@@ -161,8 +161,7 @@ func TestPinnedUniqueItemsMalformed(t *testing.T) {
 	for _, schema := range []string{
 		`"type":"array","maxItems":0,"uniqueItems":null`, `"type":"array","maxItems":0,"uniqueItems":0`,
 		`"type":"array","maxItems":0,"uniqueItems":"true"`, `"type":"array","maxItems":0,"uniqueItems":[]`,
-		`"type":"array","maxItems":0,"uniqueItems":{}`, `"type":"boolean","uniqueItems":false`,
-		`"type":"array","minItems":1,"maxItems":0,"uniqueItems":true`,
+		`"type":"array","maxItems":0,"uniqueItems":{}`,
 		`"type":"array","maxItems":1,"items":{"type":"array","maxItems":0,"uniqueItems":null}`,
 	} {
 		b, d := pinned(root + schema + `}`)
@@ -253,8 +252,8 @@ func TestSchemaBoundAdversaries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateSchema(invalid, false, 0); err != ErrSchema {
-				t.Fatalf("contradictory bounds: got %v, want ErrSchema", err)
+			if err := validateSchema(invalid, false, 0); err != nil {
+				t.Fatalf("contradictory bounds rejected: %v", err)
 			}
 		})
 	}
@@ -267,8 +266,8 @@ func TestSchemaKeywordShapesAndTypes(t *testing.T) {
 		{`"type":"array","items":{"type":"null"},"maxItems":2`, `"type":"array","items":null,"maxItems":2`},
 		{`"type":"string","maxLength":2`, `"type":"string","maxLength":"2"`},
 		{`"type":"integer","minimum":0`, `"type":"integer","minimum":null`},
-		{`"type":"boolean"`, `"type":"boolean","items":{"type":"null"}`},
-		{`"type":"null"`, `"type":"null","properties":{}`},
+		{`"type":"boolean"`, `"type":"boolean","items":false`},
+		{`"type":"null"`, `"type":"null","properties":null`},
 	}
 	for _, tc := range cases {
 		for _, item := range []struct {
@@ -516,8 +515,6 @@ func TestPinnedNullableInvalidSchemas(t *testing.T) {
 		`"type":"array","maxItems":null`, `"type":"array","maxItems":"0"`,
 		`"type":"array","maxItems":-1`, `"type":"array","maxItems":0,"items":null`,
 		`"type":["null","array"],"maxItems":0,"items":{"type":"string"}`,
-		`"type":["null","array"],"minItems":1,"maxItems":0`,
-		`"type":["null","boolean"],"maxItems":0`,
 	} {
 		b, d := pinned(root + schema + `}`)
 		if err := ValidateSchemaDocument(b, "x", d); err != ErrSchema {
@@ -745,7 +742,6 @@ func TestPinnedNumericInvalidSchemas(t *testing.T) {
 		`"type":"integer","multipleOf":9007199254740992`, `"type":"integer","multipleOf":1.0`,
 		`"type":"integer","multipleOf":null`, `"type":"integer","exclusiveMinimum":true`,
 		`"type":"integer","exclusiveMaximum":-9007199254740992`, `"type":"integer","exclusiveMinimum":1.0`,
-		`"type":"boolean","multipleOf":2`, `"type":["null","boolean"],"exclusiveMaximum":2`,
 		`"type":"array","maxItems":1,"items":{"type":"integer","multipleOf":0}`,
 		`"type":"array","maxItems":1,"items":{"type":"integer","multipleOf":9007199254740992}`,
 		`"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":-9007199254740992}},"required":["n"],"additionalProperties":false`,

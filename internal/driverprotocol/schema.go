@@ -99,34 +99,33 @@ func validateSchema(v any, root bool, depth int) error {
 	}
 	if _, present := m["type"]; !present {
 		typ := ""
-		if hasObjectSchemaKeyword(m) {
+		if m["additionalProperties"] == false {
 			typ = "object"
-			if !validSchemaShape(m, typ, depth) {
-				return ErrSchema
-			}
 		} else if _, enum := m["enum"]; !enum {
 			if _, constant := m["const"]; !constant {
 				return ErrSchema
 			}
 		}
-		if !validSchemaConstraints(m, typ) {
+		for key := range m {
+			switch key {
+			case "items", "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
+				return ErrSchema
+			case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
+				if typ != "object" {
+					return ErrSchema
+				}
+			}
+		}
+		if !validSchemaShape(m, typ, depth) || !validSchemaConstraints(m) {
 			return ErrSchema
 		}
 		return nil
 	}
 	typ, _, ok := schemaType(m["type"])
-	if !ok || !validSchemaShape(m, typ, depth) || !validSchemaConstraints(m, typ) {
+	if !ok || typ == "" || !validSchemaShape(m, typ, depth) || !validSchemaConstraints(m) {
 		return ErrSchema
 	}
 	return nil
-}
-func hasObjectSchemaKeyword(m map[string]any) bool {
-	for _, key := range []string{"properties", "required", "additionalProperties", "minProperties", "maxProperties"} {
-		if _, ok := m[key]; ok {
-			return true
-		}
-	}
-	return false
 }
 func schemaType(v any) (string, bool, bool) {
 	if typ, ok := stringValue(v); ok {
@@ -163,24 +162,41 @@ func validSchemaRoot(m map[string]any, root bool) bool {
 	return ok && dialect == "https://json-schema.org/draft/2020-12/schema"
 }
 func validSchemaShape(m map[string]any, typ string, depth int) bool {
+	p, pok := object(m["properties"])
+	if _, present := m["properties"]; !present {
+		pok = true
+	}
+	if !pok || len(p) > 128 {
+		return false
+	}
+	for _, child := range p {
+		if validateSchema(child, false, depth+1) != nil {
+			return false
+		}
+	}
+	r, rok := m["required"].([]any)
+	if _, present := m["required"]; !present {
+		rok = true
+	}
+	if !rok || !requiredKeys(r, nil) {
+		return false
+	}
+	if v, present := m["additionalProperties"]; present {
+		if _, ok := v.(bool); !ok {
+			return false
+		}
+	}
+	if x, present := m["items"]; present && validateSchema(x, false, depth+1) != nil {
+		return false
+	}
 	switch typ {
 	case "object":
-		p, pok := object(m["properties"])
 		additional, aok := m["additionalProperties"].(bool)
-		r, rok := m["required"].([]any)
-		if !pok || !aok || additional || !rok || len(p) > 128 || len(r) != len(p) || !requiredKeys(r, p) {
+		if !aok || additional || !requiredKeys(r, p) {
 			return false
-		}
-		for _, child := range p {
-			if validateSchema(child, false, depth+1) != nil {
-				return false
-			}
 		}
 	case "array":
-		x, present := m["items"]
-		if present && validateSchema(x, false, depth+1) != nil {
-			return false
-		}
+		_, present := m["items"]
 		max, ok := m["maxItems"].(int64)
 		if !ok || (!present && max != 0) {
 			return false
@@ -189,7 +205,7 @@ func validSchemaShape(m map[string]any, typ string, depth int) bool {
 		if _, ok := m["maxLength"]; !ok {
 			return false
 		}
-	case "integer", "boolean", "null":
+	case "integer", "boolean", "null", "":
 	default:
 		return false
 	}
@@ -211,12 +227,8 @@ func requiredKeys(required []any, properties map[string]any) bool {
 	}
 	return true
 }
-func validSchemaConstraints(m map[string]any, typ string) bool {
+func validSchemaConstraints(m map[string]any) bool {
 	for key, value := range m {
-		_, hasType := m["type"]
-		if !(key == "$schema" && !hasType) && !applicableSchemaKeyword(key, typ) {
-			return false
-		}
 		switch key {
 		case "title", "description":
 			if _, ok := value.(string); !ok {
@@ -240,7 +252,7 @@ func validSchemaConstraints(m map[string]any, typ string) bool {
 			return false
 		}
 	}
-	return orderedBounds(m) && validSchemaEnum(m)
+	return validSchemaEnum(m)
 }
 func keywordBounds(key string) (int64, int64) {
 	switch key {
@@ -258,16 +270,6 @@ func keywordBounds(key string) (int64, int64) {
 		return 1, 9007199254740991
 	}
 	return 0, 0
-}
-func orderedBounds(m map[string]any) bool {
-	for _, pair := range [][2]string{{"minItems", "maxItems"}, {"minLength", "maxLength"}, {"minimum", "maximum"}} {
-		a, ao := m[pair[0]].(int64)
-		b, bo := m[pair[1]].(int64)
-		if ao && bo && a > b {
-			return false
-		}
-	}
-	return true
 }
 func validSchemaEnum(m map[string]any) bool {
 	a, ok := m["enum"].([]any)
@@ -300,23 +302,6 @@ func matchesEnum(m map[string]any, v any) bool {
 	return false
 }
 
-func applicableSchemaKeyword(k, typ string) bool {
-	switch k {
-	case "type", "enum", "const", "title", "description", "default", "examples":
-		return true
-	case "$schema":
-		return typ != ""
-	case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
-		return typ == "object"
-	case "items", "minItems", "maxItems", "uniqueItems":
-		return typ == "array"
-	case "minLength", "maxLength":
-		return typ == "string"
-	case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
-		return typ == "integer"
-	}
-	return false
-}
 func jsonEqual(a, b any) bool {
 	x, e := canonicalBytes(a)
 	if e != nil {

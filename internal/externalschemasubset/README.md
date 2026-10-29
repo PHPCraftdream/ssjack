@@ -16,32 +16,9 @@ array containing one non-null type and `null` in either order.
 The root must contain exactly
 `"$schema":"https://json-schema.org/draft/2020-12/schema"`; nested schemas
 must not contain `$schema`. Boolean schemas are rejected.
-Unknown keywords are rejected. On explicitly typed schemas, object, array,
-string-length, and integer keywords may accompany a different type. They constrain
-only instances of their applicable type, but every present keyword is checked:
-`properties` is an object of recursively valid schemas; `required` is an array
-of distinct strings; `additionalProperties` is a boolean (schema-valued forms are
-unsupported); `items` is a recursively valid schema; `uniqueItems` is boolean;
-and all bounds obey the table below. These checks also apply when the keyword is
-inapplicable, including for nullable schemas and `maxItems:0`. Mismatched
-`properties` need not all be required, and mismatched `additionalProperties` may
-be true; the mandatory closed-object shape and bounded-array shape still apply
-when the declared non-null type is object or array respectively. Untyped shapes
-remain restricted as described below. Full proposed-contract treatment remains unresolved.
+Unknown keywords are rejected. Explicitly typed schemas may carry valid irrelevant type-specific keywords; every present keyword and nested schema is checked even when inapplicable. `properties` is an object of recursively valid schemas; `required` is an array of distinct strings; `additionalProperties` is boolean; `items` is a recursively valid schema; `uniqueItems` is boolean; and bounds obey the table below. Mismatched object keywords need not require every property and may set `additionalProperties:true`; mandatory closed-object, bounded-array and bounded-string shapes apply when that non-null type is explicitly declared.
 
-A type-less enum and/or const without an object shape may have annotations, but no type-specific
-keywords. It matches only the exact finite bounded JSON values enumerated, or
-their intersection when both constraints are present. Object values must match
-in full: extra properties, including nested ones, do not match unless the entire
-value is separately enumerated. A malformed or unsupported explicit `type` is
-rejected. An untyped schema without enum, const, or an explicit closed object shape
-(including an empty or annotation-only schema) is rejected rather than allowing arbitrary objects.
-
-An untyped closed object shape requires `additionalProperties:false` and follows
-all object shape rules in the table below, including nested schemas and property
-bounds. Object keywords apply only to objects: non-object values pass those
-keywords. `enum` and `const`, if present, still constrain every value. No other
-type-specific keywords may be combined with this shape.
+A typeless finite-only schema admits `enum` and/or `const` plus annotations. A typeless closed object schema requires `additionalProperties:false` and a valid closed shape; it may also include `enum` and/or `const` and annotations. No other type-specific keywords are allowed in either form. Finite constraints match exact bounded JSON values, or their intersection when both are present; object contents must match in full. They constrain all values before object-only constraints are applied. A malformed explicit `type`, empty or annotation-only typeless schema is rejected. Closed shapes obey the object rules below, including omitted empty equivalents and extra required names; object keywords affect objects only, so non-objects pass those constraints.
 
 All types may have `title` and `description` strings, `default` as any bounded
 JSON value, and `examples` as an array of bounded JSON values. These annotations
@@ -75,8 +52,8 @@ schemas can still match null, untyped closed object shapes can match non-objects
 and an explicitly declared different type can match because the bounds are
 inapplicable.
 Exclusive and inclusive numeric constraints apply independently.
-Object values must contain exactly the declared properties;
-array items each match `items`, and `uniqueItems:true` requires distinct items.
+Closed-shape object values must contain every declared property and no undeclared property; extra required names make a closed object unsatisfiable.
+Array items each match `items`, and `uniqueItems:true` requires distinct items.
 For a declared array, omitting `items` is allowed only for explicitly valid
 `maxItems:0`; other declared types may omit `items` freely. If present, `items`
 must still be a valid nested schema, even when inapplicable. Nonempty arrays
@@ -84,7 +61,7 @@ cannot match `maxItems:0`.
 String length counts Unicode code points. A valid schema need not be satisfiable
 (for example, property counts or `const` can conflict with other constraints).
 
-## Deliberately rejected proposed v1 features
+## Features outside the external dialect
 
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
@@ -92,9 +69,11 @@ explicit `type` except for finite enum/const nodes or untyped closed object shap
 mandatory bounds for explicitly typed arrays and strings also apply to the
 proposed external contract, including nullable and nested schemas; they are not
 full JSON Schema requirements. The rejection of unconstrained typeless schemas is
-also a proposed-v1 restriction. Other subset restrictions may reject documents
-permitted by the proposed dialect or reflect unresolved differences; this package
-does not determine schema satisfiability.
+also a proposed-v1 restriction. The two implementations remain separate and statically reviewed, not formally proven equivalent. Unsupported full JSON Schema features are outside the chosen dialect, not evidence of a dialect gap. Broader proposed-v1 enrollment, authenticated distribution, authorization, descriptor and runtime integration remain separate gaps; admission does not determine satisfiability.
+
+Compatibility: there is no automatic migration or rewrite; unchanged documents retain canonical bytes and pins, and changed schemas require new digests and enrollment. `internal/enrollmentvalidator/references.go` calls S; `internal/enrollmentrecord/record.go` calls the separate P implementation. `internal/driverprocess` and `internal/immutableexec` use structural checks only.
+
+Preexisting standalone pinned raw admission gaps remain: P's `ValidatePinnedValue` calls `ParseJSON` with a 65536-byte raw cap, whereas S uses canonicaljson's 262144-byte raw cap. A null padded to 65537 bytes is accepted by S but rejected by P with `ErrInvalid`. P rejects `-0`; canonicaljson normalizes it to zero, so S accepts it under an integer schema while P returns `ErrInvalid`. Shared schema canonicalization and digest do not imply whole-API equivalence. No parser changes or protocol frame broadening are implied; the separate 65536-byte frame cap is unchanged. No CI results currently exist; public CI is by the parent only.
 
 ## Canonical JSON bounds
 

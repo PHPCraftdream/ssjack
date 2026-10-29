@@ -257,10 +257,7 @@ func matches(s, v any, d int) bool {
 			return false
 		}
 	} else {
-		if !hasObjectSchemaKeyword(m) {
-			return true
-		}
-		if _, ok := object(v); !ok {
+		if _, isObject := v.(map[string]any); !isObject || m["additionalProperties"] != false {
 			return true
 		}
 		typ = "object"
@@ -272,8 +269,15 @@ func matches(s, v any, d int) bool {
 	case "object":
 		x, ok := object(v)
 		p, _ := object(m["properties"])
-		if !ok || len(x) != len(p) {
+		if !ok {
 			return false
+		}
+		if required, ok := m["required"].([]any); ok {
+			for _, name := range required {
+				if _, exists := x[name.(string)]; !exists {
+					return false
+				}
+			}
 		}
 		if q, ok := m["minProperties"].(int64); ok && int64(len(x)) < q {
 			return false
@@ -283,7 +287,11 @@ func matches(s, v any, d int) bool {
 		}
 		for k, value := range x {
 			q, yes := p[k]
-			if !yes || !matches(q, value, d+1) {
+			if !yes {
+				if m["additionalProperties"] == false {
+					return false
+				}
+			} else if !matches(q, value, d+1) {
 				return false
 			}
 		}
@@ -294,7 +302,7 @@ func matches(s, v any, d int) bool {
 			return false
 		}
 		for i, x := range a {
-			if !matches(m["items"], x, d+1) {
+			if item, present := m["items"]; present && !matches(item, x, d+1) {
 				return false
 			}
 			if unique, _ := m["uniqueItems"].(bool); unique {

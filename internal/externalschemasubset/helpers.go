@@ -159,10 +159,7 @@ func matches(m map[string]any, v any) bool {
 	}
 	typ, nullable, ok := schemaType(m["type"])
 	if !ok {
-		if m["additionalProperties"] != false {
-			return valueOnly(m)
-		}
-		if _, isObject := v.(map[string]any); !isObject {
+		if _, isObject := v.(map[string]any); !isObject || m["additionalProperties"] != false {
 			return true
 		}
 		typ = "object"
@@ -184,12 +181,12 @@ func matches(m map[string]any, v any) bool {
 				}
 			}
 		}
-		if len(o) != len(p) {
-			return false
-		}
-		for k, s := range p {
-			x, ok := o[k]
-			if !ok || !matches(s.(map[string]any), x) {
+		for k, x := range o {
+			if s, exists := p[k]; exists {
+				if !matches(s.(map[string]any), x) {
+					return false
+				}
+			} else if m["additionalProperties"] == false {
 				return false
 			}
 		}
@@ -201,7 +198,7 @@ func matches(m map[string]any, v any) bool {
 		}
 		seen := map[string]bool{}
 		for _, x := range a {
-			if !matches(m["items"].(map[string]any), x) {
+			if item, exists := m["items"]; exists && !matches(item.(map[string]any), x) {
 				return false
 			}
 			if m["uniqueItems"] == true {
