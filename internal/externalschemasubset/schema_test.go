@@ -177,6 +177,38 @@ func TestZeroMaxItemsSchemaRejections(t *testing.T) {
 	}
 }
 
+func TestExplicitBoundsAndRawInputCap(t *testing.T) {
+	for _, shape := range []string{
+		`"type":"string"`, `"type":["string","null"]`,
+		`"type":"array","items":{"type":"null"}`,
+		`"type":["null","array"],"items":{"type":"null"}`,
+		`"type":"array","maxItems":1,"items":{"type":"string"}`,
+		`"type":"object","additionalProperties":false,"properties":{"a":{"type":"array","items":{"type":"null"}}},"required":["a"]`,
+	} {
+		s := []byte(root + shape + `}`)
+		if err := ValidateSchema(s); !errors.Is(err, ErrSchema) {
+			t.Errorf("missing bound accepted: %s: %v", s, err)
+		}
+	}
+	for _, shape := range []string{`"const":"x"`, `"const":[]`} {
+		if err := ValidateSchema([]byte(root + shape + `}`)); err != nil {
+			t.Errorf("typeless finite constraint rejected: %s: %v", shape, err)
+		}
+	}
+	const cap = 262144
+	schema := root + `"type":"null"}`
+	for _, size := range []int{cap, cap + 1} {
+		paddedSchema := []byte(schema + strings.Repeat(" ", size-len(schema)))
+		paddedValue := []byte(`null` + strings.Repeat(" ", size-4))
+		if err := ValidateSchema(paddedSchema); (err == nil) != (size == cap) {
+			t.Errorf("schema raw size %d: %v", size, err)
+		}
+		if err := Validate([]byte(schema), paddedValue, 65536); (err == nil) != (size == cap) {
+			t.Errorf("value raw size %d: %v", size, err)
+		}
+	}
+}
+
 func TestEqualityAndBounds(t *testing.T) {
 	s := root + `"type":"object","properties":{"x":{"type":"integer"}},"required":["x"],"additionalProperties":false,"enum":[{"x":1}],"const":{"x":1}}`
 	if err := Validate([]byte(s), []byte(`{"x":1}`), 100); err != nil {

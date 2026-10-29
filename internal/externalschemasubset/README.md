@@ -16,7 +16,10 @@ array containing one non-null type and `null` in either order.
 The root must contain exactly
 `"$schema":"https://json-schema.org/draft/2020-12/schema"`; nested schemas
 must not contain `$schema`. Boolean schemas are rejected.
-Unknown keywords and keywords used with the wrong type are rejected.
+Unknown keywords and keywords used with the wrong type are rejected by this
+subset. Full JSON Schema instead generally ignores type-specific assertions for
+instances of other types; whether the proposed external contract rejects
+mismatched keywords on explicitly typed schemas remains unresolved.
 
 A type-less enum and/or const without an object shape may have annotations, but no type-specific
 keywords. It matches only the exact finite bounded JSON values enumerated, or
@@ -69,15 +72,20 @@ String length counts Unicode code points. A valid schema need not be satisfiable
 
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
-explicit `type` except for finite enum/const nodes or untyped closed object shapes, closed object shape, array
-`maxItems` (and `items` except at zero), and string `maxLength`. The rejection of unconstrained
-typeless schemas is the conservative proposed-v1 resolution, not a restriction
-unique to this subset; other restrictions may reject documents permitted by the
-proposed dialect. It does not determine schema satisfiability.
+explicit `type` except for finite enum/const nodes or untyped closed object shapes, closed object shape, array `maxItems` (and `items` except at zero), and string `maxLength`. The
+mandatory bounds for explicitly typed arrays and strings also apply to the
+proposed external contract, including nullable and nested schemas; they are not
+full JSON Schema requirements. The rejection of unconstrained typeless schemas is
+also a proposed-v1 restriction. Other subset restrictions may reject documents
+permitted by the proposed dialect or reflect unresolved differences; this package
+does not determine schema satisfiability.
 
 ## Canonical JSON bounds
 
-Both schema and value are first canonicalized by `internal/canonicaljson`:
+Both schema and value are first canonicalized by `internal/canonicaljson`. The
+262144-byte raw input cap is also an explicit restriction of the proposed external
+contract, distinct from canonical and context-specific output caps and from full
+JSON Schema:
 
 - One strict JSON value; raw input at most 262144 bytes and canonical output at
   most 65536 bytes.
