@@ -146,8 +146,8 @@ func stringMap(v any, min int) bool {
 	if !ok || len(m) < min || len(m) > 128 {
 		return false
 	}
-	for k, v := range m {
-		if !named(k) || !digest(v) {
+	for _, v := range m {
+		if !digest(v) {
 			return false
 		}
 	}

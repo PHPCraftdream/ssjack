@@ -149,6 +149,116 @@ func TestSignedManifestRequiresCanonicalBytes(t *testing.T) {
 		}
 	}
 }
+func TestArtifactDigestMapStringKeys(t *testing.T) {
+	d := strings.Repeat("a", 64)
+	for _, key := range []string{"", "Driver Binary", "Upper/Case", "é", strings.Repeat("x", 65)} {
+		t.Run(key, func(t *testing.T) {
+			m := fixture()
+			m["artifact_digests"] = map[string]any{key: d}
+			raw := noHTML(t, m)
+			want, err := domaindigest.Sum(domaindigest.Enrollment, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := Validate(raw); err != nil || got != want {
+				t.Fatalf("digest %q, want %q: %v", got, want, err)
+			}
+		})
+	}
+	for name, artifacts := range map[string]map[string]any{
+		"empty":             {},
+		"bad digest":        {"Upper/Case": strings.Repeat("A", 64)},
+		"non-string digest": {"Upper/Case": 1},
+		"non-NFC key":       {"e\u0301": d},
+		"control key":       {"bad\nkey": d},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := fixture()
+			m["artifact_digests"] = artifacts
+			if _, err := Validate(noHTML(t, m)); err != ErrInvalid {
+				t.Fatalf("expected invalid: %v", err)
+			}
+		})
+	}
+	for _, count := range []int{128, 129} {
+		m := fixture()
+		artifacts := map[string]any{}
+		for i := 0; i < count; i++ {
+			artifacts[strings.Repeat("x", i+1)] = d
+		}
+		m["artifact_digests"] = artifacts
+		if _, err := Validate(noHTML(t, m)); (err == nil) != (count == 128) {
+			t.Fatalf("count %d: %v", count, err)
+		}
+	}
+}
+
+func TestArtifactDigestBinding(t *testing.T) {
+	m := fixture()
+	d := strings.Repeat("a", 64)
+	m["artifact_digests"] = map[string]any{"Driver Binary": d}
+	original, err := Validate(noHTML(t, m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, artifacts := range map[string]map[string]any{
+		"key":    {"Driver Binary 2": d},
+		"digest": {"Driver Binary": strings.Repeat("b", 64)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m["artifact_digests"] = artifacts
+			got, err := Validate(noHTML(t, m))
+			if err != nil || got == original {
+				t.Fatalf("changed %s: digest %q, original %q: %v", name, got, original, err)
+			}
+		})
+	}
+}
+
+func TestArtifactMapOrderingAndDependencyBinding(t *testing.T) {
+	d := strings.Repeat("a", 64)
+	m := fixture()
+	m["artifact_digests"] = map[string]any{"": d, "é": d}
+	m["dependency_digests"] = map[string]any{"dep": d}
+	m["provenance"].(map[string]any)["dependencies"] = []any{map[string]any{"name": "dep", "path": "/dep", "sha256": d}}
+	raw := noHTML(t, m)
+	if _, err := Validate(raw); err != nil {
+		t.Fatal(err)
+	}
+	ordered := `"artifact_digests":{"":"` + d + `","é":"` + d + `"}`
+	for _, replacement := range []string{
+		`"artifact_digests":{"é":"` + d + `","":"` + d + `"}`,
+		`"artifact_digests":{"":"` + d + `","\u00e9":"` + d + `","é":"` + d + `"}`,
+	} {
+		other := bytes.Replace(raw, []byte(ordered), []byte(replacement), 1)
+		if bytes.Equal(raw, other) {
+			t.Fatal("fixture did not contain artifact map")
+		}
+		if _, err := Validate(other); err != ErrInvalid {
+			t.Fatalf("expected invalid ordering or duplicate: %v", err)
+		}
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"dependency non-Name": func(m map[string]any) {
+			m["dependency_digests"] = map[string]any{"Upper/Case": d}
+			m["provenance"].(map[string]any)["dependencies"].([]any)[0].(map[string]any)["name"] = "Upper/Case"
+		},
+		"dependency digest mismatch": func(m map[string]any) { m["dependency_digests"] = map[string]any{"dep": strings.Repeat("b", 64)} },
+		"extra field":                func(m map[string]any) { m["provenance"].(map[string]any)["extra"] = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copy := fixture()
+			copy["artifact_digests"] = m["artifact_digests"]
+			copy["dependency_digests"] = m["dependency_digests"]
+			copy["provenance"] = map[string]any{"source": "source", "revision": "rev", "dependencies": []any{map[string]any{"name": "dep", "path": "/dep", "sha256": d}}}
+			mutate(copy)
+			if _, err := Validate(noHTML(t, copy)); err != ErrInvalid {
+				t.Fatalf("expected invalid: %v", err)
+			}
+		})
+	}
+}
+
 func TestDigestMapIncomingOrder(t *testing.T) {
 	m := fixture()
 	d := strings.Repeat("a", 64)
