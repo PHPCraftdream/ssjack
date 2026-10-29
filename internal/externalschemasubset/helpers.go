@@ -16,6 +16,47 @@ func properties(m map[string]any) (map[string]any, bool) {
 	return p, ok
 }
 
+func containerKeywords(m map[string]any) bool {
+	p, ok := properties(m)
+	if !ok {
+		return false
+	}
+	for _, child := range p {
+		if !schema(child, false) {
+			return false
+		}
+	}
+	if v, exists := m["required"]; exists {
+		r, ok := v.([]any)
+		if !ok {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, name := range r {
+			s, ok := name.(string)
+			if !ok || seen[s] {
+				return false
+			}
+			seen[s] = true
+		}
+	}
+	if v, exists := m["additionalProperties"]; exists {
+		if _, ok := v.(bool); !ok {
+			return false
+		}
+	}
+	if v, exists := m["items"]; exists && !schema(v, false) {
+		return false
+	}
+	if v, exists := m["uniqueItems"]; exists {
+		if _, ok := v.(bool); !ok {
+			return false
+		}
+	}
+	return bound(m, "minProperties", 0, 128) && bound(m, "maxProperties", 0, 128) &&
+		bound(m, "minItems", 0, 256) && bound(m, "maxItems", 0, 256)
+}
+
 func valueOnly(m map[string]any) bool {
 	_, hasType := m["type"]
 	_, hasEnum := m["enum"]

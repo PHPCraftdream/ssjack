@@ -135,3 +135,57 @@ func TestUntypedClosedRejections(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedMismatchedContainerKeywords(t *testing.T) {
+	cases := []struct {
+		shape, value string
+		valid        bool
+	}{
+		{`"type":"boolean","properties":{"x":{"type":"integer"}},"required":["x"],"additionalProperties":true,"items":{"type":"null"},"maxItems":1`, `true`, true},
+		{`"type":"boolean","properties":{"x":{"type":"integer"}},"additionalProperties":false`, `{}`, false},
+		{`"type":["null","array"],"maxItems":1,"items":{"type":"integer"},"properties":{"x":{"type":"null"}},"required":["x"],"additionalProperties":true`, `null`, true},
+		{`"type":"array","maxItems":1,"items":{"type":"integer"},"minProperties":2`, `[1]`, true},
+		{`"type":"array","maxItems":1,"items":{"type":"integer"},"minProperties":2`, `[1,2]`, false},
+		{`"type":"object","additionalProperties":false,"items":{"type":"null"},"maxItems":0`, `{}`, true},
+		{`"type":"object","additionalProperties":false,"items":{"type":"null"},"maxItems":0`, `{"x":1}`, false},
+		{`"type":["boolean","null"],"enum":[true],"items":{"type":"null"}`, `null`, false},
+		{`"type":"array","maxItems":1,"items":{"type":"boolean","properties":{"x":{"type":"null"}}}`, `[true]`, true},
+	}
+	for _, tc := range cases {
+		s := []byte(root + tc.shape + `}`)
+		if err := ValidateSchema(s); err != nil {
+			t.Errorf("schema %s: %v", tc.shape, err)
+			continue
+		}
+		err := Validate(s, []byte(tc.value), 65536)
+		if tc.valid && err != nil || !tc.valid && !errors.Is(err, ErrValue) {
+			t.Errorf("schema %s value %s: %v", tc.shape, tc.value, err)
+		}
+	}
+}
+
+func TestMismatchedContainerRejections(t *testing.T) {
+	for _, shape := range []string{
+		`"type":"boolean","properties":null`,
+		`"type":"boolean","properties":{"x":true}`,
+		`"type":"boolean","properties":{"x":{"type":"null","$ref":"x"}}`,
+		`"type":"boolean","properties":{"x":{"type":"array","maxItems":1}}`,
+		`"type":"boolean","required":["x","\u0078"]`,
+		`"type":"boolean","required":[1]`,
+		`"type":"boolean","additionalProperties":{}`,
+		`"type":"boolean","minProperties":129`,
+		`"type":"boolean","items":false`,
+		`"type":"boolean","items":{"type":"null","allOf":[]}`,
+		`"type":"boolean","items":{"type":"object","additionalProperties":true}`,
+		`"type":"boolean","maxItems":257`,
+		`"type":"boolean","uniqueItems":1`,
+		`"type":"object","additionalProperties":true,"items":{"type":"null"}`,
+		`"type":"array","items":{"type":"null"},"properties":{}`,
+		`"type":"array","maxItems":1,"items":{"type":"boolean","items":{}}`,
+	} {
+		s := []byte(root + shape + `}`)
+		if !errors.Is(ValidateSchema(s), ErrSchema) || !errors.Is(Validate(s, []byte(`true`), 65536), ErrSchema) {
+			t.Errorf("invalid schema accepted: %s", shape)
+		}
+	}
+}

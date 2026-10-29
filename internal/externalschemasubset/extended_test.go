@@ -237,7 +237,6 @@ func TestApplicableScalarKeywords(t *testing.T) {
 		`"type":"boolean","maxLength":0`, `"type":"null","minLength":4097`,
 		`"type":"boolean","minimum":false`, `"type":"boolean","multipleOf":0`,
 		`"type":"boolean","exclusiveMaximum":1.0`, `"type":"string","minimum":1`,
-		`"type":"boolean","items":{"type":"null"}`, `"type":"boolean","additionalProperties":false`,
 		`"type":"boolean","maximum":1,"$ref":"x"`,
 		`"type":"array","maxItems":1,"items":{"type":"boolean","multipleOf":0}`,
 		`"type":"object","properties":{"x":{"type":"boolean","multipleOf":0}},"required":["x"],"additionalProperties":false,"maxLength":2`,

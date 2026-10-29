@@ -16,11 +16,18 @@ array containing one non-null type and `null` in either order.
 The root must contain exactly
 `"$schema":"https://json-schema.org/draft/2020-12/schema"`; nested schemas
 must not contain `$schema`. Boolean schemas are rejected.
-Unknown keywords are rejected. On explicitly typed schemas only, string-length
-and integer assertions may accompany a different type; their values are always
-validated, but they constrain only instances of their applicable type. Object
-and array keywords still require their corresponding type or the permitted
-untyped closed object shape. Full proposed-contract treatment remains unresolved.
+Unknown keywords are rejected. On explicitly typed schemas, object, array,
+string-length, and integer keywords may accompany a different type. They constrain
+only instances of their applicable type, but every present keyword is checked:
+`properties` is an object of recursively valid schemas; `required` is an array
+of distinct strings; `additionalProperties` is a boolean (schema-valued forms are
+unsupported); `items` is a recursively valid schema; `uniqueItems` is boolean;
+and all bounds obey the table below. These checks also apply when the keyword is
+inapplicable, including for nullable schemas and `maxItems:0`. Mismatched
+`properties` need not all be required, and mismatched `additionalProperties` may
+be true; the mandatory closed-object shape and bounded-array shape still apply
+when the declared non-null type is object or array respectively. Untyped shapes
+remain restricted as described below. Full proposed-contract treatment remains unresolved.
 
 A type-less enum and/or const without an object shape may have annotations, but no type-specific
 keywords. It matches only the exact finite bounded JSON values enumerated, or
@@ -47,6 +54,10 @@ are checked in addition to type and other constraints; the schema checker does
 not require their values to match the declared type or other constraints. Equality
 is canonical JSON equality, including for `uniqueItems`.
 
+The table describes mandatory shape and applicable keywords for each declared
+non-null type. Explicitly typed schemas may also carry valid inapplicable
+keywords as described above.
+
 | Type | Mandatory shape | Other supported keywords |
 | --- | --- | --- |
 | object | `additionalProperties:false`; `properties` and `required` may be omitted only as empty equivalents; `required` contains every declared property name and may contain extra names, without duplicates; every property value is a nested schema | `minProperties`, `maxProperties`: integers 0–128 |
@@ -60,12 +71,16 @@ schema dialect), but does not require min/max pairs to be ordered. Consequently
 reversed `minProperties`/`maxProperties`, `minItems`/`maxItems`,
 `minLength`/`maxLength`, and `minimum`/`maximum` are accepted when each bound
 is individually valid. They cannot match their applicable type, but nullable
-schemas can still match null and untyped closed object shapes can match non-objects.
+schemas can still match null, untyped closed object shapes can match non-objects,
+and an explicitly declared different type can match because the bounds are
+inapplicable.
 Exclusive and inclusive numeric constraints apply independently.
 Object values must contain exactly the declared properties;
 array items each match `items`, and `uniqueItems:true` requires distinct items.
-Omitting `items` is allowed only for explicitly valid `maxItems:0`; if present,
-`items` must still be a valid nested schema. Nonempty arrays cannot match that maximum.
+For a declared array, omitting `items` is allowed only for explicitly valid
+`maxItems:0`; other declared types may omit `items` freely. If present, `items`
+must still be a valid nested schema, even when inapplicable. Nonempty arrays
+cannot match `maxItems:0`.
 String length counts Unicode code points. A valid schema need not be satisfiable
 (for example, property counts or `const` can conflict with other constraints).
 

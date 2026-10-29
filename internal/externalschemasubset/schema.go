@@ -105,11 +105,11 @@ func schema(v any, root bool) bool {
 				return false
 			}
 		case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
-			if typ != "object" {
+			if _, explicit := m["type"]; !explicit && typ != "object" {
 				return false
 			}
 		case "items", "minItems", "maxItems", "uniqueItems":
-			if typ != "array" {
+			if _, explicit := m["type"]; !explicit {
 				return false
 			}
 		case "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
@@ -119,6 +119,9 @@ func schema(v any, root bool) bool {
 		default:
 			return false
 		}
+	}
+	if !containerKeywords(m) {
+		return false
 	}
 	if e, exists := m["enum"]; exists {
 		a, ok := e.([]any)
@@ -161,8 +164,8 @@ func schema(v any, root bool) bool {
 			}
 			seen[k] = true
 		}
-		for k, v := range p {
-			if !seen[k] || !schema(v, false) {
+		for k := range p {
+			if !seen[k] {
 				return false
 			}
 		}
@@ -174,11 +177,7 @@ func schema(v any, root bool) bool {
 		if !ok || max < 0 || max > 256 || !bound(m, "minItems", 0, 256) {
 			return false
 		}
-		if items, exists := m["items"]; exists {
-			if !schema(items, false) {
-				return false
-			}
-		} else if max != 0 {
+		if _, exists := m["items"]; !exists && max != 0 {
 			return false
 		}
 		if v, ok := m["uniqueItems"]; ok {
