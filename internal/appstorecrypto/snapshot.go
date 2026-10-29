@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstorecatalog"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 )
@@ -30,6 +31,27 @@ type SnapshotCheck struct {
 // CheckSnapshot verifies received bytes against a supplied, not enrolled, expectation.
 // It returns metadata only and does not pin a source or authorize a second-pass release.
 func (m *Master) CheckSnapshot(ctx context.Context, r io.Reader, expected ExpectedSnapshot) (SnapshotCheck, error) {
+	if ctx == nil || expected.StoreID == ([16]byte{}) || expected.SnapshotID == ([16]byte{}) || expected.EncodedHash == ([32]byte{}) {
+		return SnapshotCheck{}, ErrSnapshot
+	}
+	if r == nil {
+		return SnapshotCheck{}, ErrSnapshotRead
+	}
+	if err := ctx.Err(); err != nil {
+		return SnapshotCheck{}, err
+	}
+	release, err := appstorebudget.TryAcquire(expected.StoreID)
+	if err != nil {
+		if errors.Is(err, appstorebudget.ErrBusy) {
+			return SnapshotCheck{}, ErrBusy
+		}
+		return SnapshotCheck{}, ErrSnapshot
+	}
+	defer release()
+	return m.checkSnapshot(ctx, r, expected)
+}
+
+func (m *Master) checkSnapshot(ctx context.Context, r io.Reader, expected ExpectedSnapshot) (SnapshotCheck, error) {
 	if ctx == nil || expected.StoreID == ([16]byte{}) || expected.SnapshotID == ([16]byte{}) || expected.EncodedHash == ([32]byte{}) {
 		return SnapshotCheck{}, ErrSnapshot
 	}

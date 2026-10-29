@@ -11,6 +11,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/kdfgate"
 	"golang.org/x/crypto/argon2"
@@ -41,7 +42,25 @@ func argonDerive(password, salt []byte) []byte {
 
 // Derive does not verify a passphrase, authenticate a snapshot or permit encryption.
 func Derive(ctx context.Context, header appstoreheader.Header, passphrase []byte) (*Master, error) {
-	return derive(ctx, header, passphrase, argonDerive)
+	return deriveAdmitted(ctx, header, passphrase, argonDerive)
+}
+
+func deriveAdmitted(ctx context.Context, header appstoreheader.Header, passphrase []byte, fn deriveFunc) (*Master, error) {
+	if ctx == nil || !header.Valid() {
+		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	release, err := appstorebudget.TryAcquire(header.StoreID())
+	if err != nil {
+		if errors.Is(err, appstorebudget.ErrBusy) {
+			return nil, ErrBusy
+		}
+		return nil, ErrInvalid
+	}
+	defer release()
+	return derive(ctx, header, passphrase, fn)
 }
 
 func derive(ctx context.Context, header appstoreheader.Header, passphrase []byte, fn deriveFunc) (*Master, error) {

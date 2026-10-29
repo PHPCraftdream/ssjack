@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 )
 
@@ -228,4 +229,41 @@ func TestWholeSnapshotFailuresReleaseNothing(t *testing.T) {
 	out, err = m.CheckSnapshot(context.Background(), bytes.NewReader(wire), expected)
 	noSnapshot(t, out, err, ErrClosed)
 	clear(wire)
+}
+
+func TestDerivationOperationBudgetBeforeKDFAndAfterCancel(t *testing.T) {
+	h := header(t)
+	held, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	calls := 0
+	m, err := deriveAdmitted(context.Background(), h, []byte("synthetic budget fixture"), func(p, salt []byte) []byte { calls++; return fake(p, salt) })
+	held()
+	if !errors.Is(err, ErrBusy) || m != nil || calls != 0 {
+		t.Fatal("denied derivation reached KDF")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, err = deriveAdmitted(ctx, h, []byte("synthetic budget fixture"), func(p, salt []byte) []byte {
+		calls++
+		cancel()
+		release, err := appstorebudget.TryAcquire(h.StoreID())
+		if release != nil {
+			release()
+		}
+		if !errors.Is(err, appstorebudget.ErrBusy) {
+			t.Error("cancel revoked a still-running operation")
+		}
+		return fake(p, salt)
+	})
+	if !errors.Is(err, context.Canceled) || m != nil || calls != 1 {
+		t.Fatal("cancelled derivation published a master")
+	}
+	available, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal("cancelled derivation leaked operation budget")
+	}
+	available()
 }

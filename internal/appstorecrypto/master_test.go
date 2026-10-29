@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/kdfgate"
 	"golang.org/x/crypto/argon2"
@@ -253,6 +254,26 @@ func TestAppstoreMasterFullProfile(t *testing.T) {
 	if m.state.key != want || m.Closed() || !m.Matches(h) {
 		t.Fatal("production app-store master differs from independent fixed-profile oracle")
 	}
+	operation, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal("successful public Derive retained operation admission")
+	}
+	defer operation()
+	probe := &snapshotReads{reader: bytes.NewReader(nil)}
+	expected := ExpectedSnapshot{StoreID: h.StoreID(), SnapshotID: h.SnapshotID(), EncodedHash: [32]byte{1}}
+	out, err := m.CheckSnapshot(ctx, probe, expected)
+	noSnapshot(t, out, err, ErrBusy)
+	if probe.largest != 0 {
+		t.Fatal("denied snapshot reached Reader.Read")
+	}
+	operation()
+	out, err = m.CheckSnapshot(ctx, probe, expected)
+	noSnapshot(t, out, err, ErrSnapshot)
+	available, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal("failed public snapshot retained operation admission")
+	}
+	available()
 	m.Close()
 	if !m.Closed() || m.state.key != ([32]byte{}) {
 		t.Fatal("production owned master was not cleared")
