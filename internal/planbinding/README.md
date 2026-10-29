@@ -4,9 +4,11 @@
 internal equalities, sorted effects and effects digest, and returns the plan-domain
 digest of canonical bytes. Alternate valid JSON spellings are accepted; digest-map
 keys must already be sorted. Desired is a bounded object, not a schema document.
-Effects sharing a class and summary ID are rejected even when destructive differs;
-this is a stricter subset than the documented full tuple ordering. Principal issuer
-and subject are strings of at most 256 Unicode scalars, including empty strings.
+Effects use the full `(class, summary_id, destructive)` ordering, with false before
+true as the final tie-breaker. Exact duplicate tuples and reversed input are
+rejected, not silently sorted. Structural admission of destructive effects does
+not authorize their execution. Principal issuer and subject are strings of at
+most 256 Unicode scalars, including empty strings.
 Artifact maps contain 1–128 entries and dependency maps 0–128; keys are bounded
 canonical JSON strings and values are lowercase digests. No Name grammar is imposed
 on map keys by the documented map type.

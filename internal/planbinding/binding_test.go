@@ -153,9 +153,13 @@ func TestRejectEffectsWithMatchingDigest(t *testing.T) {
 			map[string]any{"class": "read", "summary_id": "ok", "destructive": false},
 			map[string]any{"class": "read", "summary_id": "ok", "destructive": false},
 		},
-		"ambiguous destructive": {
-			map[string]any{"class": "read", "summary_id": "ok", "destructive": false},
+		"duplicate destructive": {
 			map[string]any{"class": "read", "summary_id": "ok", "destructive": true},
+			map[string]any{"class": "read", "summary_id": "ok", "destructive": true},
+		},
+		"reversed destructive": {
+			map[string]any{"class": "read", "summary_id": "ok", "destructive": true},
+			map[string]any{"class": "read", "summary_id": "ok", "destructive": false},
 		},
 		"unsorted": {
 			map[string]any{"class": "z", "summary_id": "x", "destructive": false},
@@ -189,6 +193,26 @@ func TestRejectRaw(t *testing.T) {
 		if _, err := Validate([]byte(raw)); err == nil {
 			t.Fatal("accepted invalid raw input")
 		}
+	}
+}
+
+func TestFullEffectTupleOrderingAndIndependentDigest(t *testing.T) {
+	m := fixture(t)
+	const canonical = `[{"class":"write","destructive":false,"summary_id":"pair"},{"class":"write","destructive":true,"summary_id":"pair"}]`
+	var list []any
+	if err := json.Unmarshal([]byte(canonical), &list); err != nil {
+		t.Fatal(err)
+	}
+	m["effects"] = list
+	hash := sha256.Sum256(append([]byte("ssjack-effects-v1\x00"), []byte(canonical)...))
+	m["effect_digest"] = hex.EncodeToString(hash[:])
+	if _, err := Validate(encode(t, m)); err != nil {
+		t.Fatalf("full sorted effect tuple rejected: %v", err)
+	}
+	list[0], list[1] = list[1], list[0]
+	setEffectDigest(t, m)
+	if _, err := Validate(encode(t, m)); err == nil {
+		t.Fatal("matching digest concealed reversed destructive order")
 	}
 }
 

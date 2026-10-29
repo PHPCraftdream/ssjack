@@ -59,6 +59,7 @@ func effects(raw []byte) bool {
 		return false
 	}
 	var prevClass, prevSummary string
+	var prevDestructive bool
 	for i, item := range a {
 		var m map[string]json.RawMessage
 		if json.Unmarshal(item, &m) != nil || !closed(m, "class", "summary_id", "destructive") || !matches(m["class"], nameRE) || !matches(m["summary_id"], nameRE) {
@@ -68,10 +69,11 @@ func effects(raw []byte) bool {
 		if json.Unmarshal(m["class"], &class) != nil || json.Unmarshal(m["summary_id"], &summary) != nil || (string(m["destructive"]) != "true" && string(m["destructive"]) != "false") {
 			return false
 		}
-		if i > 0 && !(prevClass < class || (prevClass == class && prevSummary < summary)) {
+		destructive := string(m["destructive"]) == "true"
+		if i > 0 && !(prevClass < class || (prevClass == class && (prevSummary < summary || (prevSummary == summary && !prevDestructive && destructive)))) {
 			return false
 		}
-		prevClass, prevSummary = class, summary
+		prevClass, prevSummary, prevDestructive = class, summary, destructive
 	}
 	return true
 }
