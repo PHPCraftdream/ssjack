@@ -5,6 +5,51 @@ import (
 	"testing"
 )
 
+func TestTypelessEnum(t *testing.T) {
+	s := root + `"type":"object","properties":{"mode":{"enum":["ephemeral","persistent",null]},"n":{"enum":[1,2],"const":2}},"required":["mode","n"],"additionalProperties":false}`
+	if err := ValidateSchema([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{`{"mode":"ephemeral","n":2}`, true},
+		{`{"mode":null,"n":2}`, true},
+		{`{"mode":"other","n":2}`, false},
+		{`{"mode":"persistent","n":1}`, false},
+		{`{"mode":"persistent","n":2,"extra":true}`, false},
+		{`{"mode":"persistent"}`, false},
+	} {
+		err := Validate([]byte(s), []byte(tc.value), 65536)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: %v", tc.value, err)
+		}
+	}
+	for _, x := range []string{
+		`"enum":[]`, `"enum":[1,1]`, `"enum":[1],"type":null`,
+		`"enum":[1],"type":""`, `"enum":[1],"minimum":0`,
+		`"enum":[1],"$ref":"x"`, `"const":1`,
+		`"enum":[1],"examples":{}`, `"enum":[1],"properties":{}`,
+	} {
+		if err := ValidateSchema([]byte(root + x + `}`)); !errors.Is(err, ErrSchema) {
+			t.Errorf("accepted %s: %v", x, err)
+		}
+	}
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{`{"a":1,"b":2}`, true}, {`{"b":2,"a":1}`, true}, {`{"a":1}`, false},
+	} {
+		schema := root + `"enum":[{"b":2,"a":1}],"title":"annotation"}`
+		err := Validate([]byte(schema), []byte(tc.value), 65536)
+		if (err == nil) != tc.valid {
+			t.Errorf("root enum %s: %v", tc.value, err)
+		}
+	}
+}
+
 func TestExtendedShapes(t *testing.T) {
 	bad := []string{
 		`"type":["null","null"]`, `"type":["integer","boolean"]`, `"type":["integer","null","boolean"]`, `"type":["null",1]`, `"type":[]`,

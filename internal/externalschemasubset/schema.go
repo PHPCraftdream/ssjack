@@ -93,7 +93,7 @@ func schema(v any, root bool) bool {
 		return false
 	}
 	typ, _, ok := schemaType(m["type"])
-	if !ok {
+	if !ok && !enumOnly(m) {
 		return false
 	}
 	for k := range m {
@@ -201,6 +201,8 @@ func schema(v any, root bool) bool {
 			return false
 		}
 	case "boolean", "null":
+	case "":
+		return enumOnly(m)
 	default:
 		return false
 	}
@@ -240,7 +242,7 @@ func matches(m map[string]any, v any) bool {
 	}
 	typ, nullable, ok := schemaType(m["type"])
 	if !ok {
-		return false
+		return enumOnly(m)
 	}
 	if v == nil && nullable {
 		return true
