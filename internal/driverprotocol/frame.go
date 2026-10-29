@@ -249,7 +249,14 @@ func matches(s, v any, d int) bool {
 	if x, ok := m["const"]; ok && !jsonEqual(x, v) {
 		return false
 	}
-	switch m["type"] {
+	typ, nullable, ok := schemaType(m["type"])
+	if !ok {
+		return false
+	}
+	if nullable && v == nil {
+		return true
+	}
+	switch typ {
 	case "object":
 		x, ok := object(v)
 		p, _ := object(m["properties"])

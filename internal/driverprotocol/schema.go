@@ -106,11 +106,29 @@ func validateSchema(v any, root bool, depth int) error {
 	if !ok || !validSchemaKeys(m, root) || !validSchemaRoot(m, root) {
 		return ErrSchema
 	}
-	typ, ok := stringValue(m["type"])
+	typ, _, ok := schemaType(m["type"])
 	if !ok || !validSchemaShape(m, typ, depth) || !validSchemaConstraints(m, typ) {
 		return ErrSchema
 	}
 	return nil
+}
+func schemaType(v any) (string, bool, bool) {
+	if typ, ok := stringValue(v); ok {
+		return typ, false, true
+	}
+	types, ok := v.([]any)
+	if !ok || len(types) != 2 {
+		return "", false, false
+	}
+	a, aok := stringValue(types[0])
+	b, bok := stringValue(types[1])
+	if !aok || !bok || (a == "null") == (b == "null") {
+		return "", false, false
+	}
+	if a == "null" {
+		return b, true, true
+	}
+	return a, true, true
 }
 func validSchemaKeys(m map[string]any, root bool) bool {
 	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true}
@@ -143,11 +161,12 @@ func validSchemaShape(m map[string]any, typ string, depth int) bool {
 			}
 		}
 	case "array":
-		x, ok := m["items"]
-		if !ok || validateSchema(x, false, depth+1) != nil {
+		x, present := m["items"]
+		if present && validateSchema(x, false, depth+1) != nil {
 			return false
 		}
-		if _, ok = m["maxItems"]; !ok {
+		max, ok := m["maxItems"].(int64)
+		if !ok || (!present && max != 0) {
 			return false
 		}
 	case "string":

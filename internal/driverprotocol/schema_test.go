@@ -281,3 +281,89 @@ func TestSchemaEnumEqualityAndLimit(t *testing.T) {
 		t.Fatal("accepted enum above bound")
 	}
 }
+
+func TestPinnedNullableEmptyArrayIndependentDigest(t *testing.T) {
+	schema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":["null","array"],"maxItems":0}`)
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","maxItems":0,"type":["null","array"]}`
+	hash := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest := hex.EncodeToString(hash[:])
+	if err := ValidateSchemaDocument(schema, "x", digest); err != nil {
+		t.Fatalf("schema and independent digest: %v", err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{{`null`, nil}, {`[]`, nil}, {`[null]`, ErrInvalid}} {
+		if err := ValidatePinnedValue(schema, "x", digest, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("value %s: got %v, want %v", tc.value, err, tc.want)
+		}
+	}
+	wrongHash := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical + " "))
+	wrongDigest := hex.EncodeToString(wrongHash[:])
+	if err := ValidateSchemaDocument(schema, "x", wrongDigest); err != ErrSchema {
+		t.Errorf("wrong schema digest: got %v, want ErrSchema", err)
+	}
+	for _, tc := range []struct{ digest, actualID string }{{wrongDigest, "x"}, {digest, "other"}} {
+		if err := ValidatePinnedValue(schema, "x", tc.digest, "t", "k", "t", "k", tc.actualID, []byte(`[]`), MaxDesired); err != ErrSchema {
+			t.Errorf("digest %s, actual ID %s: got %v, want ErrSchema", tc.digest, tc.actualID, err)
+		}
+	}
+}
+
+func TestPinnedNullableSchemas(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	cases := []struct {
+		name, schema   string
+		accept, reject []string
+	}{
+		{"empty array", `"type":["null","array"],"maxItems":0`, []string{`null`, `[]`}, []string{`[null]`, `{}`}},
+		{"array reversed", `"type":["array","null"],"items":{"type":"integer"},"maxItems":2`, []string{`null`, `[]`, `[1,2]`}, []string{`[null]`, `[1,2,3]`}},
+		{"string", `"type":["string","null"],"maxLength":2`, []string{`null`, `"é"`}, []string{`"abc"`, `1`}},
+		{"integer", `"type":["null","integer"],"minimum":1,"maximum":2`, []string{`null`, `1`}, []string{`0`, `true`}},
+		{"boolean", `"type":["boolean","null"]`, []string{`null`, `true`}, []string{`0`}},
+		{"nested object", `"type":["object","null"],"properties":{"a":{"type":["null","array"],"maxItems":1,"items":{"type":["string","null"],"maxLength":1}}},"required":["a"],"additionalProperties":false`, []string{`null`, `{"a":null}`, `{"a":[null]}`, `{"a":["x"]}`}, []string{`{}`, `{"a":["xx"]}`, `{"a":[],"b":1}`}},
+		{"enum null", `"type":["null","integer"],"enum":[1]`, []string{`1`}, []string{`null`, `2`}},
+		{"const null", `"type":["integer","null"],"const":null`, []string{`null`}, []string{`1`}},
+		{"enum const intersection", `"type":["null","integer"],"enum":[null,1],"const":1`, []string{`1`}, []string{`null`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, d := pinned(root + tc.schema + `}`)
+			if err := ValidateSchemaDocument(b, "x", d); err != nil {
+				t.Fatalf("schema rejected: %v", err)
+			}
+			for _, values := range []struct {
+				list []string
+				want bool
+			}{{tc.accept, true}, {tc.reject, false}} {
+				for _, value := range values.list {
+					err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(value), MaxDesired)
+					if (err == nil) != values.want {
+						t.Errorf("value %s: %v", value, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPinnedNullableInvalidSchemas(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	for _, schema := range []string{
+		`"type":[]`, `"type":["null"]`, `"type":["null","null"]`,
+		`"type":["string","integer"]`, `"type":["null","number"]`,
+		`"type":["null","boolean","integer"]`, `"type":["null",1]`,
+		`"type":["null","string"]`, `"type":["null","array"]`,
+		`"type":"array","maxItems":1`, `"type":["null","array"],"maxItems":1`,
+		`"type":"array","maxItems":null`, `"type":"array","maxItems":"0"`,
+		`"type":"array","maxItems":-1`, `"type":"array","maxItems":0,"items":null`,
+		`"type":["null","array"],"maxItems":0,"items":{"type":"string"}`,
+		`"type":["null","array"],"minItems":1,"maxItems":0`,
+		`"type":["null","boolean"],"maxItems":0`,
+	} {
+		b, d := pinned(root + schema + `}`)
+		if err := ValidateSchemaDocument(b, "x", d); err != ErrSchema {
+			t.Errorf("schema %s: got %v, want ErrSchema", schema, err)
+		}
+	}
+}
