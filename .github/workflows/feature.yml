@@ -1,0 +1,86 @@
+name: Feature CI
+
+on:
+  push:
+    branches-ignore: ['sprint/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  impacted:
+    name: Scoped Go tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      CGO_ENABLED: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify selection regressions
+        shell: bash
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Select impacted packages
+        id: scope
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/ci/plan.py plan --base "$BASE" --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Test selected packages (race detector on Linux)
+        shell: bash
+        run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Build changed installer fixture
+        if: steps.scope.outputs.installers == 'true'
+        shell: bash
+        run: |
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
+          go build -mod=readonly -trimpath -o "$RUNNER_TEMP/ssjack-install-fixture$suffix" ./tests/fixtures/installbinary
+          bash -n install.sh tests/installers.sh tests/installers-local.sh
+      - name: Test changed Unix installer
+        if: steps.scope.outputs.installers == 'true' && runner.os != 'Windows'
+        shell: bash
+        run: bash tests/installers.sh "$RUNNER_TEMP/ssjack-install-fixture"
+      - name: Test changed Windows PowerShell installer
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
+      - name: Test changed PowerShell Core installer
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
+      - name: Retain selection evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-selection-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/ci-plan.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  licenses:
+    name: License policy audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exercise fail-closed audit rejection cases
+        run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
+      - name: Check exact release dependency and notice policy (factual source consistency only)
+        run: python3 scripts/check_licenses.py

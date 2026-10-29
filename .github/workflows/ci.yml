@@ -1,8 +1,15 @@
-name: CI
+name: Full sprint CI
 
 on:
   push:
-  pull_request:
+    branches: ['sprint/**']
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing ref to verify at sprint completion
+        required: false
+        type: string
+        default: ''
   workflow_call:
     inputs:
       source_ref:
@@ -104,6 +111,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Verify CI selection regressions
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
       - name: Exercise fail-closed audit rejection cases
         run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
       - name: Check exact release dependency and notice policy (factual source consistency only)
