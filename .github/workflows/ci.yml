@@ -137,8 +137,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Verify production vault encryption and reload
+      - name: Verify production vault and app-store master profiles
         env:
           CGO_ENABLED: '0'
           SSJACK_TEST_FULL_KDF: '1'
-        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile
+        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile ./internal/appstorecrypto
