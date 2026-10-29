@@ -2,10 +2,10 @@ package enrollmentvalidator
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
+	"github.com/PHPCraftdream/ssjack/internal/domaindigest"
 	"github.com/PHPCraftdream/ssjack/internal/externalschemasubset"
 )
 
@@ -39,8 +39,8 @@ func references(m map[string]any) bool {
 		if e != nil || externalschemasubset.ValidateSchema(doc) != nil {
 			return false
 		}
-		h := sha256.Sum256(append([]byte("ssjack-schema-v1\x00"), doc...))
-		if hex.EncodeToString(h[:]) != x["digest"] {
+		digest, e := domaindigest.Sum(domaindigest.Schema, doc)
+		if e != nil || digest != x["digest"] {
 			return false
 		}
 		ids[id] = true

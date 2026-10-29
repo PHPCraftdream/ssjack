@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
+	"github.com/PHPCraftdream/ssjack/internal/domaindigest"
 	"github.com/PHPCraftdream/ssjack/internal/enrollmentauth"
 )
 
@@ -23,6 +24,39 @@ func noHTML(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b.Bytes()
+}
+
+func TestSharedDigestCompatibilityAndFailClosed(t *testing.T) {
+	m := fixture()
+	s := m["schemas"].([]any)[0].(map[string]any)
+	doc := s["document"].(map[string]any)
+	doc["description"] = "<&>\u2028"
+	schemaDigest, err := domaindigest.Sum(domaindigest.Schema, noHTML(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s["digest"] = schemaDigest
+	raw := noHTML(t, m)
+	want, err := domaindigest.Sum(domaindigest.Enrollment, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Validate(raw)
+	if err != nil || got != want {
+		t.Fatalf("shared enrollment digest: got %q, want %q: %v", got, want, err)
+	}
+	// A valid digest does not make an unsupported schema acceptable.
+	doc["$ref"] = "#"
+	s["digest"], err = domaindigest.Sum(domaindigest.Schema, noHTML(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Validate(noHTML(t, m)); got != "" || err != ErrInvalid {
+		t.Fatalf("unsupported schema: got %q, %v", got, err)
+	}
+	if got, err := Validate(append(raw, bytes.Repeat([]byte(" "), canonicaljson.MaxInput)...)); got != "" || err != ErrInvalid {
+		t.Fatalf("oversized input: got %q, %v", got, err)
+	}
 }
 
 func TestLargeEmbeddedSchemaEncoding(t *testing.T) {

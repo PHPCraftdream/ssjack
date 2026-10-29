@@ -4,9 +4,7 @@ package enrollmentvalidator
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -14,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
+	"github.com/PHPCraftdream/ssjack/internal/domaindigest"
 )
 
 var ErrInvalid = errors.New("invalid or unsupported enrollment")
@@ -38,8 +37,11 @@ func Validate(raw []byte) (string, error) {
 	if !ok || !base(m) || !references(m) {
 		return "", ErrInvalid
 	}
-	h := sha256.Sum256(append([]byte("ssjack-enrollment-v1\x00"), b...))
-	return hex.EncodeToString(h[:]), nil
+	digest, err := domaindigest.Sum(domaindigest.Enrollment, b)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	return digest, nil
 }
 
 // orderedDigestMaps examines decoded keys in their original order. The caller
