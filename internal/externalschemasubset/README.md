@@ -73,7 +73,7 @@ also a proposed-v1 restriction. The two implementations remain separate and stat
 
 Compatibility: there is no automatic migration or rewrite; unchanged documents retain canonical bytes and pins, and changed schemas require new digests and enrollment. `internal/enrollmentvalidator/references.go` calls S; `internal/enrollmentrecord/record.go` calls the separate P implementation. `internal/driverprocess` and `internal/immutableexec` use structural checks only.
 
-Preexisting standalone pinned raw admission gaps remain: P's `ValidatePinnedValue` calls `ParseJSON` with a 65536-byte raw cap, whereas S uses canonicaljson's 262144-byte raw cap. A null padded to 65537 bytes is accepted by S but rejected by P with `ErrInvalid`. P rejects `-0`; canonicaljson normalizes it to zero, so S accepts it under an integer schema while P returns `ErrInvalid`. Shared schema canonicalization and digest do not imply whole-API equivalence. No parser changes or protocol frame broadening are implied; the separate 65536-byte frame cap is unchanged. No CI results currently exist; public CI is by the parent only.
+S and standalone P value admission use shared canonical JSON with raw input <=262144 bytes, canonical output <=65536 bytes and caller-selected canonical caps. Integer `-0` normalizes to zero. P additionally checks identity, schema and digest before value admission and uses its own error classes. Shared canonical admission does not establish whole-API equivalence, authorization or production integration. `ParseJSON`, structural requests and protocol frames keep their separate 65536-byte raw cap and reject lexical `-0`; those entry points were not broadened.
 
 ## Canonical JSON bounds
 
