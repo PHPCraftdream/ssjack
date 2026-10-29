@@ -122,7 +122,7 @@ func schemaType(v any) (string, bool, bool) {
 	return a, true, true
 }
 func validSchemaKeys(m map[string]any, root bool) bool {
-	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "title": true, "description": true, "default": true, "examples": true, "properties": true, "required": true, "additionalProperties": true, "items": true, "minItems": true, "maxItems": true, "uniqueItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
+	allowed := map[string]bool{"$schema": true, "type": true, "enum": true, "const": true, "title": true, "description": true, "default": true, "examples": true, "properties": true, "required": true, "additionalProperties": true, "minProperties": true, "maxProperties": true, "items": true, "minItems": true, "maxItems": true, "uniqueItems": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
 	for key := range m {
 		if !allowed[key] || (!root && key == "$schema") {
 			return false
@@ -218,6 +218,8 @@ func validSchemaConstraints(m map[string]any, typ string) bool {
 }
 func keywordBounds(key string) (int64, int64) {
 	switch key {
+	case "minProperties", "maxProperties":
+		return 0, 128
 	case "minItems", "maxItems":
 		return 0, 256
 	case "minLength":
@@ -285,7 +287,7 @@ func applicableSchemaKeyword(k, typ string) bool {
 		return true
 	case "$schema":
 		return typ != ""
-	case "properties", "required", "additionalProperties":
+	case "properties", "required", "additionalProperties", "minProperties", "maxProperties":
 		return typ == "object"
 	case "items", "minItems", "maxItems", "uniqueItems":
 		return typ == "array"

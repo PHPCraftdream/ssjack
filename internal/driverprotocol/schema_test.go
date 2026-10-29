@@ -3,6 +3,7 @@ package driverprotocol
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,86 @@ func pinned(schema string) ([]byte, string) {
 	h := sha256.Sum256(append(append([]byte("ssjack-schema-v1"), 0), c...))
 	return b, hex.EncodeToString(h[:])
 }
+func TestPinnedPropertyCounts(t *testing.T) {
+	canonical := `{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"maxProperties":1,"minProperties":1,"properties":{"a":{"type":"boolean"}},"required":["a"],"type":["object","null"]}`
+	h := sha256.Sum256([]byte("ssjack-schema-v1\x00" + canonical))
+	digest := hex.EncodeToString(h[:])
+	if err := ValidateSchemaDocument([]byte(canonical), "x", digest); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  error
+	}{{`null`, nil}, {`{"a":true}`, nil}, {`{}`, ErrInvalid}, {`{"a":true,"b":false}`, ErrInvalid}} {
+		if err := ValidatePinnedValue([]byte(canonical), "x", digest, "t", "k", "t", "k", "x", []byte(tc.value), MaxDesired); err != tc.want {
+			t.Errorf("%s: %v, want %v", tc.value, err, tc.want)
+		}
+	}
+	for _, key := range []string{"minProperties", "maxProperties"} {
+		changed := []byte(strings.Replace(canonical, `"`+key+`":1`, `"`+key+`":0`, 1))
+		if err := ValidateSchemaDocument(changed, "x", digest); err != ErrSchema {
+			t.Errorf("stale %s schema pin: %v", key, err)
+		}
+		if err := ValidatePinnedValue(changed, "x", digest, "t", "k", "t", "k", "x", []byte(`null`), MaxDesired); err != ErrSchema {
+			t.Errorf("stale %s value pin: %v", key, err)
+		}
+	}
+}
+
+func TestPinnedPropertyCountsMalformed(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	shape := `"type":"object","properties":{},"required":[],"additionalProperties":false,`
+	for _, key := range []string{"minProperties", "maxProperties"} {
+		for _, value := range []string{`null`, `true`, `"1"`, `[]`, `{}`, `-1`, `129`, `1.0`, `9007199254740992`} {
+			if _, err := CanonicalSchemaDocument([]byte(root + shape + `"` + key + `":` + value + `}`)); err != ErrSchema {
+				t.Errorf("%s=%s: %v", key, value, err)
+			}
+		}
+		for _, body := range []string{`"type":"boolean"`, `"type":["null","string"],"maxLength":1`, `"type":"array","maxItems":0`, `"type":"integer"`, `"type":"null"`, `"properties":{},"required":[],"additionalProperties":false`, `"type":"object","required":[],"additionalProperties":false`, `"type":"object","properties":{"a":{"type":"null"}},"required":[],"additionalProperties":false`} {
+			if _, err := CanonicalSchemaDocument([]byte(root + body + `,"` + key + `":0}`)); err != ErrSchema {
+				t.Errorf("%s on %s: %v", key, body, err)
+			}
+		}
+	}
+}
+
+func TestPinnedPropertyCountEdges(t *testing.T) {
+	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
+	makeObject := func(n int, bounds string) (string, string) {
+		props, required, values := make([]string, n), make([]string, n), make([]string, n)
+		for i := 0; i < n; i++ {
+			key := strconv.Quote("k" + strconv.Itoa(i))
+			props[i], required[i], values[i] = key+`:{"type":"null"}`, key, key+`:null`
+		}
+		return `"type":"object","properties":{` + strings.Join(props, ",") + `},"required":[` + strings.Join(required, ",") + `],"additionalProperties":false,` + bounds, `{` + strings.Join(values, ",") + `}`
+	}
+	for _, tc := range []struct {
+		n      int
+		bounds string
+		want   error
+	}{
+		{0, `"minProperties":0,"maxProperties":0`, nil}, {0, `"minProperties":1`, ErrInvalid},
+		{0, `"maxProperties":1`, nil}, {1, `"minProperties":0,"maxProperties":2`, nil},
+		{127, `"minProperties":126,"maxProperties":128`, nil}, {128, `"minProperties":127`, nil},
+		{127, `"minProperties":128`, ErrInvalid}, {128, `"minProperties":128,"maxProperties":128`, nil},
+		{128, `"maxProperties":127`, ErrInvalid}, {1, `"minProperties":2,"maxProperties":0`, ErrInvalid},
+	} {
+		body, value := makeObject(tc.n, tc.bounds)
+		b, d := pinned(root + body + `}`)
+		if err := ValidateSchemaDocument(b, "x", d); err != nil {
+			t.Errorf("%d %s schema: %v", tc.n, tc.bounds, err)
+		}
+		if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(value), MaxDesired); err != tc.want {
+			t.Errorf("%d %s: %v, want %v", tc.n, tc.bounds, err, tc.want)
+		}
+	}
+	inner, _ := makeObject(0, `"minProperties":1`)
+	b, d := pinned(root + `"type":"object","properties":{"x":{` + inner + `}},"required":["x"],"additionalProperties":false}`)
+	if err := ValidatePinnedValue(b, "x", d, "t", "k", "t", "k", "x", []byte(`{"x":{}}`), MaxDesired); err != ErrInvalid {
+		t.Errorf("nested count: %v", err)
+	}
+}
+
 func TestPinnedUniqueItems(t *testing.T) {
 	root := `{"$schema":"https://json-schema.org/draft/2020-12/schema",`
 	cases := []struct {

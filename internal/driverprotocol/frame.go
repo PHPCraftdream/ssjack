@@ -263,6 +263,12 @@ func matches(s, v any, d int) bool {
 		if !ok || len(x) != len(p) {
 			return false
 		}
+		if q, ok := m["minProperties"].(int64); ok && int64(len(x)) < q {
+			return false
+		}
+		if q, ok := m["maxProperties"].(int64); ok && int64(len(x)) > q {
+			return false
+		}
 		for k, value := range x {
 			q, yes := p[k]
 			if !yes || !matches(q, value, d+1) {
