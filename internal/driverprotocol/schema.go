@@ -54,11 +54,18 @@ func ValidatePinnedValue(sb []byte, id, digest, target, kind, actualTarget, actu
 	if digest != hex.EncodeToString(h[:]) {
 		return ErrSchema
 	}
-	v, err := ParseJSON(vb)
-	if err != nil {
-		return err
+	if limit <= 0 || limit > canonicaljson.MaxOutput {
+		return ErrInvalid
 	}
-	if !bounded(v, limit) || !matches(doc, v, 0) {
+	valueCanonical, err := canonicaljson.Canonicalize(vb)
+	if err != nil || len(valueCanonical) > limit {
+		return ErrInvalid
+	}
+	v, err := ParseJSON(valueCanonical)
+	if err != nil {
+		return ErrInvalid
+	}
+	if !matches(doc, v, 0) {
 		return ErrInvalid
 	}
 	return nil
