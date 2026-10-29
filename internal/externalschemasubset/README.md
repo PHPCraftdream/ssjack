@@ -19,8 +19,12 @@ must not contain `$schema`. Boolean schemas are rejected.
 Unknown keywords and keywords used with the wrong type are rejected.
 
 A type-less enum and/or const may have annotations, but no type-specific
-keywords. It matches any bounded JSON value satisfying each present constraint.
-A malformed or unsupported explicit `type` is rejected.
+keywords. It matches only the exact finite bounded JSON values enumerated, or
+their intersection when both constraints are present. Object values must match
+in full: extra properties, including nested ones, do not match unless the entire
+value is separately enumerated. A malformed or unsupported explicit `type` is
+rejected. An untyped schema without enum or const (including an empty or
+annotation-only schema) is rejected rather than allowing arbitrary objects.
 
 All types may have `title` and `description` strings, `default` as any bounded
 JSON value, and `examples` as an array of bounded JSON values. These annotations
@@ -52,9 +56,11 @@ String length counts Unicode code points. A valid schema need not be satisfiable
 
 The subset rejects unsupported keywords, including `$ref`, `$defs`, patterns,
 formats, composition and conditionals. No schema lookup is performed. It requires
-explicit `type` except for enum or const nodes, closed object shape, array `items`/`maxItems`, and string
-`maxLength`; these restrictions may reject documents permitted by the proposed
-dialect. It does not determine schema satisfiability.
+explicit `type` except for finite enum or const nodes, closed object shape, array
+`items`/`maxItems`, and string `maxLength`. The rejection of unconstrained
+typeless schemas is the conservative proposed-v1 resolution, not a restriction
+unique to this subset; other restrictions may reject documents permitted by the
+proposed dialect. It does not determine schema satisfiability.
 
 ## Canonical JSON bounds
 

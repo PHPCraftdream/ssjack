@@ -107,6 +107,45 @@ func TestTypelessConst(t *testing.T) {
 	}
 }
 
+func TestTypelessFiniteObjectValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema, equal, extra string
+	}{
+		{"root enum", root + `"enum":[{"a":{"x":1}}]}`, `{"a":{"x":1}}`, `{"a":{"x":1},"extra":true}`},
+		{"root const", root + `"const":{"a":{"x":1}}}`, `{"a":{"x":1}}`, `{"a":{"x":1,"extra":true}}`},
+		{"nested enum", root + `"type":"object","properties":{"v":{"enum":[{"x":1}]}},"required":["v"],"additionalProperties":false}`, `{"v":{"x":1}}`, `{"v":{"x":1,"extra":true}}`},
+		{"nested const", root + `"type":"array","items":{"const":{"x":1}},"maxItems":1}`, `[{"x":1}]`, `[{"x":1,"extra":true}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateSchema([]byte(tc.schema)); err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate([]byte(tc.schema), []byte(tc.equal), 65536); err != nil {
+				t.Fatalf("exact value rejected: %v", err)
+			}
+			if err := Validate([]byte(tc.schema), []byte(tc.extra), 65536); !errors.Is(err, ErrValue) {
+				t.Fatalf("extra property accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestUntypedUnconstrainedRejected(t *testing.T) {
+	for _, s := range []string{
+		root + `"title":"open"}`,
+		`{"$schema":"https://json-schema.org/draft/2020-12/schema"}`,
+		root + `"type":"object","properties":{"v":{}},"required":["v"],"additionalProperties":false}`,
+		root + `"type":"array","items":{"description":"open"},"maxItems":1}`,
+	} {
+		if err := ValidateSchema([]byte(s)); !errors.Is(err, ErrSchema) {
+			t.Errorf("accepted unconstrained schema %s: %v", s, err)
+		}
+		if err := Validate([]byte(s), []byte(`{}`), 65536); !errors.Is(err, ErrSchema) {
+			t.Errorf("Validate accepted unconstrained schema %s: %v", s, err)
+		}
+	}
+}
+
 func TestExtendedShapes(t *testing.T) {
 	bad := []string{
 		`"type":["null","null"]`, `"type":["integer","boolean"]`, `"type":["integer","null","boolean"]`, `"type":["null",1]`, `"type":[]`,
