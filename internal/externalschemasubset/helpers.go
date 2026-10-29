@@ -6,6 +6,15 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
 
+func properties(m map[string]any) (map[string]any, bool) {
+	v, exists := m["properties"]
+	if !exists {
+		return nil, true
+	}
+	p, ok := v.(map[string]any)
+	return p, ok
+}
+
 func valueOnly(m map[string]any) bool {
 	_, hasType := m["type"]
 	_, hasEnum := m["enum"]

@@ -146,6 +146,46 @@ func TestUntypedUnconstrainedRejected(t *testing.T) {
 	}
 }
 
+func TestOmittedEmptyObjectKeywords(t *testing.T) {
+	for _, shape := range []string{
+		`"type":"object","additionalProperties":false`,
+		`"type":"object","properties":{},"additionalProperties":false`,
+		`"type":"object","required":[],"additionalProperties":false`,
+		`"type":["object","null"],"additionalProperties":false`,
+	} {
+		s := root + shape + `}`
+		if err := ValidateSchema([]byte(s)); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+		if err := Validate([]byte(s), []byte(`{}`), 100); err != nil {
+			t.Fatalf("empty object rejected: %v", err)
+		}
+		if err := Validate([]byte(s), []byte(`{"extra":1}`), 100); !errors.Is(err, ErrValue) {
+			t.Fatalf("extra property accepted: %v", err)
+		}
+	}
+	nested := root + `"type":"object","properties":{"v":{"type":"object","additionalProperties":false}},"required":["v"],"additionalProperties":false}`
+	if err := Validate([]byte(nested), []byte(`{"v":{}}`), 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate([]byte(nested), []byte(`{"v":{"extra":true}}`), 100); !errors.Is(err, ErrValue) {
+		t.Fatalf("nested extra accepted: %v", err)
+	}
+	for _, shape := range []string{
+		`"type":"object"`,
+		`"type":"object","properties":null,"additionalProperties":false`,
+		`"type":"object","required":null,"additionalProperties":false`,
+		`"type":"object","required":["x"],"additionalProperties":false`,
+		`"type":"object","properties":{"x":{"type":"null"}},"additionalProperties":false`,
+		`"type":"object","additionalProperties":true`,
+	} {
+		s := root + shape + `}`
+		if err := ValidateSchema([]byte(s)); !errors.Is(err, ErrSchema) {
+			t.Errorf("accepted %s: %v", s, err)
+		}
+	}
+}
+
 func TestExtendedShapes(t *testing.T) {
 	bad := []string{
 		`"type":["null","null"]`, `"type":["integer","boolean"]`, `"type":["integer","null","boolean"]`, `"type":["null",1]`, `"type":[]`,

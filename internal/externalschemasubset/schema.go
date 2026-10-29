@@ -58,7 +58,6 @@ func Validate(schemaJSON, valueJSON []byte, limit int) error {
 	}
 	return nil
 }
-
 func number(v any) (int64, bool) {
 	n, ok := v.(json.Number)
 	if !ok {
@@ -143,12 +142,15 @@ func schema(v any, root bool) bool {
 	}
 	switch typ {
 	case "object":
-		p, ok := m["properties"].(map[string]any)
+		p, ok := properties(m)
 		additional, valid := m["additionalProperties"].(bool)
 		if !ok || !valid || additional {
 			return false
 		}
 		r, ok := m["required"].([]any)
+		if _, exists := m["required"]; !exists && len(p) == 0 {
+			r, ok = nil, true
+		}
 		if !ok || len(r) != len(p) {
 			return false
 		}
@@ -208,7 +210,6 @@ func schema(v any, root bool) bool {
 	}
 	return true
 }
-
 func matches(m map[string]any, v any) bool {
 	if c, ok := m["const"]; ok {
 		ck, err := key(c)
@@ -253,7 +254,7 @@ func matches(m map[string]any, v any) bool {
 		if !ok || !within(m, "minProperties", "maxProperties", int64(len(o))) {
 			return false
 		}
-		p := m["properties"].(map[string]any)
+		p, _ := properties(m)
 		if len(o) != len(p) {
 			return false
 		}
