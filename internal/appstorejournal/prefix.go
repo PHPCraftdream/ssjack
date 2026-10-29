@@ -17,6 +17,20 @@ type Prefix struct {
 
 // InspectPrefix leaves any local suffix unread for separate reconciliation.
 func InspectPrefix(expected appstoreanchorstate.State, r io.Reader) (Prefix, error) {
+	return inspectPrefix(expected, r, nil)
+}
+
+var ErrReused = errors.New("application-store journal candidate ID already used")
+
+// CheckFreshPair checks candidate IDs in this prefix only, not retained objects or authority.
+func CheckFreshPair(expected appstoreanchorstate.State, r io.Reader, candidate Entry) (Prefix, error) {
+	if !expected.Valid() || !candidate.Valid() || expected.JournalCount() >= appstoreanchorstate.MaxReservations || candidate.Index() != expected.JournalCount() {
+		return Prefix{}, ErrInvalid
+	}
+	return inspectPrefix(expected, r, &candidate)
+}
+
+func inspectPrefix(expected appstoreanchorstate.State, r io.Reader, candidate *Entry) (Prefix, error) {
 	if !expected.Valid() {
 		return Prefix{}, ErrInvalid
 	}
@@ -28,6 +42,7 @@ func InspectPrefix(expected appstoreanchorstate.State, r io.Reader) (Prefix, err
 		return Prefix{}, ErrInvalid
 	}
 	head := genesis.JournalHead()
+	reused := false
 	var raw [Size]byte
 	defer clear(raw[:])
 	for index := uint64(0); index < expected.JournalCount(); index++ {
@@ -38,6 +53,9 @@ func InspectPrefix(expected appstoreanchorstate.State, r io.Reader) (Prefix, err
 		if err != nil {
 			return Prefix{}, ErrInvalid
 		}
+		if candidate != nil && (entry.SnapshotID() == candidate.SnapshotID() || entry.TransactionID() == candidate.TransactionID() || entry.SnapshotID() == candidate.TransactionID() || entry.TransactionID() == candidate.SnapshotID()) {
+			reused = true
+		}
 		head, err = NextHead(expected.StoreID(), head, entry)
 		if err != nil {
 			return Prefix{}, ErrInvalid
@@ -45,6 +63,9 @@ func InspectPrefix(expected appstoreanchorstate.State, r io.Reader) (Prefix, err
 	}
 	if head != expected.JournalHead() {
 		return Prefix{}, ErrInvalid
+	}
+	if reused {
+		return Prefix{}, ErrReused
 	}
 	return Prefix{store: expected.StoreID(), stateHash: expected.Hash(), head: head, count: expected.JournalCount(), parsed: true}, nil
 }
