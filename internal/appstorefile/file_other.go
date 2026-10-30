@@ -38,4 +38,6 @@ func hashFile(context.Context, *os.File, uint64) ([32]byte, error) { return [32]
 func retain(*Transaction, context.Context, [16]byte, [16]byte, *os.File, [32]byte, uint64) error {
 	return ErrUnsupported
 }
-func fmtHex(b []byte) string { return hex.EncodeToString(b) }
+func temporary(*Transaction) (*os.File, error) { return nil, ErrUnsupported }
+func statTemporary(*os.File) (Revision, error) { return Revision{}, ErrUnsupported }
+func fmtHex(b []byte) string                   { return hex.EncodeToString(b) }

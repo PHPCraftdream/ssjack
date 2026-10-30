@@ -138,7 +138,19 @@ func (t *Transaction) run(op func() error) error {
 	defer release()
 	return op()
 }
-func Stat(f *os.File) (Revision, error) { return statFile(f) }
+
+// Temporary creates an anonymous, exclusively locked ciphertext spool with no named fallback.
+func (t *Transaction) Temporary() (*os.File, error) {
+	release, err := begin(t)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return temporary(t)
+}
+
+func StatTemporary(f *os.File) (Revision, error) { return statTemporary(f) }
+func Stat(f *os.File) (Revision, error)          { return statFile(f) }
 func Hash(ctx context.Context, f *os.File, limit uint64) ([32]byte, error) {
 	return hashFile(ctx, f, limit)
 }

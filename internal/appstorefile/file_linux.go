@@ -26,6 +26,40 @@ type transactionState struct {
 	mu    sync.RWMutex
 }
 
+func temporary(t *Transaction) (*os.File, error) {
+	s, err := live(t)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(s.fd, ".", unix.O_TMPFILE|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC, 0600)
+	if err != nil {
+		if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.ENOSYS) {
+			return nil, ErrUnsupported
+		}
+		return nil, ErrUnavailable
+	}
+	f := os.NewFile(uintptr(fd), "appstore-private-ciphertext")
+	if _, err = statTemporary(f); err == nil {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, ErrUnavailable
+	}
+	return f, nil
+}
+
+func statTemporary(f *os.File) (Revision, error) {
+	var st unix.Stat_t
+	if f == nil || unix.Fstat(int(f.Fd()), &st) != nil {
+		return Revision{}, ErrUnavailable
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 0 || st.Size < 0 {
+		return Revision{}, ErrInvalid
+	}
+	return rev(st), nil
+}
+
 func validDir(fd int) error {
 	var s unix.Stat_t
 	if e := unix.Fstat(fd, &s); e != nil {

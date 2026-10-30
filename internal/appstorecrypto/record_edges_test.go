@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -20,6 +21,133 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
 )
+
+func TestPinnedSnapshotPrivateCiphertextAndSharedClose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic pinned snapshot"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := writer.Write(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	expected := ExpectedSnapshot{StoreID: h.StoreID(), SnapshotID: commit.State.CommittedSnapshotID(), EncodedHash: commit.EncodedHash}
+	pinned, err := master.pinSnapshot(ctx, tx, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.close()
+	if !pinned.state.checked.Valid() {
+		t.Fatal("missing complete verification")
+	}
+	if _, err := appstorefile.StatTemporary(pinned.state.file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appstorefile.Stat(pinned.state.file); !errors.Is(err, appstorefile.ErrInvalid) {
+		t.Fatalf("spool must be anonymous: %v", err)
+	}
+	original, err := tx.OpenSnapshot(expected.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	mutable, err := os.OpenFile(fmt.Sprintf("/proc/self/fd/%d", original.Fd()), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mutable.WriteAt([]byte{0x7f}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = mutable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = pinned.recheck(ctx); err != nil {
+		t.Fatalf("source mutation affected private spool: %v", err)
+	}
+	if other, err := master.pinSnapshot(ctx, tx, expected); err == nil {
+		_ = other.close()
+		t.Fatal("changed source was accepted")
+	}
+	alias := *pinned
+	if err = pinned.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = alias.recheck(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("copied handle after close: %v", err)
+	}
+	if err = alias.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPinnedSnapshotHashCheckBeyondRevision(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic pinned hash"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := writer.Write(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	expected := ExpectedSnapshot{StoreID: h.StoreID(), SnapshotID: commit.State.CommittedSnapshotID(), EncodedHash: commit.EncodedHash}
+	pinned, err := master.pinSnapshot(ctx, tx, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.close()
+	if _, err = pinned.state.file.WriteAt([]byte{0x7f}, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the revision mismatch so this assertion independently requires the full hash.
+	pinned.state.revision, err = appstorefile.StatTemporary(pinned.state.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = pinned.recheck(ctx); !errors.Is(err, ErrSnapshot) {
+		t.Fatalf("changed spool hash accepted: %v", err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if err = pinned.recheck(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled recheck: %v", err)
+	}
+}
 
 func TestRecordAdmissionClosedBusyAndScope(t *testing.T) {
 	h := header(t)
