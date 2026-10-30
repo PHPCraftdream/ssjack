@@ -121,6 +121,14 @@ func Evaluate(request Request, grant Grant, current Current) (Result, error) {
 	return result, nil
 }
 
+// Rejected denies a valid request without returning backend state.
+func Rejected(request Request) (Result, error) {
+	if !request.Valid() {
+		return Result{}, ErrInvalid
+	}
+	return Result{request: request, outcome: appstoreanchorreply.Rejected, checked: true}, nil
+}
+
 // Unknown asserts no outcome after an uncertain backend result.
 func Unknown(request Request) (Result, error) {
 	if !request.Valid() {

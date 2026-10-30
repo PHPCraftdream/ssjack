@@ -51,6 +51,14 @@ type backendState struct {
 }
 type Backend struct{ state *backendState }
 
+// StoreID returns immutable routing metadata, not backend health or authority.
+func (b *Backend) StoreID() [16]byte {
+	if b == nil || b.state == nil {
+		return [16]byte{}
+	}
+	return b.state.store
+}
+
 // New owns separate directory/file handles. Caller must establish trusted durable root provenance.
 func New(directory *os.File, store [16]byte, capacity int) (*Backend, error) {
 	return openBackend(directory, store, capacity)
