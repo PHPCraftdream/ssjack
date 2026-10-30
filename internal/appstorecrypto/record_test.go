@@ -713,6 +713,9 @@ func TestWriterScopedCanceledAndBusy(t *testing.T) {
 	if _, err = w.Write(ctx, nil); !errors.Is(err, ErrBusy) {
 		t.Fatalf("busy: %v", err)
 	}
+	if _, err = w.Recover(ctx); !errors.Is(err, ErrBusy) {
+		t.Fatalf("recovery busy: %v", err)
+	}
 	if err = tx.Close(); err != nil {
 		t.Fatal(err)
 	}

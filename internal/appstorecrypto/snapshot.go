@@ -693,6 +693,9 @@ func (w *SnapshotWriter) Write(ctx context.Context, objects []SnapshotObject) (S
 	defer release()
 	tx, err := s.directory.Lock()
 	if err != nil {
+		if errors.Is(err, appstorefile.ErrBusy) {
+			return SnapshotCommit{}, ErrBusy
+		}
 		return SnapshotCommit{}, err
 	}
 	defer tx.Close()
@@ -929,6 +932,9 @@ func (w *SnapshotWriter) Recover(ctx context.Context) (SnapshotCommit, error) {
 	defer release()
 	tx, err := s.directory.Lock()
 	if err != nil {
+		if errors.Is(err, appstorefile.ErrBusy) {
+			return SnapshotCommit{}, ErrBusy
+		}
 		return SnapshotCommit{}, err
 	}
 	defer tx.Close()
