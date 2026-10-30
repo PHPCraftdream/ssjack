@@ -2,18 +2,18 @@ name: Feature CI
 
 on:
   push:
-    branches-ignore: ['sprint/**']
   pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: feature-${{ github.event.pull_request.number || github.ref }}
+  group: feature-${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]') && 'full' || 'scoped' }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   impacted:
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
     name: Scoped Go tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -71,7 +71,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  full:
+    name: Explicit full sprint gate
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]') }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_ref: ${{ github.sha }}
+
   licenses:
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
     name: License policy audit
     runs-on: ubuntu-latest
     steps:

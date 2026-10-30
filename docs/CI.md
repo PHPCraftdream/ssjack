@@ -34,19 +34,31 @@ or conservatively broadened. Feature checks are not a claim of full readiness.
 
 ## End of sprint / release
 
-Run the existing `ci.yml` explicitly at sprint completion:
+At sprint completion, include `[ci:full]` in the pushed HEAD commit message.
+GitHub's `contains` comparison is case-insensitive; use the lowercase spelling consistently. For example, add a separate message paragraph:
+
+```sh
+git commit -m "feat: complete the sprint" -m "[ci:full]"
+```
+
+The token may be in the subject or body. Only a push event evaluates its HEAD
+commit message; PR checks remain diff-scoped. The explicit full run calls
+`ci.yml` at that exact pushed SHA and skips duplicate scoped feature jobs.
+Branch names, including `sprint/...`, do not request a full run. Do not mention
+the token incidentally in an ordinary commit message: its presence is the opt-in.
+A normal feature push cannot cancel a marked full run's separate concurrency group.
+
+Manual full verification is also available through **Actions -> Full sprint CI ->
+Run workflow**, selecting the branch/ref, or through the CLI:
 
 ```sh
 gh workflow run ci.yml --ref <branch> -f source_ref=<exact-commit-sha>
 ```
 
-Use `gh run watch <run-id> --exit-status` for its result. GitHub may require the
-manual trigger to be registered on the default branch first. Until then, an
-explicit push of the completed revision to a `sprint/<name>` branch triggers the
-same full gate from that revision, without a release, tag or default-branch
-merge. Ordinary feature pushes exclude this sprint namespace. Do not create or
-push such a branch until the sprint is actually ready for full verification.
-No schedule or automatic per-feature full run is installed. `Full sprint CI` retains the complete native
+Use background `gh run watch <run-id> --exit-status` for its result. GitHub may
+require the manual trigger to be registered on the default branch first; the
+explicit commit-token route works from the feature branch without a main merge.
+No schedule or automatic unmarked per-feature full run is installed. `Full sprint CI` retains the complete native
 Go matrix, separate full race suite, repeated SSH cancellation regression,
 CLI/help/version/licenses/source-install checks, installer matrix, actual
 production KDF profile and license policy gate. Its native CLI artifacts and

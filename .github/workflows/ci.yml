@@ -1,8 +1,6 @@
 name: Full sprint CI
 
 on:
-  push:
-    branches: ['sprint/**']
   workflow_dispatch:
     inputs:
       source_ref:
