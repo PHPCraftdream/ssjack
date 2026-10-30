@@ -3,11 +3,22 @@ package appstorecrypto
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
+	"os"
 	"testing"
+	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorcore"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorreply"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorrequest"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorstate"
 	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
+	"github.com/PHPCraftdream/ssjack/internal/appstorecatalog"
+	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
+	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
 )
 
 func TestRecordAdmissionClosedBusyAndScope(t *testing.T) {
@@ -266,4 +277,458 @@ func TestDerivationOperationBudgetBeforeKDFAndAfterCancel(t *testing.T) {
 		t.Fatal("cancelled derivation leaked operation budget")
 	}
 	available()
+}
+
+func TestWriterScopedRejectedRequestCollision(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, backend, _, h, credentialID := writerFixtureWithCredential(t, appstoreanchorcore.Writer)
+	genesis, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot, transaction [16]byte
+	snapshot[0], transaction[0] = 8, 9
+	entry, err := appstorejournal.NewEntry(0, snapshot, transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := appstoreanchorrequest.PlanReservation(genesis, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := request.Bytes()
+	copy(raw[48:80], bytes.Repeat([]byte{0x77}, 32))
+	collision, err := appstoreanchorcore.Parse(raw, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := appstoreanchorcore.NewGrant(h.StoreID(), credentialID, appstoreanchorcore.Writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := backend.Execute(collision, grant)
+	if err != nil || result.Outcome() != appstoreanchorreply.Conflict {
+		t.Fatalf("seed request-ID collision: outcome %v, error %v", result.Outcome(), err)
+	}
+	if _, err = writerMutate(ctx, transport, request, genesis); !errors.Is(err, ErrWriterRejected) {
+		t.Fatalf("rejected request collision was not terminal: %v", err)
+	}
+	after, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil || after.Bytes() != genesis.Bytes() {
+		t.Fatalf("rejected request changed anchor state: %v", err)
+	}
+}
+
+func TestWriterScopedIntentRestartReplay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic scoped restart fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	anchor, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot, transaction [16]byte
+	snapshot[0], transaction[0] = 9, 10
+	entry, err := appstorejournal.NewEntry(anchor.JournalCount(), snapshot, transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve, err := appstoreanchorrequest.PlanReservation(anchor, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.AppendJournal(entry.Bytes(), anchor.JournalCount()); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := writerMutate(ctx, transport, reserve, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw [appstoreheader.Size]byte
+	copy(raw[:8], "SSAPP001")
+	binary.BigEndian.PutUint16(raw[8:10], 1)
+	store := h.StoreID()
+	copy(raw[12:28], store[:])
+	copy(raw[28:44], snapshot[:])
+	parent := anchor.CommittedSnapshotID()
+	copy(raw[44:60], parent[:])
+	binary.BigEndian.PutUint32(raw[60:64], appstoreheader.ChunkSize)
+	binary.BigEndian.PutUint64(raw[64:72], appstorecatalog.Size)
+	binary.BigEndian.PutUint32(raw[72:76], 1)
+	master.state.mu.Lock()
+	salts := master.state.salts
+	master.state.mu.Unlock()
+	for i := range salts {
+		copy(raw[80+i*32:112+i*32], salts[i][:])
+	}
+	raw[208] = 1
+	header, err := appstoreheader.Parse(raw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := tx.CreateCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealHash, err := master.sealWriterSnapshot(ctx, header, nil, candidate)
+	closeErr := candidate.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("test-only snapshot seal: %v %v", err, closeErr)
+	}
+	if err = tx.SyncCandidate(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := tx.OpenCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, checkErr := master.checkSnapshot(ctx, pinned, ExpectedSnapshot{StoreID: store, SnapshotID: snapshot, EncodedHash: sealHash})
+	closeErr = pinned.Close()
+	if checkErr != nil || closeErr != nil || !check.Valid() || len(check.Catalog().Entries()) != 0 {
+		t.Fatalf("test-only candidate verification: %v %v", checkErr, closeErr)
+	}
+	commitRequest, err := appstoreanchorrequest.PlanCommit(reserve, sealHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := appstoreanchorrequest.NewIntent(commitRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentBytes := intent.Bytes()
+	if err = tx.CreateIntent(transaction, intentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh writer state/master models process restart; retain real directory and TLS fixture.
+	restartedMaster, err := derive(ctx, h, []byte("synthetic scoped restart fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restartedMaster.Close()
+	restarted, err := NewSnapshotWriter(directory, transport, restartedMaster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := restarted.Recover(ctx)
+	if err != nil || first.State.Bytes() != mustProposedState(t, commitRequest).Bytes() {
+		t.Fatalf("intent replay: %v", err)
+	}
+	if first.EncodedHash != sealHash {
+		t.Fatal("replay changed candidate ciphertext hash")
+	}
+	tx, err = directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIntent, err := tx.LoadIntent(transaction)
+	if err != nil || !bytes.Equal(gotIntent[:], intentBytes[:]) {
+		t.Fatalf("intent bytes changed: %v", err)
+	}
+	journal, err := tx.Journal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalStat, err := appstorefile.Stat(journal)
+	_ = journal.Close()
+	if err != nil || journalStat.Size != appstorejournal.Size {
+		t.Fatalf("journal appended during replay: size=%d err=%v", journalStat.Size, err)
+	}
+	_ = tx.Close()
+	second, err := restarted.Recover(ctx)
+	if err != nil || second.State.Bytes() != first.State.Bytes() {
+		t.Fatalf("repeat recovery: %v", err)
+	}
+	if reserved.Sequence() != 0 || first.State.Sequence() != 1 || second.State.Sequence() != 1 {
+		t.Fatalf("replayed state sequence: reserved=%d first=%d second=%d", reserved.Sequence(), first.State.Sequence(), second.State.Sequence())
+	}
+}
+
+func TestWriterScopedSourceRevisionFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic scoped source revision"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	anchor, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot, transaction [16]byte
+	snapshot[0], transaction[0] = 9, 11
+	entry, err := appstorejournal.NewEntry(0, snapshot, transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve, err := appstoreanchorrequest.PlanReservation(anchor, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.AppendJournal(entry.Bytes(), 0); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := writerMutate(ctx, transport, reserve, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.CreateTemp(t.TempDir(), "synthetic-source-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err = source.Write([]byte("original synthetic")); err != nil {
+		t.Fatal(err)
+	}
+	prepared, total, err := prepareWriterObjects(ctx, []SnapshotObject{{ObjectID: [16]byte{1}, Source: source, MediaType: "bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.WriteAt([]byte("!"), int64(len("original synthetic"))); err != nil {
+		t.Fatal(err)
+	}
+	var raw [appstoreheader.Size]byte
+	copy(raw[:8], "SSAPP001")
+	binary.BigEndian.PutUint16(raw[8:10], 1)
+	store := h.StoreID()
+	copy(raw[12:28], store[:])
+	copy(raw[28:44], snapshot[:])
+	parent := anchor.CommittedSnapshotID()
+	copy(raw[44:60], parent[:])
+	binary.BigEndian.PutUint32(raw[60:64], appstoreheader.ChunkSize)
+	binary.BigEndian.PutUint64(raw[64:72], total)
+	binary.BigEndian.PutUint32(raw[72:76], 2)
+	master.state.mu.Lock()
+	salts := master.state.salts
+	master.state.mu.Unlock()
+	for i := range salts {
+		copy(raw[80+i*32:112+i*32], salts[i][:])
+	}
+	raw[208] = 1
+	header, err := appstoreheader.Parse(raw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := tx.CreateCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sealErr := master.sealWriterSnapshot(ctx, header, prepared, candidate)
+	closeErr := candidate.Close()
+	if !errors.Is(sealErr, ErrRecord) || closeErr != nil {
+		t.Fatalf("revision mismatch: %v %v", sealErr, closeErr)
+	}
+	if err = tx.SyncCandidate(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := tx.OpenCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := appstorefile.Stat(reopened)
+	closeErr = reopened.Close()
+	if err != nil || closeErr != nil || rev.Size != 0 {
+		t.Fatalf("candidate not empty: %+v %v %v", rev, err, closeErr)
+	}
+	if err = tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.Recover(ctx); !errors.Is(err, ErrWriterBurned) {
+		t.Fatalf("recover burned reservation: %v", err)
+	}
+	state, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil || state.Sequence() != 0 || state.JournalCount() != 1 || reserved.Sequence() != 0 {
+		t.Fatalf("unexpected anchor state: %v", err)
+	}
+}
+
+func TestWriterScopedCanceledReservationBurned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic scoped cancellation"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	anchor, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot, transaction [16]byte
+	snapshot[0], transaction[0] = 7, 12
+	entry, err := appstorejournal.NewEntry(0, snapshot, transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve, err := appstoreanchorrequest.PlanReservation(anchor, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.AppendJournal(entry.Bytes(), 0); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := writerMutate(ctx, transport, reserve, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := tx.CreateCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext := []byte("synthetic partial ciphertext")
+	if _, err = candidate.Write(ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if err = candidate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.SyncCandidate(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err = writer.Recover(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled recovery: %v", err)
+	}
+	if _, err = writer.Recover(ctx); !errors.Is(err, ErrWriterBurned) {
+		t.Fatalf("fresh recovery: %v", err)
+	}
+	state, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil || state.Sequence() != 0 || state.JournalCount() != 1 || reserved.Sequence() != 0 {
+		t.Fatalf("anchor changed: %v", err)
+	}
+	quarantine, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer quarantine.Close()
+	f, err := quarantine.OpenNamed("quarantine", "07000000000000000000000000000000.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	if err != nil || !bytes.Equal(got, ciphertext) {
+		t.Fatalf("quarantine content mismatch: %v", err)
+	}
+}
+func mustProposedState(t *testing.T, req appstoreanchorrequest.Request) appstoreanchorstate.State {
+	t.Helper()
+	state, ok := req.ProposedState()
+	if !ok {
+		t.Fatal("commit request has no proposed state")
+	}
+	return state
+}
+func TestWriterScopedSuffixBurnAndOrphanQuarantine(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	genesis, err := writerRead(ctx, transport, h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	var snapshot, transaction [16]byte
+	snapshot[0], transaction[0] = 2, 3
+	entry, err := appstorejournal.NewEntry(0, snapshot, transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryBytes := entry.Bytes()
+	if err = tx.AppendJournal(entryBytes, 0); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := tx.CreateCandidate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext := []byte{1, 2, 3}
+	if _, err = candidate.Write(ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if err = candidate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.SyncCandidate(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	state, err := writerReconcileReservations(ctx, tx, transport, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.JournalCount() != 1 || state.Sequence() != 0 {
+		t.Fatalf("burned state count=%d sequence=%d", state.JournalCount(), state.Sequence())
+	}
+	journal, err := tx.Journal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [40]byte
+	if _, err = io.ReadFull(journal, got[:]); err != nil {
+		t.Fatal(err)
+	}
+	journal.Close()
+	if !bytes.Equal(got[:], entryBytes[:]) {
+		t.Fatal("reservation journal entry changed")
+	}
+	if f, e := tx.OpenCandidate(snapshot); !errors.Is(e, appstorefile.ErrMissing) {
+		if f != nil {
+			f.Close()
+		}
+		t.Fatalf("candidate survived quarantine: %v", e)
+	}
+	quarantined, err := tx.OpenNamed("quarantine", "02000000000000000000000000000000.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer quarantined.Close()
+	recovered, err := io.ReadAll(quarantined)
+	if err != nil || !bytes.Equal(recovered, ciphertext) {
+		t.Fatalf("quarantined ciphertext: %x %v", recovered, err)
+	}
+	repeated, err := writerReconcileReservations(ctx, tx, transport, state)
+	if err != nil || repeated.Bytes() != state.Bytes() {
+		t.Fatalf("repeat changed state: %v", err)
+	}
 }
