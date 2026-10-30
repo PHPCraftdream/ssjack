@@ -23,6 +23,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/appstoresink"
 )
@@ -99,7 +100,27 @@ func TestPrivateCurrentReferenceToFixedNativeConsumer(t *testing.T) {
 	}
 	selected := commit.Refs[1]
 	consumer := boundNativeConsumer(t, path, artifact, selected, commit.EncodedHash)
-	result, err := master.deliverCurrent(ctx, directory, fault.reader, consumer)
+	placeholder, err := appstoreplaceholder.Encode(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := appstoreplaceholder.Parse(placeholder)
+	if err != nil || requested != selected {
+		t.Fatalf("placeholder identity: %v", err)
+	}
+	otherPlaceholder, err := appstoreplaceholder.Encode(commit.Refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRequest, err := appstoreplaceholder.Parse(otherPlaceholder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := master.deliverCurrent(ctx, directory, fault.reader, otherRequest, consumer)
+	if !errors.Is(err, appstoresink.ErrDenied) || denied.MayHaveDelivered || denied.Complete {
+		t.Fatalf("placeholder escaped fixed binding: %+v %v", denied, err)
+	}
+	result, err := master.deliverCurrent(ctx, directory, fault.reader, requested, consumer)
 	if err != nil || !result.Complete || !result.MayHaveDelivered || result.Bytes != appstoreheader.ChunkSize+19 {
 		t.Fatalf("exact native receipt: %+v %v", result, err)
 	}
@@ -113,7 +134,7 @@ func TestPrivateCurrentReferenceToFixedNativeConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrongConsumer := boundNativeConsumer(t, path, artifact, wrong, commit.EncodedHash)
-	result, err = master.deliverCurrent(ctx, directory, fault.reader, wrongConsumer)
+	result, err = master.deliverCurrent(ctx, directory, fault.reader, wrong, wrongConsumer)
 	if !errors.Is(err, appstoreref.ErrNotFound) || result.MayHaveDelivered || result.Complete {
 		t.Fatalf("wrong version released: %+v %v", result, err)
 	}
@@ -121,7 +142,7 @@ func TestPrivateCurrentReferenceToFixedNativeConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	historical := boundNativeConsumer(t, path, artifact, selected, commit.EncodedHash)
-	result, err = master.deliverCurrent(ctx, directory, fault.reader, historical)
+	result, err = master.deliverCurrent(ctx, directory, fault.reader, selected, historical)
 	if err == nil || result.MayHaveDelivered || result.Complete {
 		t.Fatalf("historical reference substituted current: %+v %v", result, err)
 	}

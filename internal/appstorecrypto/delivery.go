@@ -27,12 +27,11 @@ type pinnedSnapshotState struct {
 type pinnedSnapshot struct{ state *pinnedSnapshotState }
 
 // Private until an authenticated enrollment path can own consumer configuration.
-func (m *Master) deliverCurrent(ctx context.Context, directory *appstorefile.Directory, anchor *appstoreanchortls.Client, consumer *appstoresink.Consumer) (appstoresink.Result, error) {
+func (m *Master) deliverCurrent(ctx context.Context, directory *appstorefile.Directory, anchor *appstoreanchortls.Client, reference appstoreref.Ref, consumer *appstoresink.Consumer) (appstoresink.Result, error) {
 	if ctx == nil || directory == nil || anchor == nil || consumer == nil {
 		return appstoresink.Result{}, ErrSnapshot
 	}
 	binding := consumer.Binding()
-	reference := binding.Reference
 	if directory.StoreID() != reference.StoreID() {
 		return appstoresink.Result{}, ErrSnapshot
 	}
