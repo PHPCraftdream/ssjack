@@ -1,42 +1,51 @@
-# Optional read-only anchor HTTPS binding
+# Optional fixed-scope anchor HTTPS bindings
 
-This isolated package maps a canonical 48-byte anchor Read to one HTTPS POST
-with `application/octet-stream` request/accept headers. Only HTTP 200 with an
-exact 352-byte signed, correlated reply is accepted. It is an optional transport
-profile, not an existing enrolled service or a production MCP integration.
+`Client` remains strictly Read-only. `New(Config)` requires an explicit HTTPS
+endpoint, nonempty CA pool, matching exportable client certificate/private key,
+service Ed25519 public key and nonzero store ID. It owns credential copies and
+selects no files, system trust, default endpoint or environment proxy. Supplied
+configuration is caller-controlled, not model-selected or trusted enrollment.
 
-`New` requires an explicit HTTPS endpoint, nonempty CA pool, client certificate
-and matching exportable PKCS8-compatible private key, service Ed25519 public key,
-and nonzero store ID. URL userinfo, queries and fragments are rejected. There is
-no credential file lookup, system trust fallback, default endpoint or environment
-proxy. Configuration is caller-controlled, not model-selected.
+`Client.Read` generates one fresh cryptographic request ID and sends canonical
+Read48. A separate opt-in `NewWriter(Config)` creates `Writer`, whose `Submit`
+accepts only immutable admitted Create/Reserve/Commit requests for the fixed
+store. It never accepts raw request bytes, arbitrary operations or alternate
+endpoints. Server-side enrolled certificate roles remain mandatory; constructing
+Writer with a reader certificate does not make that credential a writer.
+`Writer.Read` makes a fresh ordinary Read for explicit caller reconciliation.
 
-Each `Read` requires a live context with an explicit deadline. It generates a
-fresh cryptographic request ID, uses a fresh TLS 1.3 connection without session
-resumption, checks a verified server chain and a compatible client-certificate
-request before HTTP is sent, and verifies the reply signature and exact
-operation/store/request correlation. Responses are capped at 353 bytes and
-headers at 4096 bytes. Redirects, cookies, compression, connection reuse and
-application retries are disabled. There are no Create/CAS or generic send APIs.
-DNS resolution and network access occur only when the caller invokes Read.
+Both transports require an explicit live context deadline, fresh TLS 1.3/no
+resumption connection, verified server chain and compatible client-certificate
+request before any HTTP body is sent. Exact correlated signed Reply352 and HTTP
+200 are required; body/header caps remain 353/4096 bytes. Redirects, cookies,
+compression, proxy use, connection reuse and application retries are disabled.
+Only private exchange internals are shared; Client gains no mutation method.
 
-One read per client state is admitted with a nonblocking lock. Client copies
-share lifecycle state; Close waits for an active read, clears owned private DER
-and permanently closes every alias. Certificate DER, private DER, public signer
-and roots are copied at construction. Nonexportable/HSM keys are unsupported.
-Clearing owned DER is best effort: parsed private keys and TLS/runtime copies
-are not guaranteed erased. This is not a process-wide operation budget.
+`Submit` validates the exact resulting proposed state with `CheckMutation`:
+Committed -> ExactRecordedResult, Conflict/Unknown -> ReadRequired, and signed
+Rejected -> ReportedRejected. Network/timeout/correlation/signature/wrong-state
+failure after entering exchange returns no reply, ReadRequired and an error.
+Local preflight/closed/busy failures return no classification because this call
+did not enter exchange; they do not prove anything about another in-flight call.
+No automatic Read, retry, replacement request ID or idempotency key is generated.
+The controller still needs authenticated Read-first reconciliation and durable
+original-byte replay permission before resubmitting; recorded outcomes are not
+necessarily the latest current state.
 
-Supplied trust is not human enrollment or trusted endpoint provenance. A client
-certificate request does not prove server-side certificate validation, per-store
-role policy, authorization, service linearizability, freshness, rollback safety
-or nonce reservation. Signed Rejected/Unknown/NotFound outcomes remain verified
-observations, not action permissions. Backend details are hidden behind opaque
-errors; context cancellation may be returned separately. No production tool,
-secret delivery, mutation, durable state, filesystem writer or sealing is wired.
+One operation per client state is admitted nonblockingly. Writer copies share
+Close and their internal Read/Submit exclusion. Close waits for actual operation
+return and clears owned private DER; TLS/runtime copies are not guaranteed erased.
+Nonexportable/HSM keys and host-wide resource/erasure guarantees are unsupported.
 
-Tests use synthetic certificates and localhost servers only. They cover valid
-correlated reads, fresh IDs/connections, configuration ownership, proxy bypass,
-TLS/mTLS refusal before HTTP, trust-pool copying, invalid reply/status/length,
-redirect refusal, cancellation, deadlines, shared Close and busy admission.
-Execution belongs to public GitHub CI; no real endpoint or credentials are used.
+Supplied trust is not human provenance, authorization, verified intent fsync,
+linearizability, historical ID uniqueness, nonce reservation or permission to
+seal/deliver secrets. No production MCP tool, generic secret-get, consumer sink
+or snapshot writer is enabled. SSH formats and fixed cryptographic profiles are
+unchanged.
+
+Public CI tests preserve all Read-only transport cases and add real durable mTLS
+service create/reserve/commit/original replay/reconciliation, reader-credential
+denial, invalid local scope/type/deadline, shared Close/busy, signed wrong-state
+and correlation rejection, Unknown/status handling and absence of automatic
+retry. Fixtures use synthetic credentials and localhost servers only; no local
+test/build execution or real credential access is performed.

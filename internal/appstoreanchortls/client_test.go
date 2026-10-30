@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorreply"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorrequest"
 )
 
 func readContext(t *testing.T) context.Context {
@@ -147,6 +148,55 @@ func TestClientLifecycleAndCancellation(t *testing.T) {
 		}
 		if _, err := client.Read(readContext(t)); !errors.Is(err, ErrClosed) {
 			t.Fatal("zero client accepted")
+		}
+	}
+}
+
+func TestWriterPreflightBusyAndSharedClose(t *testing.T) {
+	cfg := config("https://example.test/anchor", fixture(t, 160))
+	writer, err := NewWriter(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	create, _ := appstoreanchorrequest.NewCreate(cfg.StoreID)
+	read, _ := appstoreanchorrequest.NewRead(cfg.StoreID, [16]byte{1})
+	foreign, _ := appstoreanchorrequest.NewCreate([16]byte{2})
+	for _, request := range []appstoreanchorrequest.Request{{}, read, foreign} {
+		reply, result, err := writer.Submit(readContext(t), request)
+		if err != ErrInvalid || result != 0 || reply.SignatureValid() {
+			t.Fatal("invalid mutation reached transport")
+		}
+	}
+	for _, ctx := range []context.Context{nil, context.Background()} {
+		if _, result, err := writer.Submit(ctx, create); err != ErrUnavailable || result != 0 {
+			t.Fatal("missing deadline accepted")
+		}
+	}
+	ctx, cancel := context.WithCancel(readContext(t))
+	cancel()
+	if _, result, err := writer.Submit(ctx, create); err != context.Canceled || result != 0 {
+		t.Fatal("cancelled call attempted")
+	}
+	writer.client.state.mu.Lock()
+	_, result, err := writer.Submit(readContext(t), create)
+	writer.client.state.mu.Unlock()
+	if err != ErrBusy || result != 0 {
+		t.Fatal("writer busy admission bypassed")
+	}
+	alias := *writer
+	if err := alias.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := writer.Submit(readContext(t), create); err != ErrClosed {
+		t.Fatal("alias close not shared")
+	}
+	for _, value := range []*Writer{nil, {}} {
+		if err := value.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := value.Submit(readContext(t), create); err != ErrClosed {
+			t.Fatal("zero writer accepted")
 		}
 	}
 }

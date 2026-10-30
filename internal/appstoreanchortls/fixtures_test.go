@@ -2,6 +2,7 @@ package appstoreanchortls
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,8 +16,19 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorcore"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorhttp"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorledger"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorreply"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorrequest"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorresult"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorstate"
+	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
 )
 
 type fixtures struct {
@@ -90,4 +102,131 @@ func signedReply(t *testing.T, request []byte, signer ed25519.PrivateKey) []byte
 	copy(b[256:288], stateHash[:])
 	copy(b[288:352], ed25519.Sign(signer, b[:288]))
 	return b
+}
+
+func signedMutationReply(t *testing.T, raw []byte, signer ed25519.PrivateKey, mode string, other appstoreanchorstate.State) []byte {
+	t.Helper()
+	if len(raw) != 304 || raw[8] != 3 {
+		t.Error("noncanonical mutation fixture input")
+		return nil
+	}
+	b := make([]byte, 352)
+	copy(b[:8], "SSASRSP1")
+	b[8], b[9] = raw[8], 5
+	copy(b[16:32], raw[32:48])
+	copy(b[32:48], raw[16:32])
+	if mode == "wrong-state" {
+		b[9] = 2
+		binary.BigEndian.PutUint64(b[48:56], 1)
+		binary.BigEndian.PutUint16(b[56:58], 192)
+		state, hash := other.Bytes(), other.Hash()
+		copy(b[64:256], state[:])
+		copy(b[256:288], hash[:])
+	}
+	if mode == "wrong-id" {
+		b[16] ^= 1
+	}
+	copy(b[288:], ed25519.Sign(signer, b[:288]))
+	return b
+}
+
+func liveWriterConfig(t *testing.T, role appstoreanchorcore.Role) Config {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux durable service required")
+	}
+	f := fixture(t, 140)
+	cfg := config("https://127.0.0.1:443", f)
+	path := t.TempDir()
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dir.Close() })
+	backend, err := appstoreanchorledger.New(dir, cfg.StoreID, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := appstoreanchorhttp.New(appstoreanchorhttp.Config{
+		Authority: listener.Addr().String(), Certificate: f.server, ClientCAs: f.roots, SigningKey: f.signer,
+		Bindings: []appstoreanchorhttp.Binding{{CredentialID: sha256.Sum256(f.client.Certificate[0]), StoreID: cfg.StoreID, Role: role, Backend: backend}},
+	})
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- service.Serve(ctx, listener) }()
+	t.Cleanup(func() { cancel(); listener.Close(); service.Close(); <-done })
+	cfg.Endpoint = "https://" + listener.Addr().String() + "/anchor"
+	return cfg
+}
+
+func TestWriterAgainstActualDurableTLSService(t *testing.T) {
+	cfg := liveWriterConfig(t, appstoreanchorcore.Writer)
+	writer, err := NewWriter(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	observed, err := writer.Read(readContext(t))
+	if err != nil || observed.Outcome() != appstoreanchorreply.NotFound {
+		t.Fatal("initial read", err)
+	}
+	create, err := appstoreanchorrequest.NewCreate(cfg.StoreID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesis, _ := appstoreanchorstate.Genesis(cfg.StoreID)
+	entry, _ := appstorejournal.NewEntry(0, [16]byte{2}, [16]byte{3})
+	reserve, err := appstoreanchorrequest.PlanReservation(genesis, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := appstoreanchorrequest.PlanCommit(reserve, [32]byte{4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, request := range []appstoreanchorrequest.Request{create, reserve, commit} {
+		reply, result, err := writer.Submit(readContext(t), request)
+		if err != nil || result != appstoreanchorresult.ExactRecordedResult || reply.ServiceVersion() != uint64(index) {
+			t.Fatalf("mutation %d: %v", index, err)
+		}
+	}
+	replayed, result, err := writer.Submit(readContext(t), create)
+	if err != nil || result != appstoreanchorresult.ExactRecordedResult || replayed.ServiceVersion() != 0 {
+		t.Fatal("original outcome replay", err)
+	}
+	observed, err = writer.Read(readContext(t))
+	if err != nil || observed.ServiceVersion() != 2 {
+		t.Fatal("reconciliation read", err)
+	}
+	otherEntry, _ := appstorejournal.NewEntry(0, [16]byte{6}, [16]byte{7})
+	stale, err := appstoreanchorrequest.PlanReservation(genesis, otherEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict, result, err := writer.Submit(readContext(t), stale)
+	if err != nil || result != appstoreanchorresult.ReadRequired || conflict.Outcome() != appstoreanchorreply.Conflict {
+		t.Fatal("stale CAS classification", err)
+	}
+	readerConfig := liveWriterConfig(t, appstoreanchorcore.Reader)
+	reader, err := NewWriter(readerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	rejected, result, err := reader.Submit(readContext(t), create)
+	if err != nil || result != appstoreanchorresult.ReportedRejected || rejected.Outcome() != appstoreanchorreply.Rejected {
+		t.Fatal("reader credential bypassed server role", err)
+	}
 }

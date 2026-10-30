@@ -53,6 +53,10 @@ func (c *Client) Read(ctx context.Context) (appstoreanchorreply.Reply, error) {
 	if err != nil {
 		return appstoreanchorreply.Reply{}, ErrUnavailable
 	}
+	return exchange(ctx, s, certificate, request, deadline)
+}
+
+func exchange(ctx context.Context, s *clientState, certificate tls.Certificate, request appstoreanchorrequest.Request, deadline time.Time) (appstoreanchorreply.Reply, error) {
 	var dialed atomic.Bool
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, MaxConnsPerHost: 1, ForceAttemptHTTP2: false, MaxResponseHeaderBytes: 4096}
 	transport.DialTLSContext = func(_ context.Context, network, address string) (net.Conn, error) {
@@ -118,7 +122,7 @@ func (c *Client) Read(ctx context.Context) (appstoreanchorreply.Reply, error) {
 		}
 		return appstoreanchorreply.Reply{}, ErrUnavailable
 	}
-	reply, err := appstoreanchorreply.Verify(body, s.signer[:], appstoreanchorreply.Expected{Operation: appstoreanchorreply.Read, RequestID: requestID, StoreID: s.store})
+	reply, err := appstoreanchorreply.Verify(body, s.signer[:], appstoreanchorreply.Expected{Operation: appstoreanchorreply.Operation(request.Operation()), RequestID: request.RequestID(), StoreID: s.store})
 	if err != nil {
 		return appstoreanchorreply.Reply{}, ErrUnavailable
 	}

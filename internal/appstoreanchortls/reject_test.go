@@ -12,7 +12,63 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorrequest"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorresult"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorstate"
+	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
 )
+
+func TestWriterUnknownAndInvalidRepliesRequireReadWithoutRetry(t *testing.T) {
+	for _, mode := range []string{"unknown", "wrong-state", "wrong-id", "status"} {
+		t.Run(mode, func(t *testing.T) {
+			f := fixture(t, 180)
+			store := config("https://example.test", f).StoreID
+			genesis, _ := appstoreanchorstate.Genesis(store)
+			entry, _ := appstorejournal.NewEntry(0, [16]byte{2}, [16]byte{3})
+			request, err := appstoreanchorrequest.PlanReservation(genesis, entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherEntry, _ := appstorejournal.NewEntry(0, [16]byte{4}, [16]byte{5})
+			other, err := appstoreanchorrequest.PlanReservation(genesis, otherEntry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherState, _ := other.ProposedState()
+			var calls atomic.Int32
+			s := server(t, f, tls.RequireAndVerifyClientCert, tls.VersionTLS13, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				raw, err := io.ReadAll(io.LimitReader(r.Body, 305))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if mode == "status" {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(signedMutationReply(t, raw, f.signer, mode, otherState))
+			})
+			writer, err := NewWriter(config(s.URL, f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			reply, result, err := writer.Submit(readContext(t), request)
+			if result != appstoreanchorresult.ReadRequired || calls.Load() != 1 {
+				t.Fatal("mutation retried or classified without reconciliation")
+			}
+			if mode == "unknown" {
+				if err != nil || !reply.SignatureValid() {
+					t.Fatal("valid unknown response rejected", err)
+				}
+			} else if err != ErrUnavailable || reply.SignatureValid() {
+				t.Fatal("invalid mutation response exposed acceptance", err)
+			}
+		})
+	}
+}
 
 func TestTLSRejectsBeforeHTTP(t *testing.T) {
 	for _, tc := range []struct {

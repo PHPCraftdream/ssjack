@@ -1,4 +1,4 @@
-// Package appstoreanchortls provides an opt-in read-only HTTPS/mTLS binding.
+// Package appstoreanchortls provides separate fixed-scope read and writer HTTPS/mTLS bindings.
 package appstoreanchortls
 
 import (
