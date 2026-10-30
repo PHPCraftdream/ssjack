@@ -22,7 +22,7 @@ func TestHTTPAndCertificateRefusals(t *testing.T) {
 	f := certs(t, 70)
 	_, endpoint := start(t, configuration("", f, b))
 	create, _ := appstoreanchorrequest.NewCreate(storeID())
-	for _, name := range []string{"unknown-cert", "missing-cert", "TLS12", "query", "host", "method", "origin", "oversize", "malformed"} {
+	for _, name := range []string{"unknown-cert", "unknown-store", "missing-cert", "TLS12", "query", "host", "method", "origin", "oversize", "malformed"} {
 		t.Run(name, func(t *testing.T) {
 			certificate := f.writer
 			if name == "unknown-cert" {
@@ -32,11 +32,21 @@ func TestHTTPAndCertificateRefusals(t *testing.T) {
 			}
 			tr := transport(f, certificate)
 			defer tr.CloseIdleConnections()
+			if name == "missing-cert" {
+				tr.TLSClientConfig.Certificates = nil
+			}
 			if name == "TLS12" {
 				tr.TLSClientConfig.MinVersion = tls.VersionTLS12
 				tr.TLSClientConfig.MaxVersion = tls.VersionTLS12
 			}
 			raw := create.Bytes()
+			if name == "unknown-store" {
+				foreign, err := appstoreanchorrequest.NewCreate([16]byte{2})
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw = foreign.Bytes()
+			}
 			target := endpoint
 			if name == "query" {
 				target += "?x=1"
@@ -74,7 +84,7 @@ func TestHTTPAndCertificateRefusals(t *testing.T) {
 			}
 			defer response.Body.Close()
 			expected := http.StatusBadRequest
-			if name == "unknown-cert" {
+			if name == "unknown-cert" || name == "unknown-store" {
 				expected = http.StatusForbidden
 			}
 			if name == "oversize" {
