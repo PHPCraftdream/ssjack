@@ -17,10 +17,109 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorecatalog"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
+	"github.com/PHPCraftdream/ssjack/internal/appstoresink"
 	"golang.org/x/crypto/hkdf"
 )
 
 const recordLayers = 1000
+
+func snapshotEOF(ctx context.Context, f *os.File) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var extra [1]byte
+	n, err := f.Read(extra[:])
+	if cancelled := ctx.Err(); cancelled != nil {
+		return cancelled
+	}
+	if n != 0 || err != io.EOF {
+		return ErrSnapshot
+	}
+	return nil
+}
+
+func (m *Master) streamPinnedObject(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink *appstoresink.Delivery) (appstoresink.Result, error) {
+	var result appstoresink.Result
+	if ctx == nil || pinned == nil || pinned.state == nil || sink == nil {
+		return result, ErrSnapshot
+	}
+	s := pinned.state
+	if !s.mu.TryLock() {
+		return result, ErrBusy
+	}
+	defer s.mu.Unlock()
+	if s.file == nil || !s.checked.Valid() {
+		return result, ErrClosed
+	}
+	header := s.checked.Header()
+	payload := header.PlaintextSize() - appstoreheader.ChunkSize
+	if entry.ObjectID() == ([16]byte{}) || entry.VersionID() == ([16]byte{}) || entry.Offset() > payload || entry.Length() > payload-entry.Offset() {
+		return result, ErrSnapshot
+	}
+	start := uint64(appstoreheader.ChunkSize) + entry.Offset()
+	end := start + entry.Length()
+	if _, err := s.file.Seek(appstoreheader.Size, io.SeekStart); err != nil {
+		return result, ErrSnapshotRead
+	}
+	ciphertext := make([]byte, appstoreheader.ChunkSize+16000)
+	defer clear(ciphertext)
+	for index := uint32(0); index < header.ChunkCount(); index++ {
+		var prefix [12]byte
+		if err := snapshotRead(ctx, s.file, prefix[:]); err != nil {
+			return result, err
+		}
+		plainSize, err := recordLength(header, index, false)
+		if err != nil {
+			return result, err
+		}
+		cipherSize := plainSize + 16000
+		if binary.BigEndian.Uint32(prefix[:4]) != index || binary.BigEndian.Uint32(prefix[4:8]) != uint32(plainSize) || binary.BigEndian.Uint32(prefix[8:]) != uint32(cipherSize) {
+			return result, ErrSnapshot
+		}
+		if err := snapshotRead(ctx, s.file, ciphertext[:cipherSize]); err != nil {
+			return result, err
+		}
+		base := uint64(index) * appstoreheader.ChunkSize
+		left, right := start, end
+		if left < base {
+			left = base
+		}
+		if chunkEnd := base + uint64(plainSize); right > chunkEnd {
+			right = chunkEnd
+		}
+		if left >= right {
+			continue
+		}
+		plain, err := m.openRecord(ctx, header, index, false, ciphertext[:cipherSize])
+		if err != nil {
+			return result, err
+		}
+		selected := plain[left-base : right-base]
+		for len(selected) > 0 {
+			if err = ctx.Err(); err != nil {
+				clear(plain[:cap(plain)])
+				return result, err
+			}
+			n := len(selected)
+			if n > 16384 {
+				n = 16384
+			}
+			result.MayHaveDelivered = true
+			written, writeErr := sink.Write(selected[:n])
+			result.Bytes += uint64(written)
+			if writeErr != nil || written != n {
+				clear(plain[:cap(plain)])
+				return result, appstoresink.ErrUnavailable
+			}
+			selected = selected[n:]
+		}
+		clear(plain[:cap(plain)])
+	}
+	if result.Bytes != entry.Length() {
+		return result, ErrSnapshot
+	}
+	return result, nil
+}
 
 var ErrRecord = errors.New("invalid application-store record context")
 var ErrClosed = errors.New("application-store master closed or unavailable")

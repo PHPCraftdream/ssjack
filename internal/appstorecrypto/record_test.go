@@ -324,6 +324,7 @@ type writerReplyFault struct {
 	backend  *appstoreanchorledger.Backend
 	grant    appstoreanchorcore.Grant
 	target   appstoreanchorstate.State
+	reader   *appstoreanchortls.Client
 }
 
 func (f *writerReplyFault) committed() bool {
@@ -443,6 +444,12 @@ func writerFixtureWithFault(t *testing.T, role appstoreanchorcore.Role) (*appsto
 	if err != nil || created.Outcome() != appstoreanchorreply.Committed {
 		t.Fatalf("initialize writer genesis: %v", err)
 	}
+	readClient, err := appstoreanchortls.New(appstoreanchortls.Config{Endpoint: "https://" + listener.Addr().String() + "/anchor", RootCAs: roots, Certificate: readerCert, ServiceKey: signer.Public().(ed25519.PublicKey), StoreID: h.StoreID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readClient.Close() })
+	fault.reader = readClient
 	if role == appstoreanchorcore.Reader {
 		return makeWriter(readerCert), backend, directory, h, sha256.Sum256(readerCert.Certificate[0]), fault
 	}

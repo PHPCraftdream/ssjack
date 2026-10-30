@@ -3,11 +3,14 @@ package appstorecrypto
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,7 +23,184 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/appstoresink"
 )
+
+func nativeConsumerFixture(t *testing.T) (string, [32]byte) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "exact-reference-consumer")
+	command := exec.Command("go", "build", "-o", path, "../appstoresink/testdata/consumer")
+	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOTOOLCHAIN=local")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build synthetic consumer: %v\n%s", err, output)
+	}
+	program, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, sha256.Sum256(program)
+}
+func boundNativeConsumer(t *testing.T, path string, artifact [32]byte, reference appstoreref.Ref, encoded [32]byte) *appstoresink.Consumer {
+	t.Helper()
+	program, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := appstoresink.New(appstoresink.Config{Program: program, Binding: appstoresink.Binding{Reference: reference, EncodedHash: encoded, ArtifactHash: artifact, Target: [32]byte{3}, Revision: [32]byte{4}, Purpose: [32]byte{5}, ExpiresAt: time.Now().Add(time.Hour)}})
+	_ = program.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = consumer.Close() })
+	return consumer
+}
+func TestPrivateCurrentReferenceToFixedNativeConsumer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h, _, fault := writerFixtureWithFault(t, appstoreanchorcore.Writer)
+	path, artifact := nativeConsumerFixture(t)
+	master, err := derive(ctx, h, []byte("synthetic current delivery"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	objects := make([]SnapshotObject, 2)
+	for index, length := range []int{17, appstoreheader.ChunkSize + 19} {
+		source, err := os.CreateTemp(t.TempDir(), "synthetic-input-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer source.Close()
+		payload := make([]byte, length)
+		for offset := range payload {
+			if index == 0 {
+				payload[offset] = 0x99
+			} else {
+				payload[offset] = byte(offset % 251)
+			}
+		}
+		if _, err = source.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		clear(payload)
+		objects[index] = SnapshotObject{ObjectID: [16]byte{byte(index + 1)}, MediaType: "bin", Source: source}
+	}
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := writer.Write(ctx, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commit.Refs) != 2 {
+		t.Fatal("missing exact references")
+	}
+	selected := commit.Refs[1]
+	consumer := boundNativeConsumer(t, path, artifact, selected, commit.EncodedHash)
+	result, err := master.deliverCurrent(ctx, directory, fault.reader, consumer)
+	if err != nil || !result.Complete || !result.MayHaveDelivered || result.Bytes != appstoreheader.ChunkSize+19 {
+		t.Fatalf("exact native receipt: %+v %v", result, err)
+	}
+	wrongVersion := selected.VersionID()
+	wrongVersion[0] ^= 1
+	if wrongVersion == ([16]byte{}) {
+		wrongVersion[1] = 1
+	}
+	wrong, err := appstoreref.New(selected.StoreID(), selected.ObjectID(), wrongVersion, selected.SnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongConsumer := boundNativeConsumer(t, path, artifact, wrong, commit.EncodedHash)
+	result, err = master.deliverCurrent(ctx, directory, fault.reader, wrongConsumer)
+	if !errors.Is(err, appstoreref.ErrNotFound) || result.MayHaveDelivered || result.Complete {
+		t.Fatalf("wrong version released: %+v %v", result, err)
+	}
+	if _, err := writer.Write(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	historical := boundNativeConsumer(t, path, artifact, selected, commit.EncodedHash)
+	result, err = master.deliverCurrent(ctx, directory, fault.reader, historical)
+	if err == nil || result.MayHaveDelivered || result.Complete {
+		t.Fatalf("historical reference substituted current: %+v %v", result, err)
+	}
+}
+
+func TestSecondPassTagFailureStopsBeforeAffectedChunk(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h := writerFixture(t, appstoreanchorcore.Writer)
+	path, artifact := nativeConsumerFixture(t)
+	master, err := derive(ctx, h, []byte("synthetic partial handoff"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	source, err := os.CreateTemp(t.TempDir(), "synthetic-partial-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	payload := make([]byte, appstoreheader.ChunkSize+19)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	if _, err := source.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	clear(payload)
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := writer.Write(ctx, []SnapshotObject{{ObjectID: [16]byte{1}, MediaType: "bin", Source: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := appstorebudget.TryAcquire(h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	pinned, err := master.pinSnapshot(ctx, tx, ExpectedSnapshot{StoreID: h.StoreID(), SnapshotID: commit.State.CommittedSnapshotID(), EncodedHash: commit.EncodedHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.close()
+	entry, err := appstoreref.FindMetadata(commit.Refs[0], pinned.state.checked.Catalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := boundNativeConsumer(t, path, artifact, commit.Refs[0], commit.EncodedHash)
+	session, err := consumer.Begin(ctx, commit.Refs[0], commit.EncodedHash, entry.Length())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := pinned.recheck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a change after preflight, independently of the immutable-spool assumption.
+	offset := int64(appstoreheader.Size + 2*(12+appstoreheader.ChunkSize+16000) + 12)
+	var corrupt [1]byte
+	if _, err := pinned.state.file.ReadAt(corrupt[:], offset); err != nil {
+		t.Fatal(err)
+	}
+	corrupt[0] ^= 1
+	if _, err := pinned.state.file.WriteAt(corrupt[:], offset); err != nil {
+		t.Fatal(err)
+	}
+	result, err := master.streamPinnedObject(ctx, pinned, entry, session)
+	if !errors.Is(err, ErrAuthentication) || result.Complete || !result.MayHaveDelivered || result.Bytes != appstoreheader.ChunkSize {
+		t.Fatalf("partial chunk boundary: %+v %v", result, err)
+	}
+}
 
 func TestPinnedSnapshotPrivateCiphertextAndSharedClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

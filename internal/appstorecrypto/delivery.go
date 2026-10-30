@@ -7,8 +7,13 @@ import (
 	"os"
 	"sync"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorreply"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreanchortls"
+	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/appstoresink"
 )
 
 type pinnedSnapshotState struct {
@@ -20,6 +25,82 @@ type pinnedSnapshotState struct {
 }
 
 type pinnedSnapshot struct{ state *pinnedSnapshotState }
+
+// Private until an authenticated enrollment path can own consumer configuration.
+func (m *Master) deliverCurrent(ctx context.Context, directory *appstorefile.Directory, anchor *appstoreanchortls.Client, consumer *appstoresink.Consumer) (appstoresink.Result, error) {
+	if ctx == nil || directory == nil || anchor == nil || consumer == nil {
+		return appstoresink.Result{}, ErrSnapshot
+	}
+	binding := consumer.Binding()
+	reference := binding.Reference
+	if directory.StoreID() != reference.StoreID() {
+		return appstoresink.Result{}, ErrSnapshot
+	}
+	if err := consumer.Check(reference, binding.EncodedHash); err != nil {
+		return appstoresink.Result{}, err
+	}
+	release, err := appstorebudget.TryAcquire(reference.StoreID())
+	if err != nil {
+		return appstoresink.Result{}, ErrBusy
+	}
+	defer release()
+	tx, err := directory.Lock()
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	defer tx.Close()
+	reply, err := anchor.Read(ctx)
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	state, present := reply.State()
+	if !reply.SignatureValid() || reply.Outcome() != appstoreanchorreply.ReadState || !present || state.StoreID() != reference.StoreID() || state.CommittedSnapshotID() != reference.SnapshotID() || state.CommittedFileHash() != binding.EncodedHash {
+		return appstoresink.Result{}, ErrSnapshot
+	}
+	pointer, err := tx.ReadPointer()
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	var wanted [64]byte
+	snapshot, encoded, transaction := state.CommittedSnapshotID(), state.CommittedFileHash(), state.CommittedTransactionID()
+	copy(wanted[:16], snapshot[:])
+	copy(wanted[16:48], encoded[:])
+	copy(wanted[48:], transaction[:])
+	if pointer != wanted {
+		return appstoresink.Result{}, ErrWriterPointerLag
+	}
+	spool, err := m.pinSnapshot(ctx, tx, ExpectedSnapshot{StoreID: state.StoreID(), SnapshotID: snapshot, EncodedHash: encoded})
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	defer spool.close()
+	entry, err := appstoreref.FindMetadata(reference, spool.state.checked.Catalog())
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	if err = spool.recheck(ctx); err != nil {
+		return appstoresink.Result{}, err
+	}
+	if err = consumer.Check(reference, encoded); err != nil {
+		return appstoresink.Result{}, err
+	}
+	session, err := consumer.Begin(ctx, reference, encoded, entry.Length())
+	if err != nil {
+		return appstoresink.Result{}, err
+	}
+	defer session.Close()
+	result, err := m.streamPinnedObject(ctx, spool, entry, session)
+	if err != nil {
+		return result, err
+	}
+	if err = spool.recheck(ctx); err != nil {
+		return result, err
+	}
+	if err = consumer.Check(reference, encoded); err != nil {
+		return result, err
+	}
+	return session.Finish()
+}
 
 // The caller owns the operation lease and transaction lock. This grants no release authority.
 func (m *Master) pinSnapshot(ctx context.Context, tx *appstorefile.Transaction, expected ExpectedSnapshot) (*pinnedSnapshot, error) {
@@ -175,19 +256,4 @@ func (p *pinnedSnapshot) close() error {
 	s.file = nil
 	s.checked = SnapshotCheck{}
 	return err
-}
-
-func snapshotEOF(ctx context.Context, f *os.File) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	var extra [1]byte
-	n, err := f.Read(extra[:])
-	if cancelled := ctx.Err(); cancelled != nil {
-		return cancelled
-	}
-	if n != 0 || err != io.EOF {
-		return ErrSnapshot
-	}
-	return nil
 }
