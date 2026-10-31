@@ -42,7 +42,7 @@ func newDeliveryFixture(t *testing.T) *deliveryFixture {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = os.Chmod(parent, 0711); e != nil {
+	if e = os.Chmod(parent, 0755); e != nil {
 		t.Fatal(e)
 	}
 	dir := filepath.Join(parent, "store")
