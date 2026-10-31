@@ -31,6 +31,10 @@ import (
 
 type appstoreReplayFixture struct {
 	dir, master, secret     string
+	endpoint                string
+	caDER, privateDER       []byte
+	serviceKey              []byte
+	clientChain             [][]byte
 	store                   [16]byte
 	backend                 *appstoreanchorledger.Backend
 	transport               *appstoreanchortls.Writer
@@ -152,6 +156,10 @@ func noSecretOutput(t *testing.T, s string, secrets ...string) {
 	}
 }
 func newAppstoreReplayFixture(t *testing.T) *appstoreReplayFixture {
+	return newAppstoreReplayFixtureMode(t, true)
+}
+
+func newAppstoreReplayFixtureMode(t *testing.T, install bool) *appstoreReplayFixture {
 	t.Helper()
 	if !appstoreentry.Supported() {
 		t.Skip("Linux appstore acceptance")
@@ -231,6 +239,30 @@ func newAppstoreReplayFixture(t *testing.T) *appstoreReplayFixture {
 	}
 	if state, present := created.State(); !present || !state.Valid() || state.Sequence() != 0 || state.JournalCount() != 0 || state.StoreID() != f.store {
 		t.Fatal("invalid genesis state")
+	}
+	if !install {
+		f.endpoint = endpoint
+		f.caDER = append([]byte(nil), caDER...)
+		f.privateDER, e = x509.MarshalPKCS8PrivateKey(client.PrivateKey)
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.clientChain = make([][]byte, len(client.Certificate))
+		for i := range client.Certificate {
+			f.clientChain[i] = append([]byte(nil), client.Certificate[i]...)
+		}
+		f.serviceKey = append([]byte(nil), signer.Public().(ed25519.PublicKey)...)
+		t.Cleanup(func() {
+			clear(f.caDER)
+			clear(f.privateDER)
+			clear(f.serviceKey)
+			clearDERs(f.clientChain)
+			f.caDER = nil
+			f.privateDER = nil
+			f.serviceKey = nil
+			f.clientChain = nil
+		})
+		return f
 	}
 	private, e := x509.MarshalPKCS8PrivateKey(client.PrivateKey)
 	if e != nil {

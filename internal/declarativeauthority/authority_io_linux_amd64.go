@@ -29,11 +29,16 @@ func createMarker(data []byte) error {
 	return syncDirectory(RegistryPath)
 }
 
-func atomicFile(data []byte) error {
+func atomicFile(data []byte) error { return atomicNamed(GrantsName, data) }
+
+func atomicNamed(name string, data []byte) error {
+	if name != GrantsName && name != "delivery-grants.json" {
+		return ErrAuthority
+	}
 	if os.Geteuid() != 0 || safeDirectory(false) != nil {
 		return ErrAuthority
 	}
-	pending := filepath.Join(RegistryPath, ".pending")
+	pending := filepath.Join(RegistryPath, ".pending-"+name)
 	f, err := os.OpenFile(pending, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0644)
 	if err != nil {
 		return ErrAuthority
@@ -46,7 +51,7 @@ func atomicFile(data []byte) error {
 		os.Remove(pending)
 		return ErrAuthority
 	}
-	if err = os.Rename(pending, filepath.Join(RegistryPath, GrantsName)); err != nil {
+	if err = os.Rename(pending, filepath.Join(RegistryPath, name)); err != nil {
 		os.Remove(pending)
 		return ErrAuthority
 	}
@@ -117,6 +122,10 @@ func safeDirectory(create bool) error {
 	}
 	return syscall.Close(fd)
 }
+
+func safeDeliveryCodeDirectory() error { return safeDriverDirectory() }
+
+func DeliveryDriverDigest() (string, error) { return CodeDigest(DriverPath) }
 
 func CodeDigest(path string) (string, error) {
 	if path != DriverPath || safeDriverDirectory() != nil {

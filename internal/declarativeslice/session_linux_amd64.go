@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeschemas"
@@ -20,23 +22,26 @@ import (
 )
 
 const maxDocument = 32768
+const DeliveryProtocol = "ssjack-synthetic-confidential-delivery-1"
 
 var ErrInvalid = errors.New("invalid declarative slice request")
 
 type Session struct {
-	mu       sync.Mutex
-	id       string
-	runner   *immutableexec.Runner
-	grant    declarativeauthority.Grant
-	plans    map[string]*planEntry
-	requests map[string]string
-	closed   bool
+	mu         sync.Mutex
+	id         string
+	runner     *immutableexec.Runner
+	grant      declarativeauthority.Grant
+	capability *appstorecrypto.DeliveryCapability
+	plans      map[string]*planEntry
+	requests   map[string]string
+	closed     bool
 }
 type planEntry struct {
-	desired                       []byte
-	revision, digest, resource    string
-	expires                       time.Time
-	requestID, operationID, state string
+	desired                                 []byte
+	revision, digest, resource              string
+	expires                                 time.Time
+	requestID, operationID, state, delivery string
+	deliveryPlan                            *appstorecrypto.DeliveryPlan
 }
 type PlanInput struct {
 	Target     string         `json:"target"`
@@ -66,6 +71,7 @@ type ApplyInput struct {
 type ApplyResult struct {
 	OperationID string `json:"operation_id"`
 	State       string `json:"state"`
+	Delivery    string `json:"delivery,omitempty"`
 }
 type ContractInfo struct{ Target, Kind, DesiredSchemaID, DesiredSchemaSHA256, ProjectionSchemaID, ProjectionSchemaSHA256 string }
 
@@ -81,7 +87,7 @@ func New() (*Session, error) {
 		return nil, declarativeauthority.ErrAuthority
 	}
 	contract := Contract()
-	if contract.DesiredSchemaSHA256 == "" || contract.ProjectionSchemaSHA256 == "" || driverprotocol.ValidateSchemaDocument([]byte(desiredSchema), contract.DesiredSchemaID, contract.DesiredSchemaSHA256) != nil || driverprotocol.ValidateSchemaDocument([]byte(projectionSchema), contract.ProjectionSchemaID, contract.ProjectionSchemaSHA256) != nil {
+	if !validContract(contract) {
 		return nil, declarativeauthority.ErrAuthority
 	}
 	var g declarativeauthority.Grant
@@ -98,30 +104,84 @@ func New() (*Session, error) {
 	if !found || g.RecipientUID != os.Geteuid() || g.DesiredSchemaID != contract.DesiredSchemaID || g.DesiredSchemaSHA256 != contract.DesiredSchemaSHA256 || g.ProjectionSchemaID != contract.ProjectionSchemaID || g.ProjectionSchemaSHA256 != contract.ProjectionSchemaSHA256 {
 		return nil, declarativeauthority.ErrAuthority
 	}
+	return newSession(g, nil)
+}
+func NewDelivery(ctx context.Context, installation *appstorecrypto.Installation, ref appstoreref.Ref) (*Session, error) {
+	if ctx == nil || !ref.Valid() || os.Geteuid() == 0 {
+		return nil, ErrInvalid
+	}
+	capability, err := appstorecrypto.NewDeliveryCapability(ctx, installation, ref)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	g, r := capability.Metadata()
+	contract := Contract()
+	if r != ref || g.Ref == "" || g.Target != contract.Target || g.DesiredSchemaID != contract.DesiredSchemaID || g.DesiredSchemaSHA256 != contract.DesiredSchemaSHA256 || g.ProjectionSchemaID != contract.ProjectionSchemaID || g.ProjectionSchemaSHA256 != contract.ProjectionSchemaSHA256 || g.PolicyRevision != declarativeauthority.DeliveryPolicyRevision {
+		_ = capability.Close()
+		return nil, ErrInvalid
+	}
+	if err = capability.Check(ctx); err != nil {
+		_ = capability.Close()
+		return nil, ErrInvalid
+	}
+	private := declarativeauthority.Grant{RecipientUID: g.RecipientUID, Ref: g.Ref, CodeSHA256: g.DriverCodeSHA256, Target: g.Target, Purpose: g.Purpose, DesiredSchemaID: g.DesiredSchemaID, DesiredSchemaSHA256: g.DesiredSchemaSHA256, ProjectionSchemaID: g.ProjectionSchemaID, ProjectionSchemaSHA256: g.ProjectionSchemaSHA256, PolicyRevision: g.PolicyRevision, ExpiresAt: g.ExpiresAt, Revoked: g.Revoked}
+	s, err := newSession(private, capability)
+	if err != nil {
+		_ = capability.Close()
+		return nil, err
+	}
+	return s, nil
+}
+func validContract(c ContractInfo) bool {
+	return c.DesiredSchemaSHA256 != "" && c.ProjectionSchemaSHA256 != "" && driverprotocol.ValidateSchemaDocument([]byte(desiredSchema), c.DesiredSchemaID, c.DesiredSchemaSHA256) == nil && driverprotocol.ValidateSchemaDocument([]byte(projectionSchema), c.ProjectionSchemaID, c.ProjectionSchemaSHA256) == nil
+}
+func newSession(g declarativeauthority.Grant, capability *appstorecrypto.DeliveryCapability) (*Session, error) {
+	c := Contract()
+	if !validContract(c) || g.DesiredSchemaID != c.DesiredSchemaID || g.DesiredSchemaSHA256 != c.DesiredSchemaSHA256 || g.ProjectionSchemaID != c.ProjectionSchemaID || g.ProjectionSchemaSHA256 != c.ProjectionSchemaSHA256 {
+		return nil, declarativeauthority.ErrAuthority
+	}
 	code, err := declarativeauthority.CodeDigest(declarativeauthority.DriverPath)
 	if err != nil || code != g.CodeSHA256 {
+		if capability != nil {
+			_ = capability.Close()
+		}
 		return nil, declarativeauthority.ErrAuthority
 	}
 	b, err := hex.DecodeString(code)
 	if err != nil || len(b) != sha256.Size {
+		if capability != nil {
+			_ = capability.Close()
+		}
 		return nil, declarativeauthority.ErrAuthority
 	}
 	var pin [sha256.Size]byte
 	copy(pin[:], b)
 	runner, err := immutableexec.Bind(declarativeauthority.DriverPath, pin)
 	if err != nil {
+		if capability != nil {
+			_ = capability.Close()
+		}
 		return nil, declarativeauthority.ErrAuthority
 	}
 	id, err := randomID()
 	if err != nil {
 		_ = runner.Close()
+		if capability != nil {
+			_ = capability.Close()
+		}
 		return nil, ErrInvalid
 	}
-	return &Session{id: id, runner: runner, grant: g, plans: map[string]*planEntry{}, requests: map[string]string{}}, nil
+	return &Session{id: id, runner: runner, grant: g, capability: capability, plans: map[string]*planEntry{}, requests: map[string]string{}}, nil
 }
+func (s *Session) IsDelivery() bool { return s != nil && s.capability != nil }
 func (s *Session) Close() error {
 	if s == nil {
 		return nil
+	}
+	// Cancel an in-flight delivery before waiting for the session lock, which
+	// Apply holds while delivering.
+	if s.capability != nil {
+		_ = s.capability.Close()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,10 +189,11 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	var e error
 	if s.runner != nil {
-		return s.runner.Close()
+		e = s.runner.Close()
 	}
-	return nil
+	return e
 }
 func (s *Session) Describe() ([]declarativeschemas.Tool, error) {
 	if s == nil {
@@ -148,9 +209,9 @@ func (s *Session) Describe() ([]declarativeschemas.Tool, error) {
 		return nil, ErrInvalid
 	}
 	out := make([]declarativeschemas.Tool, 0, 2)
-	for _, tool := range tools {
-		if tool.Name == "resource_plan" || tool.Name == "plan_apply" {
-			out = append(out, tool)
+	for _, t := range tools {
+		if t.Name == "resource_plan" || t.Name == "plan_apply" {
+			out = append(out, t)
 		}
 	}
 	if len(out) != 2 {
@@ -158,25 +219,47 @@ func (s *Session) Describe() ([]declarativeschemas.Tool, error) {
 	}
 	return out, nil
 }
+func (s *Session) currentGrant(ctx context.Context) bool {
+	if s.capability != nil {
+		return s.capability.Check(ctx) == nil
+	}
+	snap, err := declarativeauthority.Load()
+	if err != nil {
+		return false
+	}
+	for _, g := range snap.Grants() {
+		if g == s.grant && g.Active(time.Now()) {
+			d, e := declarativeauthority.CodeDigest(declarativeauthority.DriverPath)
+			return e == nil && d == g.CodeSHA256
+		}
+	}
+	return false
+}
 func (s *Session) Plan(ctx context.Context, input []byte) (PlanResult, error) {
 	var out PlanResult
 	if s == nil || ctx == nil {
 		return out, ErrInvalid
 	}
 	var in PlanInput
-	if decodeInput(input, &in) != nil || !validRequestID(in.RequestID) {
-		return out, ErrInvalid
-	}
-	if in.Target != s.grant.Target || in.DriverID != "synthetic" || in.Kind != "cache" || in.SchemaID != s.grant.DesiredSchemaID || in.ResourceID != "synthetic" {
+	if decodeInput(input, &in) != nil || !validRequestID(in.RequestID) || in.Target != s.grant.Target || in.DriverID != "synthetic" || in.Kind != "cache" || in.SchemaID != s.grant.DesiredSchemaID || in.ResourceID != "synthetic" {
 		return out, ErrInvalid
 	}
 	desired, err := json.Marshal(in.Desired)
-	if err != nil || len(desired) > maxDocument || validateDesired(desired, s.grant.Ref) != nil || driverprotocol.ValidatePinnedValue([]byte(desiredSchema), s.grant.DesiredSchemaID, s.grant.DesiredSchemaSHA256, s.grant.Target, "cache", s.grant.Target, "cache", s.grant.DesiredSchemaID, desired, driverprotocol.MaxDesired) != nil {
+	if err != nil || len(desired) > maxDocument || driverprotocol.ValidatePinnedValue([]byte(desiredSchema), s.grant.DesiredSchemaID, s.grant.DesiredSchemaSHA256, s.grant.Target, "cache", s.grant.Target, "cache", s.grant.DesiredSchemaID, desired, driverprotocol.MaxDesired) != nil || validateDesired(desired, s.grant.Ref) != nil {
 		return out, ErrInvalid
+	}
+	if s.capability != nil {
+		var requested struct {
+			Enabled bool   `json:"enabled"`
+			Ref     string `json:"ref"`
+		}
+		if json.Unmarshal(desired, &requested) != nil || !requested.Enabled || requested.Ref != s.grant.Ref {
+			return out, ErrInvalid
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || len(s.plans) >= 128 || !s.currentGrant() {
+	if s.closed || len(s.plans) >= 128 || !s.currentGrant(ctx) {
 		return out, ErrInvalid
 	}
 	revision, err := s.observe(ctx, in, desired)
@@ -196,14 +279,20 @@ func (s *Session) Plan(ctx context.Context, input []byte) (PlanResult, error) {
 		return out, ErrInvalid
 	}
 	binding := struct {
-		Session  string                     `json:"session"`
-		PlanID   string                     `json:"plan_id"`
-		Grant    declarativeauthority.Grant `json:"grant"`
-		Desired  json.RawMessage            `json:"desired"`
-		Resource string                     `json:"resource_id"`
-		Revision string                     `json:"observed_revision"`
-		Expires  string                     `json:"expires_at"`
-	}{s.id, id, s.grant, desired, in.ResourceID, revision, expiry.UTC().Format(time.RFC3339)}
+		Session  string          `json:"session"`
+		PlanID   string          `json:"plan_id"`
+		Grant    any             `json:"grant"`
+		Desired  json.RawMessage `json:"desired"`
+		Resource string          `json:"resource_id"`
+		Revision string          `json:"observed_revision"`
+		Expires  string          `json:"expires_at"`
+		Policy   string          `json:"policy"`
+		Consumer string          `json:"consumer_code"`
+	}{s.id, id, s.grant, desired, in.ResourceID, revision, expiry.UTC().Format(time.RFC3339), s.grant.PolicyRevision, "/usr/libexec/ssjack-synthetic-consumer"}
+	if s.capability != nil {
+		g, _ := s.capability.Metadata()
+		binding.Grant = g
+	}
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return out, ErrInvalid
@@ -214,8 +303,23 @@ func (s *Session) Plan(ctx context.Context, input []byte) (PlanResult, error) {
 	}
 	sum := sha256.Sum256(canon)
 	digest := hex.EncodeToString(sum[:])
-	s.plans[id] = &planEntry{desired: desired, revision: revision, digest: digest, resource: in.ResourceID, expires: expiry}
-	return PlanResult{PlanID: id, Digest: digest, ExpiresAt: expiry.UTC().Format(time.RFC3339), Effects: []Effect{{Class: "metadata", SummaryID: "cache.update", Destructive: false}}, Precondition: &revision}, nil
+	p := &planEntry{desired: desired, revision: revision, digest: digest, resource: in.ResourceID, expires: expiry}
+	class, summary := "metadata", "cache.update"
+	if s.capability != nil {
+		deadline := p.expires
+		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
+		}
+		p.deliveryPlan = s.capability.Prepare(ctx, appstorecrypto.OperationBinding{SessionID: s.id, PlanID: id, Digest: digest, ObservedRevision: revision, Policy: s.grant.PolicyRevision, Deadline: deadline})
+		if p.deliveryPlan == nil {
+			return out, ErrInvalid
+		}
+	}
+	s.plans[id] = p
+	if s.capability != nil {
+		class, summary = "confidential_delivery", "synthetic.confidential_delivery"
+	}
+	return PlanResult{PlanID: id, Digest: digest, ExpiresAt: expiry.UTC().Format(time.RFC3339), Effects: []Effect{{Class: class, SummaryID: summary, Destructive: false}}, Precondition: &revision}, nil
 }
 func (s *Session) Apply(ctx context.Context, input []byte) (ApplyResult, error) {
 	var out ApplyResult
@@ -228,7 +332,7 @@ func (s *Session) Apply(ctx context.Context, input []byte) (ApplyResult, error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || !s.currentGrant() {
+	if s.closed || !s.currentGrant(ctx) {
 		return out, ErrInvalid
 	}
 	p := s.plans[in.PlanID]
@@ -238,6 +342,14 @@ func (s *Session) Apply(ctx context.Context, input []byte) (ApplyResult, error) 
 	if p.operationID != "" {
 		if p.requestID != in.RequestID {
 			return out, ErrInvalid
+		}
+		if p.delivery != "" {
+			if p.delivery == "RECEIVED" && p.state == "UNKNOWN" {
+				if s.reconcile(ctx, p) != nil {
+					return ApplyResult{OperationID: p.operationID, State: "UNKNOWN", Delivery: p.delivery}, nil
+				}
+			}
+			return ApplyResult{OperationID: p.operationID, State: p.state, Delivery: p.delivery}, nil
 		}
 		if p.state == "FAILED" || p.state == "SUCCEEDED" {
 			return ApplyResult{OperationID: p.operationID, State: p.state}, nil
@@ -256,30 +368,54 @@ func (s *Session) Apply(ctx context.Context, input []byte) (ApplyResult, error) 
 	}
 	p.operationID, p.requestID, p.state = operation, in.RequestID, "UNKNOWN"
 	s.requests[in.RequestID] = in.PlanID
-	observed, err := s.observe(ctx, PlanInput{Target: s.grant.Target, DriverID: "synthetic", Kind: "cache", SchemaID: s.grant.DesiredSchemaID, ResourceID: p.resource}, p.desired)
+	applyCtx, cancel := context.WithDeadline(ctx, p.expires)
+	defer cancel()
+	lease, err := declarativeauthority.AcquireTarget(applyCtx)
+	if err != nil {
+		p.state = "FAILED"
+		if s.capability != nil {
+			p.delivery = "WITHHELD"
+			return ApplyResult{OperationID: operation, State: p.state, Delivery: p.delivery}, nil
+		}
+		return ApplyResult{OperationID: operation, State: p.state}, nil
+	}
+	defer lease.Close()
+	observed, err := s.observe(applyCtx, PlanInput{Target: s.grant.Target, DriverID: "synthetic", Kind: "cache", SchemaID: s.grant.DesiredSchemaID, ResourceID: p.resource}, p.desired)
 	if err != nil || observed != p.revision {
 		p.state = "FAILED"
-		return ApplyResult{OperationID: operation, State: "FAILED"}, nil
+		if s.capability != nil {
+			p.delivery = "WITHHELD"
+		}
+		return ApplyResult{OperationID: operation, State: "FAILED", Delivery: p.delivery}, nil
 	}
-	if err = s.exchange(ctx, "apply", operation, p); err != nil {
-		if s.reconcile(ctx, p) == nil {
+	if s.capability != nil {
+		if err = s.exchange(applyCtx, "apply", operation, p); err != nil {
+			if s.reconcile(applyCtx, p) != nil {
+				p.state, p.delivery = "UNKNOWN", "WITHHELD"
+				return ApplyResult{OperationID: operation, State: p.state, Delivery: p.delivery}, nil
+			}
+		}
+		if lease.Admit(applyCtx, p.revision, operation, p.digest) != nil {
+			p.state, p.delivery = "UNKNOWN", "WITHHELD"
+			return ApplyResult{OperationID: operation, State: p.state, Delivery: p.delivery}, nil
+		}
+		result := s.capability.Deliver(applyCtx, p.deliveryPlan, operation, lease)
+		switch result.Status {
+		case appstorecrypto.DeliveryReceived:
+			p.delivery, p.state = "RECEIVED", "SUCCEEDED"
+		case appstorecrypto.DeliveryUnknown:
+			p.delivery, p.state = "UNKNOWN", "UNKNOWN"
+		default:
+			p.delivery, p.state = "WITHHELD", "UNKNOWN"
+		}
+		return ApplyResult{OperationID: operation, State: p.state, Delivery: p.delivery}, nil
+	}
+	if err = s.exchange(applyCtx, "apply", operation, p); err != nil {
+		if s.reconcile(applyCtx, p) == nil {
 			return ApplyResult{OperationID: operation, State: p.state}, nil
 		}
 		return ApplyResult{OperationID: operation, State: "UNKNOWN"}, nil
 	}
 	p.state = "SUCCEEDED"
 	return ApplyResult{OperationID: operation, State: p.state}, nil
-}
-func (s *Session) currentGrant() bool {
-	snap, err := declarativeauthority.Load()
-	if err != nil {
-		return false
-	}
-	for _, g := range snap.Grants() {
-		if g == s.grant && g.Active(time.Now()) {
-			d, e := declarativeauthority.CodeDigest(declarativeauthority.DriverPath)
-			return e == nil && d == g.CodeSHA256
-		}
-	}
-	return false
 }

@@ -39,7 +39,7 @@ func snapshotEOF(ctx context.Context, f *os.File) error {
 	return nil
 }
 
-func (m *Master) streamPinnedObject(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink *appstoresink.Delivery) (appstoresink.Result, error) {
+func (m *Master) streamPinnedObject(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink *appstoresink.Delivery, checks ...func() error) (appstoresink.Result, error) {
 	var result appstoresink.Result
 	if ctx == nil || pinned == nil || pinned.state == nil || sink == nil {
 		return result, ErrSnapshot
@@ -100,6 +100,14 @@ func (m *Master) streamPinnedObject(ctx context.Context, pinned *pinnedSnapshot,
 			if err = ctx.Err(); err != nil {
 				clear(plain[:cap(plain)])
 				return result, err
+			}
+			for _, check := range checks {
+				if check != nil {
+					if err = check(); err != nil {
+						clear(plain[:cap(plain)])
+						return result, err
+					}
+				}
 			}
 			n := len(selected)
 			if n > 16384 {

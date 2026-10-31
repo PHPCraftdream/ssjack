@@ -106,6 +106,10 @@ jobs:
         run: |
           go build -mod=readonly -trimpath -o /tmp/ssjack ./cmd/ssjack
           python3 scripts/ci/declarative_scoped.py /tmp/ssjack "$GITHUB_WORKSPACE"
+      - name: Public confidential-delivery acceptance
+        if: steps.scope.outputs.declarative == 'true' || steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        run: python3 scripts/ci/delivery_scoped.py
 
   full:
     name: Explicit full sprint gate

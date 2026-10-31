@@ -22,7 +22,7 @@ func runDeclarative(ctx context.Context, args []string) (int, error) {
 		return 1, errors.New("authority administration requires root")
 	}
 	if len(args) == 0 {
-		return 1, errors.New("usage: ssjack declarative setup|register|revoke|run")
+		return 1, errors.New("usage: ssjack declarative setup|register|revoke|register-delivery|revoke-delivery|run")
 	}
 	for _, name := range []string{broker.EnvFile, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, "SSJACK_APP_ENDPOINT", "SSJACK_APP_TOKEN", "SSJACK_APP_CERTIFICATE_SHA256"} {
 		if os.Getenv(name) != "" {
@@ -49,6 +49,16 @@ func runDeclarative(ctx context.Context, args []string) (int, error) {
 			return 1, errors.New("usage: ssjack declarative revoke")
 		}
 		return revokeDeclarative()
+	case "register-delivery":
+		if len(args) != 1 {
+			return 1, errors.New("usage: ssjack declarative register-delivery")
+		}
+		return registerDelivery()
+	case "revoke-delivery":
+		if len(args) != 1 {
+			return 1, errors.New("usage: ssjack declarative revoke-delivery")
+		}
+		return revokeDelivery()
 	case "run":
 		if len(args) < 2 {
 			return 1, errors.New("usage: ssjack declarative run HARNESS [ARGUMENTS...]")

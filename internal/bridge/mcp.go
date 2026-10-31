@@ -62,9 +62,15 @@ func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descripto
 	if err := broker.ValidateDescriptor(descriptor); err != nil {
 		return nil, err
 	}
-	if descriptor.Mode == broker.ModeDeclarative && descriptor.Protocol == broker.SyntheticProtocol {
+	if descriptor.Mode == broker.ModeDeclarative && (descriptor.Protocol == broker.SyntheticProtocol || descriptor.Protocol == broker.DeliveryProtocol) {
 		server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
-		mcp.AddTool(server, &mcp.Tool{Name: "resource_plan", Description: "Plan a fixed synthetic cache metadata update; no secrets or command execution."}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.PlanInput) (*mcp.CallToolResult, declarativeslice.PlanResult, error) {
+		planDescription := "Plan a fixed synthetic cache metadata update; no secrets or command execution."
+		applyDescription := "Apply a previously issued synthetic metadata plan."
+		if descriptor.Protocol == broker.DeliveryProtocol {
+			planDescription = "Plan a fixed-scope confidential delivery and report only delivery receipt status; no secret values are returned."
+			applyDescription = "Deliver the authorized confidential value to its fixed protected consumer; reports RECEIVED, WITHHELD, or UNKNOWN and does not claim metadata adoption."
+		}
+		mcp.AddTool(server, &mcp.Tool{Name: "resource_plan", Description: planDescription}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.PlanInput) (*mcp.CallToolResult, declarativeslice.PlanResult, error) {
 			var out declarativeslice.PlanResult
 			if client == nil {
 				return nil, out, errors.New("keeper unavailable")
@@ -72,7 +78,7 @@ func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descripto
 			err := client.Call(ctx, "resource_plan", input, &out)
 			return nil, out, err
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "plan_apply", Description: "Apply a previously issued synthetic metadata plan."}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.ApplyInput) (*mcp.CallToolResult, declarativeslice.ApplyResult, error) {
+		mcp.AddTool(server, &mcp.Tool{Name: "plan_apply", Description: applyDescription}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.ApplyInput) (*mcp.CallToolResult, declarativeslice.ApplyResult, error) {
 			var out declarativeslice.ApplyResult
 			if client == nil {
 				return nil, out, errors.New("keeper unavailable")

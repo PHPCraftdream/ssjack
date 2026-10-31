@@ -148,6 +148,29 @@ jobs:
           CGO_ENABLED: '1'
         run: python3 scripts/ci/appstore_scoped.py
 
+  delivery-root:
+    name: Root confidential-delivery acceptance
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.26.0
+      options: --user 0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Python for scoped runner
+        run: |
+          apt-get update
+          apt-get install -y python3
+      - name: Public confidential-delivery acceptance
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 scripts/ci/delivery_scoped.py
+
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
     runs-on: ubuntu-latest

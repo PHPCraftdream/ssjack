@@ -5,7 +5,8 @@ package declarativeslice
 import (
 	"context"
 	"errors"
-
+	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeschemas"
 )
 
@@ -40,17 +41,15 @@ type ApplyInput struct {
 type ApplyResult struct {
 	OperationID string `json:"operation_id"`
 	State       string `json:"state"`
+	Delivery    string `json:"delivery,omitempty"`
 }
-type ContractInfo struct {
-	Target                 string
-	Kind                   string
-	DesiredSchemaID        string
-	DesiredSchemaSHA256    string
-	ProjectionSchemaID     string
-	ProjectionSchemaSHA256 string
-}
+type ContractInfo struct{ Target, Kind, DesiredSchemaID, DesiredSchemaSHA256, ProjectionSchemaID, ProjectionSchemaSHA256 string }
 
-func New() (*Session, error)                                        { return nil, ErrInvalid }
+func New() (*Session, error) { return nil, ErrInvalid }
+func NewDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref) (*Session, error) {
+	return nil, ErrInvalid
+}
+func (*Session) IsDelivery() bool                                   { return false }
 func (*Session) Close() error                                       { return ErrInvalid }
 func (*Session) Describe() ([]declarativeschemas.Tool, error)       { return nil, ErrInvalid }
 func (*Session) Plan(context.Context, []byte) (PlanResult, error)   { return PlanResult{}, ErrInvalid }

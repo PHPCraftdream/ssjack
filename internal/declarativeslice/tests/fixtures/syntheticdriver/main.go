@@ -98,6 +98,9 @@ func apply(r request) []byte {
 		return failure(r, "unknown", "OUTCOME_UNKNOWN")
 	}
 	defer unix.Close(d)
+	if !admissionBarrier(r) {
+		return failure(r, "unknown", "OUTCOME_UNKNOWN")
+	}
 	lock, e := openRegular(d, ".lock", unix.O_RDWR)
 	if e != nil {
 		return failure(r, "unknown", "OUTCOME_UNKNOWN")

@@ -130,6 +130,10 @@ func equalJSON(a, b any) bool {
 	y, e := json.Marshal(b)
 	return e == nil && string(x) == string(y)
 }
+func (s *Session) current() bool {
+	return s.currentGrant(context.Background())
+}
+
 func (s *Session) call(ctx context.Context, action, operation string, p *planEntry, resource string) ([]byte, driverprotocol.StructuralRequest, error) {
 	var zero driverprotocol.StructuralRequest
 	if s == nil || ctx == nil || s.runner == nil || action != "observe" && action != "apply" && action != "reconcile" {
@@ -181,7 +185,7 @@ func (s *Session) call(ctx context.Context, action, operation string, p *planEnt
 	if err != nil {
 		return nil, zero, ErrInvalid
 	}
-	if action == "apply" && !s.currentGrant() {
+	if action == "apply" && s.capability == nil && !s.currentGrant(context.Background()) {
 		return nil, zero, ErrInvalid
 	}
 	response, err := s.runner.Exchange(callCtx, []string{"LANG=C", "LC_ALL=C"}, "/", b)
@@ -191,7 +195,7 @@ func (s *Session) call(ctx context.Context, action, operation string, p *planEnt
 	if _, err = driverprotocol.ValidateStructuralResponse(validated, response); err != nil {
 		return nil, zero, ErrInvalid
 	}
-	if action == "apply" && !s.currentGrant() {
+	if action == "apply" && s.capability == nil && !s.currentGrant(context.Background()) {
 		return nil, zero, ErrInvalid
 	}
 	if _, err = driverprotocol.ValidatePinnedProjection(validated, response, []byte(projectionSchema), s.grant.DesiredSchemaID, s.grant.ProjectionSchemaID, s.grant.ProjectionSchemaSHA256, s.grant.Target, "cache", s.grant.ProjectionSchemaID); err != nil {

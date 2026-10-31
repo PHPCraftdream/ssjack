@@ -214,8 +214,9 @@ func (b Binding) Validate() error {
 }
 
 type Installation struct {
-	master  *Master
-	binding Binding
+	master      *Master
+	binding     Binding
+	encodedHash [32]byte
 }
 
 func (i *Installation) Header() appstoreheader.Header {
@@ -408,7 +409,7 @@ func unlockInstallation(ctx context.Context, encoded, p []byte, derive deriveFnT
 		_ = m.Close()
 		return nil, err
 	}
-	return &Installation{master: m, binding: b}, nil
+	return &Installation{master: m, binding: b, encodedHash: sha256.Sum256(encoded)}, nil
 }
 func layerKey(master []byte, n int) []byte {
 	var info [20]byte

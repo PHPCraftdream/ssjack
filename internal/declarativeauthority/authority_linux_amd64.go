@@ -17,19 +17,23 @@ import (
 )
 
 const (
-	RegistryPath       = "/etc/ssjack/declarative"
-	SetupName          = "setup.json"
-	GrantsName         = "grants.json"
-	DriverPath         = "/usr/libexec/ssjack-synthetic-driver"
-	StatePath          = "/var/lib/ssjack/synthetic"
-	MaxLifetime        = 30 * 24 * time.Hour
-	maxFile            = 64 << 10
-	setupFormat        = "ssjack-declarative-synthetic-setup-v1"
-	grantFormat        = "ssjack-declarative-synthetic-grants-v1"
-	target             = "target"
-	desiredSchemaID    = "cache.desired"
-	projectionSchemaID = "cache.projection"
-	purpose            = "synthetic-metadata"
+	RegistryPath           = "/etc/ssjack/declarative"
+	SetupName              = "setup.json"
+	GrantsName             = "grants.json"
+	DriverPath             = "/usr/libexec/ssjack-synthetic-driver"
+	ConsumerPath           = "/usr/libexec/ssjack-synthetic-consumer"
+	DeliveryTarget         = "target"
+	DeliveryPurpose        = "synthetic-confidential-delivery"
+	DeliveryPolicyRevision = "synthetic-delivery-v1"
+	StatePath              = "/var/lib/ssjack/synthetic"
+	MaxLifetime            = 30 * 24 * time.Hour
+	maxFile                = 64 << 10
+	setupFormat            = "ssjack-declarative-synthetic-setup-v1"
+	grantFormat            = "ssjack-declarative-synthetic-grants-v1"
+	target                 = "target"
+	desiredSchemaID        = "cache.desired"
+	projectionSchemaID     = "cache.projection"
+	purpose                = "synthetic-metadata"
 )
 
 var (

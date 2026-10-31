@@ -22,7 +22,11 @@ func DispatchSynthetic(session *declarativeslice.Session) (Handler, error) {
 			if wire.DecodeStrict(req.Data, &input, "discovery") != nil || input.Discovery != DiscoveryRequest {
 				return wire.Reply{Error: "unsupported descriptor request"}
 			}
-			d := Descriptor{Protocol: SyntheticProtocol, Mode: ModeDeclarative, Complete: false, Tools: []string{"resource_plan", "plan_apply"}}
+			protocol := SyntheticProtocol
+			if session.IsDelivery() {
+				protocol = DeliveryProtocol
+			}
+			d := Descriptor{Protocol: protocol, Mode: ModeDeclarative, Complete: false, Tools: []string{"resource_plan", "plan_apply"}}
 			return Result(d, nil)
 		}
 		switch req.Operation {
