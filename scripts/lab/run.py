@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CAPS = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "KILL"}
 PRODUCT_BASE = "2997e692cdc24f5b9a5aa23cadc3b22ab1b32f02"
 NAMES = {"ssjack", "conductor", "harness", "driver", "consumer"}
+PHASE = "inputs"
 
 def invoke(args, *, cwd=None, env=None, check=True, capture=True):
     return subprocess.run(args, cwd=cwd, env=env, check=check, text=True,
@@ -33,6 +34,7 @@ def build(package, output, sha):
             image.seek(40); image.write(bytes(8)); image.seek(58); image.write(bytes(6))
 
 def main():
+    global PHASE
     sha, scoped, run_id = (os.environ.get(k, "") for k in ("SOURCE_SHA", "SCOPED_RUN_ID", "GITHUB_RUN_ID"))
     if not re.fullmatch(r"[a-f0-9]{40}", sha) or not scoped.isdigit() or not run_id.isdigit():
         raise RuntimeError("immutable CI inputs required")
@@ -51,6 +53,7 @@ def main():
                     ("harness", "./internal/declarativeslice/tests/fixtures/secretharness"))
         staged_hashes = {}
         for name, package in products:
+            PHASE = "build-" + name
             output = stage / name
             build(package, output, sha)
             staged_hashes[name] = hashlib.sha256(output.read_bytes()).hexdigest()
@@ -58,6 +61,7 @@ def main():
             shutil.copyfile(ROOT / "scripts/lab" / helper, stage / helper)
         for path in stage.iterdir():
             os.chmod(path, 0o755)
+        PHASE = "pull-image"
         image = "python:3.13-slim"
         invoke(["docker", "pull", image])
         envs = ("PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "LC_ALL=C.UTF-8",
@@ -70,9 +74,12 @@ def main():
         for value in envs:
             create += ["--env", value]
         create += ["--entrypoint", "/usr/bin/env", image, "-i", *envs, "/usr/local/bin/python3", "/lab/isolation.py"]
+        PHASE = "create-container"
         invoke(create)
         created = True
+        PHASE = "copy-artifacts"
         invoke(["docker", "cp", str(stage), container + ":/lab"])
+        PHASE = "inspect-policy"
         info = json.loads(invoke(["docker", "inspect", container]).stdout)[0]
         host = info["HostConfig"]
         if (host["Privileged"] or host["Binds"] or host["NetworkMode"] != "none" or host["PidMode"]
@@ -82,10 +89,16 @@ def main():
         mounts = info.get("Mounts") or []
         if any(m.get("Type") != "tmpfs" or m.get("Destination") != "/tmp" for m in mounts):
             raise RuntimeError("unexpected mount")
+        PHASE = "application"
         run = invoke(["docker", "start", "-a", "-i", container], check=False)
         state = json.loads(invoke(["docker", "inspect", container]).stdout)[0]["State"]
         if run.returncode != 0 or state.get("ExitCode") != 0 or run.stderr:
+            reason = {"standalone-lab: isolation failed": "isolation", "ssjack-lab: synthetic lab failed": "conductor"}.get((run.stderr or "").strip(), "withheld")
+            code = state.get("ExitCode")
+            if isinstance(code, int):
+                print(f"standalone-lab: application reason={reason} exit={code}", file=sys.stderr)
             raise RuntimeError("isolated execution failed")
+        PHASE = "evidence"
         output = run.stdout or ""
         if len(output.encode()) > 16384:
             raise RuntimeError("result exceeds limit")
@@ -111,6 +124,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print("standalone-lab: failed (details withheld)", file=sys.stderr)
+    except Exception as error:
+        code = error.returncode if isinstance(error, subprocess.CalledProcessError) else None
+        print(f"standalone-lab: failed stage={PHASE} exit={code}", file=sys.stderr)
         raise SystemExit(1)
