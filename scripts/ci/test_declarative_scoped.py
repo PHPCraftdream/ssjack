@@ -12,6 +12,8 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         section = feature.split("  declarative-synthetic:\n", 1)[1].split("  full:\n", 1)[0]
         self.assertIn("fetch-depth: 0", section)
         self.assertIn("id: scope", section)
+        self.assertIn('git config --global --add safe.directory "$GITHUB_WORKSPACE"', section)
+        self.assertNotIn('safe.directory "*"', section)
         self.assertIn("scripts/ci/plan.py plan --base", section)
         self.assertIn("if: steps.scope.outputs.declarative == 'true'", section)
         self.assertIn("python3 scripts/ci/declarative_scoped.py", section)
