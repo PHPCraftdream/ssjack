@@ -1,0 +1,60 @@
+name: Standalone synthetic lab
+
+on:
+  push:
+    branches: [feat/universal-management-remediation]
+    paths: [.github/workflows/standalone-lab.yml]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact new lab source commit SHA
+        required: true
+        type: string
+      scoped_run_id:
+        description: Successful Feature CI run for that exact source
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  registration:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check laboratory helper syntax without executing it
+        run: python3 -c 'import ast,pathlib; [ast.parse(p.read_text(encoding="utf-8"), filename=str(p)) for p in pathlib.Path("scripts/lab").glob("*.py")]'
+      - run: echo 'registration-only: laboratory not executed'
+
+  lab:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify pinned product and scoped source evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SCOPED_RUN_ID: ${{ inputs.scoped_run_id }}
+        run: python3 scripts/lab/gate.py
+      - name: Build and execute sealed synthetic image
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SCOPED_RUN_ID: ${{ inputs.scoped_run_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python3 scripts/lab/run.py
