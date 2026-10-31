@@ -70,6 +70,9 @@ def main():
                     print("test event: " + event.group(0), file=sys.stderr)
                 if location:
                     print("failure location: " + location.group(1), file=sys.stderr)
+                helper = re.search(r"delivery helper command=(?:appstore|declarative)/[a-z-]+ exit=-?\d+", line)
+                if helper:
+                    print(helper.group(0), file=sys.stderr)
             raise SystemExit(1)
         print("delivery acceptance test PASS")
 

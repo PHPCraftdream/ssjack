@@ -13,12 +13,15 @@ func TestAppstoreCommandRoutingAndUsage(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no operation", nil, "usage: ssjack appstore setup DIR | put DIR"},
+		{"no operation", nil, "usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock HARNESS [ARGS...]"},
 		{"setup arity", []string{"setup"}, "usage: ssjack appstore setup DIR"},
 		{"setup extra argument", []string{"setup", "dir", "extra"}, "usage: ssjack appstore setup DIR"},
 		{"put arity", []string{"put"}, "usage: ssjack appstore put DIR"},
 		{"put extra argument", []string{"put", "dir", "extra"}, "usage: ssjack appstore put DIR"},
-		{"unknown operation", []string{"unlock"}, "usage: ssjack appstore setup DIR | put DIR"},
+		{"inspect arity", []string{"inspect"}, "usage: ssjack appstore inspect DIR"},
+		{"inspect extra argument", []string{"inspect", "dir", "extra"}, "usage: ssjack appstore inspect DIR"},
+		{"unlock arity", []string{"unlock"}, "usage: ssjack appstore unlock HARNESS [ARGS...]"},
+		{"unknown operation", []string{"unknown"}, "usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock HARNESS [ARGS...]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, err := run(context.Background(), append([]string{"appstore"}, tc.args...))

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -93,6 +94,10 @@ func (f *deliveryFixture) tryDeliveryCLIAs(t *testing.T, uid int, answers []deli
 	out, err := cmd.Output()
 	if err != nil {
 		clear(out)
+		var exit *exec.ExitError
+		if len(args) >= 2 && errors.As(err, &exit) {
+			return "", fmt.Errorf("delivery helper command=%s/%s exit=%d", args[0], args[1], exit.ExitCode())
+		}
 		return "", errors.New("delivery PTY infrastructure failure")
 	}
 	defer clear(out)
