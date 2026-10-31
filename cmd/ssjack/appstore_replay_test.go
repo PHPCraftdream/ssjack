@@ -85,8 +85,8 @@ func TestAppstoreScopedCLILostCommitAckNoBlindReplay(t *testing.T) {
 	if state.Sequence() != 1 || state.JournalCount() != 1 {
 		t.Fatalf("lost acknowledgement state: sequence=%d journal=%d", state.Sequence(), state.JournalCount())
 	}
-	if got := f.accepted.Load() - before; got != 5 {
-		t.Fatalf("accepted requests=%d, want CLI read, writer read, reserve, commit, reconcile read (5)", got)
+	if got := f.accepted.Load() - before; got != 7 {
+		t.Fatalf("connections=%d, want CLI read, writer read, reservation reconciliation read, reserve plus confirmation read, commit plus reconciliation read (7)", got)
 	}
 
 	f.denyRead.Store(false)
@@ -170,7 +170,7 @@ func TestAppstoreScopedCLILostCommitAckReconcilesWithoutReplay(t *testing.T) {
 	if !ref.Valid() || ref.StoreID() != f.store || ref.SnapshotID() != state.CommittedSnapshotID() || ref.SnapshotID() == ([16]byte{}) {
 		t.Fatalf("placeholder reference mismatch: store=%v snapshot=%v committed=%v", ref.StoreID(), ref.SnapshotID(), state.CommittedSnapshotID())
 	}
-	if got := f.accepted.Load() - before; got != 5 {
-		t.Fatalf("accepted requests=%d, want CLI read, writer read, reserve, commit, reconcile read (5)", got)
+	if got := f.accepted.Load() - before; got != 7 {
+		t.Fatalf("connections=%d, want CLI read, writer read, reservation reconciliation read, reserve plus confirmation read, commit plus reconciliation read (7)", got)
 	}
 }
