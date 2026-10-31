@@ -36,9 +36,10 @@ func (d *Directory) StoreID() [16]byte {
 	}
 	return d.state.store
 }
-func hexID(id [16]byte) string      { return hex.EncodeToString(id[:]) }
-func (d *Directory) Close() error   { return closeDirectory(d) }
-func (t *Transaction) Close() error { return end(t) }
+func hexID(id [16]byte) string                         { return hex.EncodeToString(id[:]) }
+func (d *Directory) Close() error                      { return closeDirectory(d) }
+func (d *Directory) Identity() (uint64, uint64, error) { return directoryIdentity(d) }
+func (t *Transaction) Close() error                    { return end(t) }
 func (t *Transaction) Journal() (*os.File, error) {
 	release, err := begin(t)
 	if err != nil {

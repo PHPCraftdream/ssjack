@@ -47,6 +47,9 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 0, nil
 	}
+	if len(args) > 0 && args[0] == "appstore" {
+		return runAppstore(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "hook" {
 		return runHook(args[1:])
 	}

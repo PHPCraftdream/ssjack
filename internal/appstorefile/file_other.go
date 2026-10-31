@@ -14,6 +14,7 @@ type transactionState struct {
 	mu sync.Mutex
 }
 
+func directoryIdentity(*Directory) (uint64, uint64, error)         { return 0, 0, ErrUnsupported }
 func begin(*Transaction) (func(), error)                           { return nil, ErrUnsupported }
 func open(*os.File, [16]byte) (*Directory, error)                  { return nil, ErrUnsupported }
 func lock(*Directory) (*Transaction, error)                        { return nil, ErrUnsupported }

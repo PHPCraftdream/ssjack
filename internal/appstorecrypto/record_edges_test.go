@@ -1061,3 +1061,291 @@ func TestWriterScopedSuffixBurnAndOrphanQuarantine(t *testing.T) {
 		t.Fatalf("repeat changed state: %v", err)
 	}
 }
+
+func TestNewSecretObjectCopiesAndCloses(t *testing.T) {
+	id := [16]byte{1}
+	input := []byte("secret")
+	obj, closeSecret, err := NewSecretObject(id, "text/plain", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input[0] = 'X'
+	copyBytes, err := obj.memory.takeCopy()
+	if err != nil || !bytes.Equal(copyBytes, []byte("secret")) {
+		t.Fatal("secret was not copied")
+	}
+	clear(copyBytes)
+	closeSecret()
+	closeSecret()
+	if _, err = obj.memory.takeCopy(); err == nil {
+		t.Fatal("closed secret remained readable")
+	}
+}
+
+func TestNewSecretObjectRejectsOversize(t *testing.T) {
+	if _, _, err := NewSecretObject([16]byte{1}, "application/octet-stream", make([]byte, maxRAMSecretSize+1)); err == nil {
+		t.Fatal("oversize secret accepted")
+	}
+}
+
+func TestWriterRAMSnapshotRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	transport, _, directory, h, _, _ := writerFixtureWithFault(t, appstoreanchorcore.Writer)
+	master, err := derive(ctx, h, []byte("synthetic RAM writer fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	payloads := [][]byte{[]byte("RAM secret"), make([]byte, 16384), make([]byte, 0)}
+	for i := range payloads {
+		for j := range payloads[i] {
+			payloads[i][j] = byte((i+17)*29 + j%251)
+		}
+	}
+	objects := make([]SnapshotObject, len(payloads))
+	closures := make([]func(), len(payloads))
+	for i, payload := range payloads {
+		var id [16]byte
+		id[15] = byte(i + 1)
+		objects[i], closures[i], err = NewSecretObject(id, "text/plain", payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closures[i]()
+	}
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := writer.Write(ctx, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, present := anchor.State()
+	if !present || state != commit.State || state.CommittedFileHash() != commit.EncodedHash {
+		t.Fatal("committed anchor differs")
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	file, err := tx.OpenSnapshot(state.CommittedSnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, checkErr := master.CheckSnapshot(ctx, file, ExpectedSnapshot{StoreID: h.StoreID(), SnapshotID: state.CommittedSnapshotID(), EncodedHash: state.CommittedFileHash()})
+	closeErr := file.Close()
+	if checkErr != nil || closeErr != nil || !check.Valid() {
+		t.Fatalf("independent snapshot check: %v", checkErr)
+	}
+	entries := check.Catalog().Entries()
+	if len(entries) != len(objects) {
+		t.Fatalf("catalog count %d", len(entries))
+	}
+	for i, entry := range entries {
+		if entry.ObjectID() != objects[i].ObjectID || entry.Length() != uint64(len(payloads[i])) {
+			t.Fatalf("catalog entry %d", i)
+		}
+	}
+	if len(commit.Refs) != len(entries) {
+		t.Fatalf("commit refs: %d", len(commit.Refs))
+	}
+	for i, ref := range commit.Refs {
+		if ref.ObjectID() != objects[i].ObjectID || ref.SnapshotID() != state.CommittedSnapshotID() || ref.VersionID() != entries[i].VersionID() {
+			t.Fatalf("commit ref %d", i)
+		}
+	}
+	encoded, err := tx.OpenSnapshot(state.CommittedSnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoded.Close()
+	var raw [appstoreheader.Size]byte
+	if _, err = io.ReadFull(encoded, raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	encodedHeader, err := appstoreheader.Parse(raw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := append([]byte(nil), raw[:]...)
+	var payloadOffset uint64
+	for index := uint32(0); index < encodedHeader.ChunkCount(); index++ {
+		var prefix [12]byte
+		if _, err = io.ReadFull(encoded, prefix[:]); err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, prefix[:]...)
+		n := binary.BigEndian.Uint32(prefix[4:8])
+		sealedN := binary.BigEndian.Uint32(prefix[8:12])
+		if binary.BigEndian.Uint32(prefix[:4]) != index || sealedN != n+16000 {
+			t.Fatal("record prefix")
+		}
+		sealed := make([]byte, sealedN)
+		if _, err = io.ReadFull(encoded, sealed); err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, sealed...)
+		plain, openErr := master.openRecord(ctx, encodedHeader, index, false, sealed)
+		clear(sealed)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		start := 0
+		if index == 0 {
+			start = 1 << 20
+		}
+		for pos := start; pos < len(plain); pos++ {
+			offset := payloadOffset + uint64(pos-start)
+			object := 0
+			for object < len(payloads) && offset >= uint64(len(payloads[object])) {
+				offset -= uint64(len(payloads[object]))
+				object++
+			}
+			if object >= len(payloads) || plain[pos] != payloads[object][offset] {
+				clear(plain)
+				t.Fatal("decrypted RAM bytes differ")
+			}
+		}
+		payloadOffset += uint64(len(plain) - start)
+		if payloadOffset > encodedHeader.PlaintextSize()-appstorecatalog.Size {
+			clear(plain)
+			t.Fatal("decrypted payload exceeds declared plaintext")
+		}
+	}
+	var footer [12]byte
+	if _, err = io.ReadFull(encoded, footer[:]); err != nil {
+		t.Fatal(err)
+	}
+	wire = append(wire, footer[:]...)
+	final := make([]byte, binary.BigEndian.Uint64(footer[4:]))
+	if _, err = io.ReadFull(encoded, final); err != nil {
+		t.Fatal(err)
+	}
+	wire = append(wire, final...)
+	if payloadOffset != uint64(len(payloads[0])+len(payloads[1])) || sha256.Sum256(wire) != commit.EncodedHash {
+		t.Fatal("encoded payload length or hash oracle mismatch")
+	}
+}
+
+func TestRAMWriteFirstCanceledBeforeMutationPreservesAnchor(t *testing.T) {
+	transport, _, directory, h, _, _ := writerFixtureWithFault(t, appstoreanchorcore.Writer)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	verifyCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stop()
+	master, err := derive(context.Background(), h, []byte("synthetic RAM failure fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := transport.Read(verifyCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState, beforePresent := before.State()
+	var id [16]byte
+	id[15] = 31
+	object, release, err := NewSecretObject(id, "text/plain", []byte("RAM cancellation test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err = writer.WriteFirst(ctx, []SnapshotObject{object}); err == nil {
+		t.Fatal("canceled WriteFirst succeeded")
+	}
+	after, err := transport.Read(verifyCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterState, afterPresent := after.State()
+	if beforePresent != afterPresent || (beforePresent && beforeState != afterState) {
+		t.Fatal("canceled WriteFirst changed anchor")
+	}
+}
+
+func TestRAMWriteFirstClosedInputPreservesAnchor(t *testing.T) {
+	transport, _, directory, h, _, _ := writerFixtureWithFault(t, appstoreanchorcore.Writer)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	master, err := derive(ctx, h, []byte("synthetic RAM closed-input fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState, beforePresent := before.State()
+	var id [16]byte
+	id[15] = 32
+	object, release, err := NewSecretObject(id, "text/plain", []byte("closed RAM input"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if _, err = writer.WriteFirst(ctx, []SnapshotObject{object}); err == nil {
+		t.Fatal("WriteFirst accepted closed RAM input")
+	}
+	after, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterState, afterPresent := after.State()
+	if beforePresent != afterPresent || (beforePresent && beforeState != afterState) {
+		t.Fatal("closed-input rejection changed anchor")
+	}
+}
+
+func TestRAMWriteFirstReaderRoleRejectsReservation(t *testing.T) {
+	transport, _, directory, h, _, _ := writerFixtureWithFault(t, appstoreanchorcore.Reader)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	master, err := derive(ctx, h, []byte("synthetic RAM reader-role fixture"), fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	writer, err := NewSnapshotWriter(directory, transport, master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState, beforePresent := before.State()
+	var id [16]byte
+	id[15] = 33
+	object, release, err := NewSecretObject(id, "text/plain", []byte("reader must not write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err = writer.WriteFirst(ctx, []SnapshotObject{object}); err == nil {
+		t.Fatal("reader role accepted WriteFirst")
+	}
+	after, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterState, afterPresent := after.State()
+	if beforePresent != afterPresent || (beforePresent && beforeState != afterState) {
+		t.Fatal("reader-role rejection changed anchor")
+	}
+}

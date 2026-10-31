@@ -243,6 +243,7 @@ type SnapshotObject struct {
 	ObjectID  [16]byte
 	MediaType string
 	Source    *os.File
+	memory    *ramSource
 }
 
 type SnapshotCommit struct {
@@ -674,6 +675,14 @@ func NewSnapshotWriter(directory *appstorefile.Directory, transport *appstoreanc
 	return &SnapshotWriter{state: &snapshotWriterState{directory: directory, transport: transport, master: master}}, nil
 }
 func (w *SnapshotWriter) Write(ctx context.Context, objects []SnapshotObject) (SnapshotCommit, error) {
+	return w.write(ctx, objects, false)
+}
+
+func (w *SnapshotWriter) WriteFirst(ctx context.Context, objects []SnapshotObject) (SnapshotCommit, error) {
+	return w.write(ctx, objects, true)
+}
+
+func (w *SnapshotWriter) write(ctx context.Context, objects []SnapshotObject, firstOnly bool) (SnapshotCommit, error) {
 	if w == nil || w.state == nil || ctx == nil || len(objects) > 16383 {
 		return SnapshotCommit{}, ErrSnapshot
 	}
@@ -707,6 +716,9 @@ func (w *SnapshotWriter) Write(ctx context.Context, objects []SnapshotObject) (S
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
+	if firstOnly && (state.Sequence() != 0 || state.CommittedSnapshotID() != ([16]byte{})) {
+		return SnapshotCommit{}, ErrWriterRejected
+	}
 	jf, err := tx.Journal()
 	if err != nil {
 		return SnapshotCommit{}, err
@@ -731,11 +743,18 @@ func (w *SnapshotWriter) Write(ctx context.Context, objects []SnapshotObject) (S
 		return SnapshotCommit{}, ErrSnapshot
 	}
 	for _, o := range objects {
-		if o.ObjectID == ([16]byte{}) || o.Source == nil || !validMedia(o.MediaType) {
+		if o.ObjectID == ([16]byte{}) || (o.Source == nil) == (o.memory == nil) || !validMedia(o.MediaType) {
 			return SnapshotCommit{}, ErrSnapshot
 		}
 	}
 	prepared, total, err := prepareWriterObjects(ctx, objects)
+	if err == nil {
+		defer func() {
+			for i := range prepared {
+				clear(prepared[i].memory)
+			}
+		}()
+	}
 	if err != nil {
 		return SnapshotCommit{}, err
 	}

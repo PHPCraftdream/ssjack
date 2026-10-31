@@ -42,6 +42,10 @@ jobs:
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Scoped app-store CLI acceptance (Linux private overlay)
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        run: python3 scripts/ci/appstore_scoped.py
       - name: Build changed installer fixture
         if: steps.scope.outputs.installers == 'true'
         shell: bash

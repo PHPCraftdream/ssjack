@@ -120,6 +120,28 @@ func (s *directoryState) closeFDs() {
 		s.fd = -1
 	}
 }
+func directoryIdentity(d *Directory) (uint64, uint64, error) {
+	if d == nil || d.state == nil {
+		return 0, 0, ErrInvalid
+	}
+	s := d.state
+	if !s.mu.TryLock() {
+		return 0, 0, ErrBusy
+	}
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, 0, ErrUnavailable
+	}
+	if err := validDir(s.fd); err != nil {
+		return 0, 0, err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(s.fd, &st); err != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return uint64(st.Dev), st.Ino, nil
+}
+
 func closeDirectory(d *Directory) error {
 	if d == nil || d.state == nil {
 		return nil

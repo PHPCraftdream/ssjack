@@ -114,6 +114,7 @@ def main():
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                 stream.write("installers=" + str(plan["installers"]).lower() + "\n")
+                stream.write("appstorecli=" + str("./cmd/ssjack" in plan["packages"]).lower() + "\n")
     else:
         plan = json.loads(output.read_text(encoding="utf-8"))
         packages = plan["packages"]

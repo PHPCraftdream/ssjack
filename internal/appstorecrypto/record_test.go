@@ -29,9 +29,11 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorrequest"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorstate"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchortls"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstorejournal"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 )
 
 func recordHeader(t *testing.T, total uint64) appstoreheader.Header {
@@ -725,5 +727,304 @@ func TestWriterScopedCanceledAndBusy(t *testing.T) {
 	}
 	if err = tx.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func installationWriterFixture(t *testing.T) (*appstorefile.Directory, *appstoreentry.Store, Binding) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux durable service required")
+	}
+	h := header(t)
+	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := appstoreentry.Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dev, ino, err := store.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := appstorefile.Open(root, h.StoreID())
+	_ = root.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = directory.Close() })
+
+	ledgerPath := t.TempDir()
+	if err = os.Chmod(ledgerPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ledgerRoot, err := os.Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := appstoreanchorledger.New(ledgerRoot, h.StoreID(), 64)
+	_ = ledgerRoot.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	now := time.Now()
+	caKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{71}, 32))
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	leaf := func(seed byte, usage x509.ExtKeyUsage) tls.Certificate {
+		key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, 32))
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(int64(seed)), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+		der, e := x509.CreateCertificate(rand.Reader, tmpl, ca, key.Public(), caKey)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return tls.Certificate{Certificate: [][]byte{der, caDER}, PrivateKey: key}
+	}
+	serverCert, writerCert := leaf(72, x509.ExtKeyUsageServerAuth), leaf(73, x509.ExtKeyUsageClientAuth)
+	signer := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{75}, 32))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := appstoreanchorhttp.New(appstoreanchorhttp.Config{Authority: listener.Addr().String(), Certificate: serverCert, ClientCAs: roots, SigningKey: signer, Bindings: []appstoreanchorhttp.Binding{{CredentialID: sha256.Sum256(writerCert.Certificate[0]), StoreID: h.StoreID(), Role: appstoreanchorcore.Writer, Backend: backend}}})
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- service.Serve(ctx, listener) }()
+	t.Cleanup(func() { cancel(); _ = listener.Close(); _ = service.Close(); <-done })
+	endpoint := "https://" + listener.Addr().String() + "/anchor"
+	transport, err := appstoreanchortls.NewWriter(appstoreanchortls.Config{Endpoint: endpoint, RootCAs: roots, Certificate: writerCert, ServiceKey: signer.Public().(ed25519.PublicKey), StoreID: h.StoreID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = transport.Close() })
+	create, err := appstoreanchorrequest.NewCreate(h.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesisCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stop()
+	reply, _, err := transport.Submit(genesisCtx, create)
+	if err != nil || reply.Outcome() != appstoreanchorreply.Committed {
+		t.Fatalf("initialize genesis: %v", err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(writerCert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, store, Binding{Endpoint: endpoint, RootsDER: [][]byte{caDER}, CertificateDER: writerCert.Certificate, PrivateDER: privateDER, ServiceKey: signer.Public().(ed25519.PublicKey), Header: h, DirectoryDev: dev, DirectoryIno: ino}
+}
+
+func TestInstallationWriterEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	directory, store, binding := installationWriterFixture(t)
+	password := []byte("synthetic installation writer fixture")
+	encoded, err := newInstallation(ctx, binding.Header, password, binding, installationDerive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Install(encoded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, digest, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, err := unlockInstallation(ctx, loaded, password, installationDerive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer installation.Close()
+	if err = store.VerifyUnchanged(digest); err != nil {
+		t.Fatal(err)
+	}
+	dev, ino, err := store.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installation.DirectoryMatches(dev, ino) {
+		t.Fatal("directory identity check")
+	}
+	otherPath := t.TempDir()
+	if err = os.Chmod(otherPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	otherStore, err := appstoreentry.Open(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherStore.Close()
+	otherRoot, err := os.Open(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDirectory, err := appstorefile.Open(otherRoot, binding.Header.StoreID())
+	_ = otherRoot.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherDirectory.Close()
+	otherDev, otherIno, err := otherStore.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installation.DirectoryMatches(otherDev, otherIno) {
+		t.Fatal("accepted different directory identity")
+	}
+	if _, rejectedTransport, writerErr := installation.Writer(otherDirectory); writerErr == nil || rejectedTransport != nil {
+		if rejectedTransport != nil {
+			_ = rejectedTransport.Close()
+		}
+		t.Fatalf("writer accepted different directory: transport=%v err=%v", rejectedTransport, writerErr)
+	}
+	writer, transport, err := installation.Writer(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	secret := []byte("synthetic acceptance secret; never runtime credentials")
+	var objectID [16]byte
+	objectID[15] = 9
+	object, release, err := NewSecretObject(objectID, "text/plain", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	commit, err := writer.WriteFirst(ctx, []SnapshotObject{object})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := anchor.State()
+	if !ok || state != commit.State || state.CommittedFileHash() != commit.EncodedHash {
+		t.Fatal("committed state differs from independent transport read")
+	}
+	var secondID [16]byte
+	secondID[15] = 10
+	secondObject, secondRelease, err := NewSecretObject(secondID, "text/plain", []byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondRelease()
+	if _, err = writer.WriteFirst(ctx, []SnapshotObject{secondObject}); err != ErrWriterRejected {
+		t.Fatalf("second first write: %v", err)
+	}
+	unchanged, err := transport.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchangedState, ok := unchanged.State()
+	if !ok || unchangedState != commit.State {
+		t.Fatal("rejected first write changed anchor")
+	}
+	tx, err := directory.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	snapshot, err := tx.OpenSnapshot(commit.State.CommittedSnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := installation.CheckSnapshot(ctx, snapshot, ExpectedSnapshot{StoreID: binding.Header.StoreID(), SnapshotID: commit.State.CommittedSnapshotID(), EncodedHash: commit.EncodedHash})
+	_ = snapshot.Close()
+	if err != nil || !check.Valid() {
+		t.Fatalf("check snapshot: %v", err)
+	}
+	entries := check.Catalog().Entries()
+	if len(entries) != 1 || entries[0].ObjectID() != objectID || entries[0].Length() != uint64(len(secret)) {
+		t.Fatal("catalog does not match committed secret")
+	}
+	encodedSnapshot, err := tx.OpenSnapshot(commit.State.CommittedSnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encodedSnapshot.Close()
+	if _, err = encodedSnapshot.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	fullSnapshot, err := io.ReadAll(encodedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullSnapshotHash := sha256.Sum256(fullSnapshot)
+	if fullSnapshotHash != commit.EncodedHash || fullSnapshotHash != state.CommittedFileHash() || bytes.Contains(fullSnapshot, secret) {
+		t.Fatal("snapshot hash or confidentiality check")
+	}
+	if _, err = encodedSnapshot.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var raw [appstoreheader.Size]byte
+	if _, err = io.ReadFull(encodedSnapshot, raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	h, err := appstoreheader.Parse(raw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var offset uint64
+	for index := uint32(0); index < h.ChunkCount(); index++ {
+		var prefix [12]byte
+		if _, err = io.ReadFull(encodedSnapshot, prefix[:]); err != nil {
+			t.Fatal(err)
+		}
+		n := binary.BigEndian.Uint32(prefix[8:])
+		sealed := make([]byte, n)
+		if _, err = io.ReadFull(encodedSnapshot, sealed); err != nil {
+			t.Fatal(err)
+		}
+		plain, e := installation.master.openRecord(ctx, h, index, false, sealed)
+		clear(sealed)
+		if e != nil {
+			t.Fatal(e)
+		}
+		start := 0
+		if index == 0 {
+			start = 1048576
+		}
+		if offset+uint64(len(plain)-start) > uint64(len(secret)) || !bytes.Equal(plain[start:], secret[offset:offset+uint64(len(plain)-start)]) {
+			clear(plain)
+			t.Fatal("opened record payload mismatch")
+		}
+		offset += uint64(len(plain) - start)
+		clear(plain)
+	}
+	if offset != uint64(len(secret)) {
+		t.Fatal("opened payload length mismatch")
+	}
+	if len(commit.Refs) != 1 || commit.Refs[0].StoreID() != binding.Header.StoreID() || commit.Refs[0].ObjectID() != objectID || commit.Refs[0].VersionID() != entries[0].VersionID() || commit.Refs[0].SnapshotID() != commit.State.CommittedSnapshotID() {
+		t.Fatal("unexpected committed references")
+	}
+	placeholder, err := appstoreplaceholder.Encode(commit.Refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := appstoreplaceholder.Parse(placeholder)
+	if err != nil || parsed != commit.Refs[0] {
+		t.Fatalf("placeholder round-trip: %v", err)
 	}
 }

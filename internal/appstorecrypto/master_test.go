@@ -3,15 +3,20 @@ package appstorecrypto
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"math/big"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
@@ -277,5 +282,128 @@ func TestAppstoreMasterFullProfile(t *testing.T) {
 	m.Close()
 	if !m.Closed() || m.state.key != ([32]byte{}) {
 		t.Fatal("production owned master was not cleared")
+	}
+}
+
+func testBinding(t *testing.T) (appstoreheader.Header, Binding) {
+	t.Helper()
+	h := header(t)
+	now := time.Now()
+	caKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, ed25519.SeedSize))
+	leafTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, leafKey.Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, Binding{Endpoint: "https://localhost/anchor", RootsDER: [][]byte{caDER}, CertificateDER: [][]byte{leafDER, caDER}, PrivateDER: privateDER, ServiceKey: bytes.Repeat([]byte{3}, 32), Header: h, DirectoryDev: 1, DirectoryIno: 2}
+}
+
+func installationDerive(ctx context.Context, h appstoreheader.Header, p []byte) (*Master, error) {
+	return deriveAdmitted(ctx, h, p, func(password, salt []byte) []byte {
+		input := append(append([]byte(nil), password...), salt...)
+		sum := sha256.Sum256(input)
+		clear(input)
+		return append([]byte(nil), sum[:]...)
+	})
+}
+
+func assertBindingEqual(t *testing.T, got, want Binding) {
+	t.Helper()
+	if got.Endpoint != want.Endpoint || got.Header != want.Header || got.DirectoryDev != want.DirectoryDev || got.DirectoryIno != want.DirectoryIno || !bytes.Equal(got.PrivateDER, want.PrivateDER) || !bytes.Equal(got.ServiceKey, want.ServiceKey) || len(got.RootsDER) != len(want.RootsDER) || len(got.CertificateDER) != len(want.CertificateDER) {
+		t.Fatal("binding fields differ")
+	}
+	for i := range want.RootsDER {
+		if !bytes.Equal(got.RootsDER[i], want.RootsDER[i]) {
+			t.Fatal("root certificate differs")
+		}
+	}
+	for i := range want.CertificateDER {
+		if !bytes.Equal(got.CertificateDER[i], want.CertificateDER[i]) {
+			t.Fatal("certificate chain differs")
+		}
+	}
+}
+
+func TestInstallationRoundTripTamperAndClose(t *testing.T) {
+	h, b := testBinding(t)
+	password := []byte("installation passphrase")
+	encoded, err := newInstallation(context.Background(), h, password, b, installationDerive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, b.PrivateDER) {
+		t.Fatal("private key leaked")
+	}
+	u, err := unlockInstallation(context.Background(), encoded, password, installationDerive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBindingEqual(t, u.binding, b)
+	if u.Header() != h {
+		t.Fatal("header mismatch")
+	}
+	if err := u.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !u.master.Closed() || len(u.binding.PrivateDER) != 0 {
+		t.Fatal("close retained master or private DER")
+	}
+	if _, err = unlockInstallation(context.Background(), encoded, []byte("wrong passphrase"), installationDerive); err == nil {
+		t.Fatal("wrong passphrase accepted")
+	}
+	for _, index := range []int{0, 8, len(installationMagic) + 12, len(installationMagic) + appstoreheader.Size + 16, len(encoded) - 1} {
+		bad := append([]byte(nil), encoded...)
+		bad[index] ^= 1
+		if _, err = unlockInstallation(context.Background(), bad, password, installationDerive); err == nil {
+			t.Fatalf("tamper at %d accepted", index)
+		}
+	}
+}
+
+func TestInstallationRejectsBoundsBeforeDerive(t *testing.T) {
+	calls := 0
+	derive := func(ctx context.Context, h appstoreheader.Header, p []byte) (*Master, error) {
+		calls++
+		return installationDerive(ctx, h, p)
+	}
+	for _, encoded := range [][]byte{nil, make([]byte, len(installationMagic)+appstoreheader.Size-1), make([]byte, maxInstallation+1)} {
+		if _, err := unlockInstallation(context.Background(), encoded, []byte("passphrase"), derive); err == nil {
+			t.Fatal("invalid encoded bounds accepted")
+		}
+	}
+	if calls != 0 {
+		t.Fatal("bounds rejection reached derivation")
+	}
+}
+
+func TestInstallationCancellation(t *testing.T) {
+	h, b := testBinding(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := newInstallation(ctx, h, []byte("passphrase"), b, installationDerive); err == nil {
+		t.Fatal("cancelled creation accepted")
+	}
+}
+
+func TestInstallationCertificatesParse(t *testing.T) {
+	_, b := testBinding(t)
+	for _, der := range append(append([][]byte{}, b.RootsDER...), b.CertificateDER...) {
+		if _, err := x509.ParseCertificate(der); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
