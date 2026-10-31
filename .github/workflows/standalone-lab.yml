@@ -29,7 +29,8 @@ jobs:
           persist-credentials: false
       - name: Check laboratory helper syntax without executing it
         run: python3 -c 'import ast,pathlib; [ast.parse(p.read_text(encoding="utf-8"), filename=str(p)) for p in pathlib.Path("scripts/lab").glob("*.py")]'
-      - run: echo 'registration-only: laboratory not executed'
+      - run: |
+          echo 'registration-only: laboratory not executed'
 
   lab:
     if: github.event_name == 'workflow_dispatch' && github.event.repository.private == false
