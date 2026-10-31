@@ -87,8 +87,20 @@ func (f *deliveryFixture) tryDeliveryCLIAs(t *testing.T, uid int, answers []deli
 		t.Fatal(err)
 	}
 	defer clear(payload)
-	helper := filepath.Join("..", "..", "scripts", "ci", "delivery_pty.py")
+	helper, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "delivery_pty.py"))
+	if err != nil {
+		return "", errors.New("delivery helper path unavailable")
+	}
+	workspace, err := os.MkdirTemp("/tmp", "ssjack-delivery-project-")
+	if err != nil {
+		return "", errors.New("delivery workspace creation failed")
+	}
+	defer os.RemoveAll(workspace)
+	if err := os.Chown(workspace, uid, uid); err != nil {
+		return "", errors.New("delivery workspace ownership failed")
+	}
 	cmd := exec.Command("python3", append([]string{helper, f.cli}, args...)...)
+	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "SSJACK_DELIVERY_UID="+strconv.Itoa(uid))
 	cmd.Stdin = bytes.NewReader(payload)
 	out, err := cmd.Output()
