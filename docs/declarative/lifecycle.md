@@ -28,6 +28,8 @@ Persist reservation with owner session, immutable plan/digest, request key, cano
 
 Cancellation is part of the original ordinary operation, not a new active ordinary operation. The first accepted intent records monotonic time `t`; its queue deadline is exactly `t + 10000ms`. Its execution deadline is `min(actual launch + 600000ms, original operation absolute deadline)`. Retries never extend either deadline. Queue expiry persists the accepted intent as pending and never auto-launches it; report unsupported only when the enrolled driver lacks the capability. Report outcomes truthfully as UNKNOWN and quarantine when remote effect is uncertain. Model cancellation of UNKNOWN is denied. A local stop never proves remote stop. Terminal SUCCEEDED/FAILED/CANCELLED operations never spawn cancellation work. Human recovery is separate from model cancellation.
 
+For the current attached MCP/broker route, cancelling the caller context closes that client connection; the keeper handler runs under its session context and may continue. A cancelled in-flight call can therefore lose its reply after the external driver effect has committed. Do not infer rollback or retry the closed client. Reconciliation guarantees here are limited to the same live-session fitting route and do not establish remote cancellation. The task231 lost-reply fixture separately covers the internal driver deadline/read-first reconciliation path.
+
 ## Attachment, bounds, retention
 
 One-use attachment cannot reconnect or be claimed twice. Same-live-session retries use durable idempotency. Disconnect/timeout/process loss consumes attachment; never retry possible mutation. Quarantine affected work; no model lookup, continuation, or new authentication/authorization attempt.

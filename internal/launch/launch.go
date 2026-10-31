@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
@@ -29,6 +30,7 @@ type Options struct {
 	Metadata     *enrollment.Metadata
 	Policy       *enrollment.Policy
 	Identity     *enrollment.Snapshot
+	Synthetic    *declarativeslice.Session
 	Stdin        io.Reader
 	Stdout       io.Writer
 	Stderr       io.Writer
@@ -98,6 +100,9 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if opts.Mode == "" {
 		opts.Mode = broker.ModeFull
 	}
+	if opts.Synthetic != nil && (opts.Mode != broker.ModeDeclarative || opts.Metadata != nil || opts.Policy != nil || opts.Identity != nil || opts.Handler != nil) {
+		return 1, errors.New("synthetic session cannot be combined with enrollment identity or policy")
+	}
 	if opts.Metadata != nil && opts.Mode != broker.ModeDeclarative {
 		return 1, errors.New("enrollment metadata is unavailable in full mode")
 	}
@@ -123,11 +128,17 @@ func Run(ctx context.Context, opts Options) (int, error) {
 			return 1, errors.New("enrollment identity mismatch")
 		}
 	}
-	if len(opts.Command) == 0 || (opts.Handler == nil && opts.Mode != broker.ModeDeclarative) || opts.BootstrapTTL <= 0 || (opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
+	if (opts.Handler == nil && opts.Mode != broker.ModeDeclarative && opts.Synthetic == nil) || len(opts.Command) == 0 || opts.BootstrapTTL <= 0 || (opts.Mode != broker.ModeFull && opts.Mode != broker.ModeDeclarative) {
 		return 1, errors.New("missing harness or session parameters")
 	}
 	dispatch := broker.Dispatch(opts.Mode, opts.Handler)
-	if opts.Metadata != nil {
+	if opts.Synthetic != nil {
+		var err error
+		dispatch, err = broker.DispatchSynthetic(opts.Synthetic)
+		if err != nil {
+			return 1, err
+		}
+	} else if opts.Metadata != nil {
 		var err error
 		if opts.Identity != nil {
 			dispatch, err = broker.DispatchIdentity(opts.Metadata, *opts.Policy, *opts.Identity)

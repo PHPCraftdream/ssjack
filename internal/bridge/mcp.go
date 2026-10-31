@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"unicode/utf8"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
+	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
@@ -59,6 +61,26 @@ func NewServer(client *broker.Client) *mcp.Server {
 func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descriptor) (*mcp.Server, error) {
 	if err := broker.ValidateDescriptor(descriptor); err != nil {
 		return nil, err
+	}
+	if descriptor.Mode == broker.ModeDeclarative && descriptor.Protocol == broker.SyntheticProtocol {
+		server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
+		mcp.AddTool(server, &mcp.Tool{Name: "resource_plan", Description: "Plan a fixed synthetic cache metadata update; no secrets or command execution."}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.PlanInput) (*mcp.CallToolResult, declarativeslice.PlanResult, error) {
+			var out declarativeslice.PlanResult
+			if client == nil {
+				return nil, out, errors.New("keeper unavailable")
+			}
+			err := client.Call(ctx, "resource_plan", input, &out)
+			return nil, out, err
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "plan_apply", Description: "Apply a previously issued synthetic metadata plan."}, func(ctx context.Context, _ *mcp.CallToolRequest, input declarativeslice.ApplyInput) (*mcp.CallToolResult, declarativeslice.ApplyResult, error) {
+			var out declarativeslice.ApplyResult
+			if client == nil {
+				return nil, out, errors.New("keeper unavailable")
+			}
+			err := client.Call(ctx, "plan_apply", input, &out)
+			return nil, out, err
+		})
+		return server, nil
 	}
 	if descriptor.Mode == broker.ModeDeclarative {
 		return NewDeclarativeServer(), nil

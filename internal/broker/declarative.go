@@ -21,6 +21,7 @@ const (
 	FullProtocol            = "ssjack-full-1"
 	PolicyProtocol          = "ssjack-policy-deny-only-1"
 	SnapshotProtocol        = "ssjack-identity-subset-partial-1"
+	SyntheticProtocol       = "ssjack-synthetic-metadata-1"
 	DiscoveryRequest        = "ssjack-session-discovery"
 )
 
@@ -54,6 +55,9 @@ var policyDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func ValidateDescriptor(d Descriptor) error {
 	fullTools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}
 	policyFieldsEmpty := d.PolicyRevision == "" && d.PolicyDigest == ""
+	if d.Mode == ModeDeclarative && d.Protocol == SyntheticProtocol && !d.Complete && equalTools(d.Tools, []string{"resource_plan", "plan_apply"}) && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty && d.SnapshotDigest == "" {
+		return nil
+	}
 	if d.Mode == ModeDeclarative && d.Protocol == SnapshotProtocol && !d.Complete && len(d.Tools) == 0 && validEnrollmentFields(d.EnrollmentID, d.DriverID, d.DriverProtocol) && policyRevisionPattern.MatchString(d.PolicyRevision) && policyDigestPattern.MatchString(d.PolicyDigest) && policyDigestPattern.MatchString(d.SnapshotDigest) {
 		return nil
 	}
@@ -236,6 +240,14 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
 	}
+	if protocol == SyntheticProtocol {
+		mode, mok := fields["mode"].(string)
+		complete, cok := fields["complete"].(bool)
+		tools, tok := fields["tools"].([]any)
+		if !mok || mode != string(ModeDeclarative) || !cok || complete || !tok || len(tools) != 2 || tools[0] != "resource_plan" || tools[1] != "plan_apply" {
+			return Descriptor{}, errors.New("invalid keeper session descriptor")
+		}
+	}
 	if protocol == EnrollmentProtocol || protocol == PolicyProtocol || protocol == SnapshotProtocol {
 		if _, ok := fields["enrollment_id"].(string); !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
@@ -246,6 +258,9 @@ func Describe(ctx context.Context, client *Client) (Descriptor, error) {
 		if _, ok := fields["driver_protocol"].(int64); !ok {
 			return Descriptor{}, errors.New("invalid keeper session descriptor")
 		}
+	}
+	if protocol == SyntheticProtocol && len(fields) != len(base) {
+		return Descriptor{}, errors.New("invalid keeper session descriptor")
 	}
 	for _, v := range fields["tools"].([]any) {
 		if _, ok := v.(string); !ok {
