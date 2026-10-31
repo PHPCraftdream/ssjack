@@ -239,7 +239,7 @@ func TestScopedLiveAuthorityRecheck(t *testing.T) {
 	s, p, _ := acceptancePeer(t, ctx)
 	defer s.Close()
 	defer p.Close()
-	plan := planOverMCP(t, ctx, p, "EBAQEBAQEBAQEBAQEBAQEBA", true)
+	plan := planOverMCP(t, ctx, p, "EBAQEBAQEBAQEBAQEBAQEA", true)
 	ready, goFile := filepath.Join(dir, phase+".ready"), filepath.Join(dir, phase+".go")
 	if os.WriteFile(ready, []byte("ready"), 0600) != nil {
 		t.Fatal("failed to signal ready")

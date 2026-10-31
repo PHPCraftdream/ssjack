@@ -83,13 +83,18 @@ def run_probe(test_binary, source, env, demote, test_name):
     print(result.stdout, flush=True)
 
 
-def wait_ready(path):
+def wait_ready(path, proc):
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            output = proc.communicate(timeout=5)[0]
+            raise RuntimeError("live-session probe exited before ready barrier: " + output)
         if os.path.exists(path):
             return
         time.sleep(0.02)
-    raise RuntimeError("live-session probe did not reach ready barrier: " + path)
+    proc.kill()
+    output = proc.communicate(timeout=5)[0]
+    raise RuntimeError("live-session probe did not reach ready barrier: " + path + "\n" + output)
 
 
 def live_probe(test_binary, source, env, demote, coord, phase, before_release):
@@ -97,7 +102,7 @@ def live_probe(test_binary, source, env, demote, coord, phase, before_release):
     for name in os.listdir(coord):
         os.unlink(os.path.join(coord, name))
     proc = subprocess.Popen([test_binary, "-test.v", "-test.run", "^TestScopedLiveAuthorityRecheck$"], cwd=source, env=env, preexec_fn=demote, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    wait_ready(os.path.join(coord, phase + ".ready"))
+    wait_ready(os.path.join(coord, phase + ".ready"), proc)
     before_release()
     with open(os.path.join(coord, phase + ".go"), "w") as signal:
         signal.write("go")
