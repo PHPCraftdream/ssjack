@@ -89,6 +89,8 @@ def main():
             "exact-capabilities": set(host["CapAdd"] or []) == {"CAP_" + name for name in CAPS},
             "drop-all": host["CapDrop"] == ["ALL"],
             "no-new-privileges": "no-new-privileges" in (host["SecurityOpt"] or []),
+            "memory-limit": host["Memory"] == 4 * 1024 ** 3,
+            "swap-disabled": host["MemorySwap"] == host["Memory"],
         }
         if not all(checks.values()):
             failed = ",".join(name for name, passed in checks.items() if not passed)
