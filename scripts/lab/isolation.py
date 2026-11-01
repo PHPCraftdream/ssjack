@@ -38,7 +38,10 @@ def main():
     require(re.fullmatch(r"[0-9]+", os.environ["GITHUB_RUN_ID"]) is not None)
     for path in ("/lab/ssjack", "/lab/conductor", "/lab/driver", "/lab/consumer", "/lab/harness", "/lab/delivery_pty.py"):
         entry = os.lstat(path)
-        require(stat.S_ISREG(entry.st_mode) and entry.st_uid == 0 and entry.st_mode & 0o022 == 0)
+        valid = stat.S_ISREG(entry.st_mode) and entry.st_uid == 0 and entry.st_mode & 0o022 == 0
+        if not valid:
+            os.write(2, f"standalone-lab: artifact uid={entry.st_uid} mode={entry.st_mode & 0o7777:o} regular={int(stat.S_ISREG(entry.st_mode))}\n".encode("ascii"))
+        require(valid)
     for path in ("/etc/ssjack", "/var/lib/ssjack", "/usr/libexec/ssjack-synthetic-driver", "/usr/libexec/ssjack-synthetic-consumer"):
         require(not os.path.lexists(path))
     fd = os.open("/lab/isolation-ok", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)

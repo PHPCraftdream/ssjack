@@ -105,7 +105,10 @@ def main():
         state = json.loads(invoke(["docker", "inspect", container]).stdout)[0]["State"]
         if run.returncode != 0 or state.get("ExitCode") != 0 or run.stderr:
             reason = {"standalone-lab: isolation failed": "isolation", "ssjack-lab: synthetic lab failed": "conductor"}.get((run.stderr or "").strip(), "withheld")
-            isolation = re.fullmatch(r"standalone-lab: isolation failed check=([0-9]{1,3})", (run.stderr or "").strip())
+            isolation = re.search(r"^standalone-lab: isolation failed check=([0-9]{1,3})$", (run.stderr or "").strip(), re.M)
+            artifact = re.search(r"^standalone-lab: artifact uid=[0-9]{1,10} mode=[0-7]{1,4} regular=[01]$", (run.stderr or "").strip(), re.M)
+            if artifact:
+                print(artifact.group(0), file=sys.stderr)
             if isolation:
                 reason = "isolation-check-" + isolation.group(1)
             code = state.get("ExitCode")
