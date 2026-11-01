@@ -86,7 +86,7 @@ def main():
             "unprivileged": not host["Privileged"], "no-binds": not host["Binds"],
             "network-none": host["NetworkMode"] == "none", "private-pid": not host["PidMode"],
             "private-ipc": host["IpcMode"] in ("", "private"),
-            "exact-capabilities": set(host["CapAdd"] or []) == CAPS,
+            "exact-capabilities": set(host["CapAdd"] or []) == {"CAP_" + name for name in CAPS},
             "drop-all": host["CapDrop"] == ["ALL"],
             "no-new-privileges": "no-new-privileges" in (host["SecurityOpt"] or []),
         }
