@@ -82,9 +82,18 @@ def main():
         PHASE = "inspect-policy"
         info = json.loads(invoke(["docker", "inspect", container]).stdout)[0]
         host = info["HostConfig"]
-        if (host["Privileged"] or host["Binds"] or host["NetworkMode"] != "none" or host["PidMode"]
-                or host["IpcMode"] not in ("", "private") or set(host["CapAdd"] or []) != CAPS
-                or host["CapDrop"] != ["ALL"] or "no-new-privileges" not in (host["SecurityOpt"] or [])):
+        checks = {
+            "unprivileged": not host["Privileged"], "no-binds": not host["Binds"],
+            "network-none": host["NetworkMode"] == "none", "private-pid": not host["PidMode"],
+            "private-ipc": host["IpcMode"] in ("", "private"),
+            "exact-capabilities": set(host["CapAdd"] or []) == CAPS,
+            "drop-all": host["CapDrop"] == ["ALL"],
+            "no-new-privileges": "no-new-privileges" in (host["SecurityOpt"] or []),
+        }
+        if not all(checks.values()):
+            failed = ",".join(name for name, passed in checks.items() if not passed)
+            prefixed = set(host["CapAdd"] or []) == {"CAP_" + name for name in CAPS}
+            print(f"standalone-lab: policy failed={failed} prefixed-capabilities={prefixed}", file=sys.stderr)
             raise RuntimeError("container policy mismatch")
         mounts = info.get("Mounts") or []
         if any(m.get("Type") != "tmpfs" or m.get("Destination") != "/tmp" for m in mounts):
