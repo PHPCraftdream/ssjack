@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,8 +17,8 @@ PRODUCT_BASE = "2997e692cdc24f5b9a5aa23cadc3b22ab1b32f02"
 NAMES = {"ssjack", "conductor", "harness", "driver", "consumer"}
 PHASE = "inputs"
 
-def invoke(args, *, cwd=None, env=None, check=True, capture=True):
-    return subprocess.run(args, cwd=cwd, env=env, check=check, text=True,
+def invoke(args, *, cwd=None, env=None, check=True, capture=True, stdin=None):
+    return subprocess.run(args, cwd=cwd, env=env, check=check, text=True, stdin=stdin,
                           stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if capture else None)
 
@@ -78,7 +79,25 @@ def main():
         invoke(create)
         created = True
         PHASE = "copy-artifacts"
-        invoke(["docker", "cp", str(stage), container + ":/lab"])
+        archive_path = parent / "artifacts.tar"
+        if {path.name for path in stage.iterdir()} != NAMES | {"isolation.py", "delivery_pty.py"}:
+            raise RuntimeError("unexpected staged artifact")
+        with tarfile.open(archive_path, "w") as archive:
+            directory = tarfile.TarInfo("lab")
+            directory.type, directory.mode = tarfile.DIRTYPE, 0o755
+            directory.uid = directory.gid = 0
+            archive.addfile(directory)
+            for path in sorted(stage.iterdir()):
+                entry = archive.gettarinfo(str(path), arcname="lab/" + path.name)
+                if not entry.isfile():
+                    raise RuntimeError("nonregular staged artifact")
+                entry.uid = entry.gid = 0
+                entry.uname = entry.gname = "root"
+                entry.mode = 0o755
+                with path.open("rb") as content:
+                    archive.addfile(entry, content)
+        with archive_path.open("rb") as content:
+            invoke(["docker", "cp", "-", container + ":/"], stdin=content)
         PHASE = "inspect-policy"
         info = json.loads(invoke(["docker", "inspect", container]).stdout)[0]
         host = info["HostConfig"]
