@@ -32,8 +32,11 @@ def run_cli(binary, args, answers):
                 prompts.pop(0)
                 pending.clear()
     os.close(master)
-    if proc.poll() is None:
+    try:
+        proc.wait(timeout=max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait()
         raise RuntimeError("CLI prompt timed out: " + str(args))
     output = proc.stdout.read().decode(errors="replace")
     if proc.returncode != 0 or prompts:

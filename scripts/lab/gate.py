@@ -17,6 +17,10 @@ ALLOWED = {
     "scripts/lab/delivery_pty.py", "scripts/lab/gate.py",
     "scripts/lab/isolation.py", "scripts/lab/run.py",
 }
+CI_FIXES = {
+    "scripts/ci/declarative_scoped.py": "85ec1bc47d192cc12c4b863b91cc4019a554147c",
+    "scripts/ci/test_declarative_scoped.py": "56b24c412d50a2f4a62ef2c0ed1c1660fe4a56d7",
+}
 FULL_JOBS = {"Go tests (ubuntu-latest)", "Go tests (windows-latest)", "Go tests (macos-latest)",
              "License policy audit", "Go race detector", "Scoped app-store CLI acceptance",
              "Root confidential-delivery acceptance", "Encrypted vault with production 1 GiB KDF"}
@@ -76,15 +80,19 @@ def main():
         raise ValueError("base ancestry check failed")
     raw = git(["diff", "--name-status", "--no-renames", "-z", PRODUCT_BASE, source]).split("\0")
     entries = [(raw[i], raw[i + 1]) for i in range(0, len(raw) - 1, 2)]
-    if len(entries) != len(ALLOWED) or {p for status, p in entries} != ALLOWED or any(s != "A" for s, _ in entries):
-        raise ValueError("source diff outside exact additions allowlist")
+    expected = {path: "A" for path in ALLOWED} | {path: "M" for path in CI_FIXES}
+    if len(entries) != len(expected) or {path: status for status, path in entries} != expected:
+        raise ValueError("source diff outside exact lab and CI-fix allowlist")
+    for path, blob in CI_FIXES.items():
+        if git(["rev-parse", source + ":" + path]).strip() != blob:
+            raise ValueError("CI fix blob mismatch")
     tree = git(["ls-tree", "-r", "-z", source]).split("\0")
     modes = {}
     for entry in tree:
         if entry:
             meta, path = entry.split("\t", 1)
             modes[path] = meta.split()[0]
-    if any(modes.get(path) not in {"100644", "100755"} for path in ALLOWED):
+    if any(modes.get(path) not in {"100644", "100755"} for path in expected):
         raise ValueError("unexpected source object mode")
     historical = api(repo, f"actions/runs/{PRODUCT_FULL_RUN}")
     path = historical.get("path")

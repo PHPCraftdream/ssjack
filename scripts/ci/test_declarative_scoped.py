@@ -1,14 +1,44 @@
 """Selection regressions for isolated declarative acceptance."""
 import base64
+import importlib.util
+import io
 from pathlib import Path
 import re
+import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class DeclarativeScopedSelectionTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "PTY runner is Linux-only")
+    def test_pty_close_waits_for_child_exit_before_declaring_timeout(self):
+        path = ROOT / "scripts/ci/declarative_scoped.py"
+        spec = importlib.util.spec_from_file_location("declarative_scoped", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.stdout = io.BytesIO(b"")
+
+        def completed_wait(**kwargs):
+            proc.returncode = 0
+            return 0
+
+        proc.wait.side_effect = completed_wait
+        with mock.patch.object(module.pty, "openpty", return_value=(10, 11)), \
+                mock.patch.object(module.subprocess, "Popen", return_value=proc), \
+                mock.patch.object(module.os, "close"), \
+                mock.patch.object(module.select, "select", return_value=([10], [], [])), \
+                mock.patch.object(module.os, "read", side_effect=OSError("PTY closed")):
+            module.run_cli("fixture", ["declarative", "revoke"], [])
+        proc.wait.assert_called_once()
+        self.assertGreaterEqual(proc.wait.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(proc.wait.call_args.kwargs["timeout"], 60)
+        proc.kill.assert_not_called()
+
     def test_acceptance_requires_impacted_runtime_package(self):
         feature = (ROOT / ".github/workflows/feature.yml").read_text(encoding="utf-8")
         section = feature.split("  declarative-synthetic:\n", 1)[1].split("  full:\n", 1)[0]
