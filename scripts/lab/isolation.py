@@ -8,7 +8,11 @@ import sys
 
 CAPS = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7)
 
+CHECK = 0
+
 def require(value):
+    global CHECK
+    CHECK += 1
     if not value:
         raise RuntimeError("isolation check")
 
@@ -45,5 +49,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        os.write(2, b"standalone-lab: isolation failed\n")
+        os.write(2, f"standalone-lab: isolation failed check={CHECK}\n".encode("ascii"))
         raise SystemExit(1)

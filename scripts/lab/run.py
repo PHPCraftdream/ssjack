@@ -103,6 +103,9 @@ def main():
         state = json.loads(invoke(["docker", "inspect", container]).stdout)[0]["State"]
         if run.returncode != 0 or state.get("ExitCode") != 0 or run.stderr:
             reason = {"standalone-lab: isolation failed": "isolation", "ssjack-lab: synthetic lab failed": "conductor"}.get((run.stderr or "").strip(), "withheld")
+            isolation = re.fullmatch(r"standalone-lab: isolation failed check=([0-9]{1,3})", (run.stderr or "").strip())
+            if isolation:
+                reason = "isolation-check-" + isolation.group(1)
             code = state.get("ExitCode")
             if isinstance(code, int):
                 print(f"standalone-lab: application reason={reason} exit={code}", file=sys.stderr)
