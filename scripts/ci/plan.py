@@ -131,7 +131,9 @@ def main():
             formatted = subprocess.check_output(
                 ["gofmt", "-l"] + files[offset:offset + 40], text=True)
             if formatted:
-                raise RuntimeError("Go formatting differs:\n" + formatted)
+                diff = subprocess.check_output(
+                    ["gofmt", "-d"] + files[offset:offset + 40], text=True)
+                raise RuntimeError("Go formatting differs:\n" + formatted + diff)
         command = ["go", "test", "-mod=readonly", "-count=1", "-timeout=180s"]
         if os.environ.get("RUNNER_OS") == "Linux":
             command.append("-race")
