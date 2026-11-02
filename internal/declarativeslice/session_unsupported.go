@@ -54,7 +54,7 @@ func NewDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref)
 func NewTextDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref, io.Reader, bool) (*Session, error) {
 	return nil, ErrInvalid
 }
-func readTextSelection(io.Reader) ([]byte, error) { return nil, ErrInvalid }
+func readTextSelection(io.Reader) ([]byte, error)                   { return nil, ErrInvalid }
 func (*Session) IsDelivery() bool                                   { return false }
 func (*Session) Close() error                                       { return ErrInvalid }
 func (*Session) Describe() ([]declarativeschemas.Tool, error)       { return nil, ErrInvalid }

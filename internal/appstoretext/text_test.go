@@ -110,7 +110,7 @@ func TestOutputBoundsAndValues(t *testing.T) {
 func TestMappingLimitAndNoRescan(t *testing.T) {
 	m := make([]Mapping, MaxMappings+1)
 	for i := range m {
-		m[i] = Mapping{Reference: fixture(t, byte(i+1)), Value: []byte{byte(i+1)}}
+		m[i] = Mapping{Reference: fixture(t, byte(i+1)), Value: []byte{byte(i + 1)}}
 	}
 	if out, err := Replace([]byte("x"), m, false); err == nil || out != nil {
 		t.Fatal("mapping limit accepted")
