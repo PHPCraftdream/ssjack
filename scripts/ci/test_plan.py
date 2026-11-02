@@ -105,6 +105,23 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 plan.changes("missing", "HEAD")
 
+    def test_formatting_failure_retains_nonzero_diff_output(self):
+        selected = json.dumps({"packages": ["./internal/example"]})
+        diagnostic = "diff fixture.go.orig fixture.go\n-old\n+new\n"
+        result = subprocess.CompletedProcess(["gofmt", "-d"], 1, diagnostic)
+        with patch("sys.argv", ["plan.py", "test", "--output", "unused.json"]), \
+                patch.object(Path, "read_text", return_value=selected), \
+                patch.object(Path, "glob", return_value=[Path("fixture.go")]), \
+                patch.object(subprocess, "check_output", return_value="fixture.go\n"), \
+                patch.object(subprocess, "run", return_value=result) as run:
+            with self.assertRaises(RuntimeError) as failure:
+                plan.main()
+        self.assertIn("Go formatting differs:\nfixture.go\n", str(failure.exception))
+        self.assertIn(diagnostic, str(failure.exception))
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["gofmt", "-d", "fixture.go"])
+        self.assertFalse(run.call_args.kwargs["check"])
+
 
 if __name__ == "__main__":
     unittest.main()
