@@ -120,7 +120,7 @@ func TestMappingLimitAndNoRescan(t *testing.T) {
 	got, err := Replace([]byte("aa"), []Mapping{{Reference: a, Value: []byte("a")}}, true)
 	want := append(append([]byte{}, pa...), pa...)
 	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("replacement output was rescanned: %q, want two tokens, err %v", got, want, err)
+		t.Fatalf("replacement output was rescanned: %q, want %q, err %v", got, want, err)
 	}
 	pb := placeholder(t, b)
 	if out, err := Replace(pb, []Mapping{{Reference: a, Value: []byte("synthetic credential")}}, true); err != nil || !bytes.Equal(out, pb) {
