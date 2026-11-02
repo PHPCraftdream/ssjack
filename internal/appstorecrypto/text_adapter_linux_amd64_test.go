@@ -10,12 +10,11 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 func TestTextAdapterHydrateRefusals(t *testing.T) {
 	var runnerCalls int
-	runner := remote.StreamRunner(func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) {
+	runner := TextAdapterRunner(func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) {
 		runnerCalls++
 		return 0, nil
 	})

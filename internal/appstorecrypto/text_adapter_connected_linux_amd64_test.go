@@ -391,7 +391,7 @@ func connectedTextChild(t *testing.T) {
 	assertRejected := func(file, selected string) {
 		_, data := post(file, selected)
 		var envelope struct {
-			Error json.RawMessage `json:"error"`
+			Error  json.RawMessage `json:"error"`
 			Result struct {
 				IsError           bool `json:"isError"`
 				StructuredContent struct {

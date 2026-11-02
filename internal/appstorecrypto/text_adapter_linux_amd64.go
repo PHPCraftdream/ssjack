@@ -23,8 +23,9 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoretext"
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
+
+type TextAdapterRunner = func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error)
 
 type TextAdapter struct {
 	mu           sync.Mutex
@@ -35,13 +36,13 @@ type TextAdapter struct {
 	store        *appstoreentry.Store
 	directory    *appstorefile.Directory
 	anchor       *appstoreanchortls.Writer
-	runner       remote.StreamRunner
+	runner       TextAdapterRunner
 	binding      textBinding
 	used         bool
 	closed       bool
 }
 
-func NewTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner remote.StreamRunner) (*TextAdapter, error) {
+func NewTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextAdapter, error) {
 	if ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
 		return nil, ErrDelivery
 	}
@@ -304,7 +305,7 @@ func (c *TextAdapter) Hydrate(ctx context.Context, operationID, file string, sel
 	return deliverTextAdapterOutput(opctx, c.runner, grant.Profile, grant.Command, transformed, func() error { return c.check(opctx) })
 }
 
-func deliverTextAdapterOutput(ctx context.Context, runner remote.StreamRunner, profile, command string, transformed []byte, check func() error) DeliveryOutcome {
+func deliverTextAdapterOutput(ctx context.Context, runner TextAdapterRunner, profile, command string, transformed []byte, check func() error) DeliveryOutcome {
 	if ctx == nil || runner == nil || check == nil || ctx.Err() != nil || len(transformed) > 1<<20 || check() != nil {
 		return DeliveryOutcome{DeliveryWithheld}
 	}

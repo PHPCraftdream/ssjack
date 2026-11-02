@@ -7,8 +7,6 @@ import (
 	"errors"
 	"io"
 	"testing"
-
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 func TestTextAdapterOutputUncertain(t *testing.T) {
@@ -17,7 +15,7 @@ func TestTextAdapterOutputUncertain(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			calls, checks := 0, 0
-			runner := remote.StreamRunner(func(_ context.Context, _, _ string, input io.Reader, stdout, stderr io.Writer) (int, error) {
+			runner := TextAdapterRunner(func(_ context.Context, _, _ string, input io.Reader, stdout, stderr io.Writer) (int, error) {
 				calls++
 				if stdout != io.Discard || stderr != io.Discard {
 					t.Fatal("destination output was not suppressed")
@@ -57,7 +55,7 @@ func TestTextAdapterOutputWithheldBeforeEffects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
-	runner := remote.StreamRunner(func(_ context.Context, _, _ string, input io.Reader, _ io.Writer, _ io.Writer) (int, error) {
+	runner := TextAdapterRunner(func(_ context.Context, _, _ string, input io.Reader, _ io.Writer, _ io.Writer) (int, error) {
 		calls++
 		_, _ = io.Copy(io.Discard, input)
 		return 0, nil

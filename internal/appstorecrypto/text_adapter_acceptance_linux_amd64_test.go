@@ -11,7 +11,6 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/appstoretext"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 func TestTextAdapterEngineRunnerBoundary(t *testing.T) {
@@ -32,7 +31,7 @@ func TestTextAdapterEngineRunnerBoundary(t *testing.T) {
 	}
 	defer clear(transformed)
 	var received []byte
-	runner := remote.StreamRunner(func(_ context.Context, profile, command string, input io.Reader, stdout, stderr io.Writer) (int, error) {
+	runner := TextAdapterRunner(func(_ context.Context, profile, command string, input io.Reader, stdout, stderr io.Writer) (int, error) {
 		if profile != "approved" || command != "approved-command" || stdout != io.Discard || stderr != io.Discard {
 			t.Error("unexpected destination binding")
 		}
