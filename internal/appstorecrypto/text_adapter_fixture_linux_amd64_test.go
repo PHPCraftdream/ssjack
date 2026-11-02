@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
 )
@@ -139,6 +140,21 @@ func TextAdapterFixtureValues(t *testing.T, values [][]byte) (*Installation, dec
 		File:               "/approved/config",
 		Mode:               "hydrate-v1",
 		ExpiresAt:          time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
+	}
+	// Relinquish the installation lease before capability consumers reopen it.
+	if competing, openErr := appstoreentry.Open(path); openErr == nil {
+		_ = competing.Close()
+		t.Fatal("fixture store lease was not exclusive")
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := appstoreentry.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = reopened.Close(); err != nil {
+		t.Fatal(err)
 	}
 	return installation, grant, placeholders
 }
