@@ -56,8 +56,12 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/text_adapter_scoped.py", root_delivery)
         runner = (ROOT / "scripts/ci/text_adapter_scoped.py").read_text(encoding="utf-8")
         self.assertIn("os.geteuid() != 0", runner)
-        self.assertIn('"-test.run", "^TestTextAdapter(Connected|Bounds)$"', runner)
+        self.assertIn('"-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected))$"', runner)
         self.assertIn("TestTextAdapterConnected", runner)
+        self.assertIn("TestTextReverseConnected", runner)
+        self.assertIn("TestTextReverseMappingsConnected", runner)
+        self.assertIn("TestTextReverseLateConnected", runner)
+        self.assertIn("TestTextReverseExpiryConnected", runner)
         planner = (ROOT / "scripts/ci/plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./internal/declarativeslice" in plan["packages"]).lower()', planner)
 

@@ -96,6 +96,9 @@ func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args 
 	if len(args) > 0 && args[0] == "register" {
 		return registerTextAdapter(ctx, args[1:])
 	}
+	if len(args) > 0 && args[0] == "register-reverse" {
+		return registerReverseTextAdapter(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "revoke" {
 		return revokeTextAdapter(ctx, args[1:])
 	}
@@ -167,12 +170,22 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		return 1, errAppstore
 	}
 	defer installation.Close()
-	adapter, err := appstorecrypto.NewTextAdapter(ctx, installation, args[1], profile, digest, runner)
+	var adapter *appstorecrypto.TextAdapter
+	if grant.Mode == "reverse-copy-v1" {
+		adapter, err = appstorecrypto.NewReverseTextAdapter(ctx, installation, args[1], profile, digest, runner)
+	} else {
+		adapter, err = appstorecrypto.NewTextAdapter(ctx, installation, args[1], profile, digest, runner)
+	}
 	if err != nil {
 		return 1, errors.New("text-adapter grant validation failed")
 	}
 	defer adapter.Close()
-	server, err := apptransport.ListenWithTextAdapter(ctx, profile, runner, adapter)
+	var server *apptransport.Server
+	if grant.Mode == "reverse-copy-v1" {
+		server, err = apptransport.ListenWithReverseTextAdapter(ctx, profile, runner, adapter)
+	} else {
+		server, err = apptransport.ListenWithTextAdapter(ctx, profile, runner, adapter)
+	}
 	if err != nil {
 		return 1, err
 	}
@@ -190,7 +203,18 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	return 0, nil
 }
 
-func registerTextAdapter(_ context.Context, args []string) (int, error) {
+func registerTextAdapter(ctx context.Context, args []string) (int, error) {
+	return registerTextAdapterMode(ctx, args, "hydrate-v1")
+}
+
+func registerReverseTextAdapter(ctx context.Context, args []string) (int, error) {
+	return registerTextAdapterMode(ctx, args, "reverse-copy-v1")
+}
+
+func registerTextAdapterMode(_ context.Context, args []string, mode string) (int, error) {
+	if mode != "hydrate-v1" && mode != "reverse-copy-v1" {
+		return 1, errors.New("invalid text-adapter mode")
+	}
 	if os.Geteuid() != 0 {
 		return 1, errors.New("text-adapter registration requires root")
 	}
@@ -269,7 +293,7 @@ func registerTextAdapter(_ context.Context, args []string) (int, error) {
 		}
 		grant.References = append(grant.References, ref)
 	}
-	grant.Mode = "hydrate-v1"
+	grant.Mode = mode
 	if err = declarativeauthority.ValidateTextAdapterGrant(grant, time.Now()); err != nil {
 		return 1, errors.New("invalid grant metadata")
 	}
@@ -279,6 +303,10 @@ func registerTextAdapter(_ context.Context, args []string) (int, error) {
 	}
 	fmt.Fprintln(os.Stderr, string(metadata))
 	phrase := "APPROVE TEXT ADAPTER " + grant.ID
+	if mode == "reverse-copy-v1" {
+		phrase = "APPROVE REVERSE TEXT COPY " + grant.ID
+		fmt.Fprintln(os.Stderr, "Approve only the exact source command and file for a reference-only selected copy; raw fallback and live-file rewrites are not authorized.")
+	}
 	fmt.Fprintln(os.Stderr, "Independently confirm the credential digest, file, command, and references before repeating the approval phrase.")
 	if err = confirmVisibleValue("Type exact approval phrase", phrase); err != nil {
 		return 1, err

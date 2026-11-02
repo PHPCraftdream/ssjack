@@ -43,11 +43,19 @@ type TextAdapter struct {
 }
 
 func NewTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextAdapter, error) {
-	if ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
+	return newTextAdapter(ctx, installation, grantID, profile, credentialDigest, runner, "hydrate-v1")
+}
+
+func NewReverseTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextAdapter, error) {
+	return newTextAdapter(ctx, installation, grantID, profile, credentialDigest, runner, "reverse-copy-v1")
+}
+
+func newTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner, expectedMode string) (*TextAdapter, error) {
+	if (expectedMode != "hydrate-v1" && expectedMode != "reverse-copy-v1") || ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
 		return nil, ErrDelivery
 	}
 	g, err := declarativeauthority.LoadTextAdapter(grantID, os.Geteuid(), time.Now())
-	if err != nil || g.Profile != profile || g.CredentialSHA256 != credentialDigest || hex.EncodeToString(installation.encodedHash[:]) != g.InstallationSHA256 || installation.Header().StoreID() == ([16]byte{}) || len(g.References) == 0 {
+	if err != nil || g.Mode != expectedMode || g.Profile != profile || g.CredentialSHA256 != credentialDigest || hex.EncodeToString(installation.encodedHash[:]) != g.InstallationSHA256 || installation.Header().StoreID() == ([16]byte{}) || len(g.References) == 0 {
 		return nil, ErrDelivery
 	}
 	store, err := appstoreentry.Open(g.StorePath)
@@ -155,7 +163,7 @@ func textOperationDigest(operationID, file string, grant declarativeauthority.Te
 
 func (c *TextAdapter) Hydrate(ctx context.Context, operationID, file string, selected []byte) DeliveryOutcome {
 	withheld := DeliveryOutcome{DeliveryWithheld}
-	if c == nil || ctx == nil || ctx.Err() != nil || !canonicalID(operationID) || file != c.grant.File || len(selected) > 32<<10 || c.isClosed() {
+	if c == nil || ctx == nil || ctx.Err() != nil || c.grant.Mode != "hydrate-v1" || !canonicalID(operationID) || file != c.grant.File || len(selected) > 32<<10 || c.isClosed() {
 		return withheld
 	}
 	if !c.operationMu.TryLock() {

@@ -1,6 +1,7 @@
 package apptransport
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -47,9 +49,14 @@ type TextHydrator interface {
 	Hydrate(context.Context, string, string, []byte) appstorecrypto.DeliveryOutcome
 }
 
+type TextReverseCopier interface {
+	ReverseCopy(context.Context, string, string) appstorecrypto.ReverseTextOutcome
+}
+
 type Server struct {
 	bootstrap   Bootstrap
 	textAdapter TextHydrator
+	reverse     TextReverseCopier
 	http        *http.Server
 	streams     *streams
 	cancel      context.CancelFunc
@@ -58,17 +65,24 @@ type Server struct {
 }
 
 func Listen(parent context.Context, profile string, runner remote.StreamRunner) (*Server, error) {
-	return listen(parent, profile, runner, nil)
+	return listen(parent, profile, runner, nil, nil)
 }
 
 func ListenWithTextAdapter(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator) (*Server, error) {
 	if adapter == nil {
 		return nil, errors.New("invalid text adapter")
 	}
-	return listen(parent, profile, runner, adapter)
+	return listen(parent, profile, runner, adapter, nil)
 }
 
-func listen(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator) (*Server, error) {
+func ListenWithReverseTextAdapter(parent context.Context, profile string, runner remote.StreamRunner, adapter TextReverseCopier) (*Server, error) {
+	if adapter == nil {
+		return nil, errors.New("invalid reverse text adapter")
+	}
+	return listen(parent, profile, runner, nil, adapter)
+}
+
+func listen(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator, reverse TextReverseCopier) (*Server, error) {
 	if parent.Err() != nil || profile == "" || len(profile) > 64 || runner == nil {
 		return nil, errors.New("invalid application transport scope")
 	}
@@ -85,7 +99,7 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{streams: newStreams(ctx, profile, runner), textAdapter: adapter, cancel: cancel, done: make(chan struct{})}
+	s := &Server{streams: newStreams(ctx, profile, runner), textAdapter: adapter, reverse: reverse, cancel: cancel, done: make(chan struct{})}
 	s.bootstrap = Bootstrap{Endpoint: "https://" + listener.Addr().String() + "/mcp", Token: token, Pin: pin}
 	api := s.mcpServer(profile)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return api }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
@@ -112,6 +126,10 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 256*1024)
+			if s.reverse != nil {
+				serveBoundedReverseResponse(w, r, handler)
+				return
+			}
 			handler.ServeHTTP(w, r)
 		}),
 	}
@@ -147,7 +165,9 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 	mcp.AddTool(api, &mcp.Tool{Name: "transport_info", Description: "Read the scoped transport protocol and capabilities."},
 		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, InfoOutput, error) {
 			var capabilities []string
-			if s.textAdapter == nil {
+			if s.reverse != nil {
+				capabilities = []string{"text_reverse_copy"}
+			} else if s.textAdapter == nil {
 				capabilities = []string{"exec", "stdin", "binary", "backpressure", "cancel"}
 			} else {
 				capabilities = []string{"text_hydrate"}
@@ -155,7 +175,7 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 			return nil, InfoOutput{Protocol: Protocol, Profile: profile, Commit: buildinfo.Revision(), ChunkSize: ChunkSize,
 				Capabilities: capabilities, Cancellation: "connection-only"}, nil
 		})
-	if s.textAdapter == nil {
+	if s.textAdapter == nil && s.reverse == nil {
 		mcp.AddTool(api, &mcp.Tool{Name: "transport_start", Description: "Start a command on the one delegated SSH profile."},
 			func(_ context.Context, _ *mcp.CallToolRequest, input StartInput) (*mcp.CallToolResult, StartOutput, error) {
 				out, err := s.streams.start(input)
@@ -177,6 +197,25 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 				return nil, out, err
 			})
 	}
+	if s.reverse != nil {
+		mcp.AddTool(api, &mcp.Tool{Name: "text_reverse_copy", Description: "Read one approved source into a reference-only selected copy; never return raw source."},
+			func(ctx context.Context, _ *mcp.CallToolRequest, input TextReverseCopyInput) (*mcp.CallToolResult, TextReverseCopyOutput, error) {
+				if input.OperationID == "" || len(input.OperationID) > 128 || input.File == "" || len(input.File) > 4096 || input.Mode != "reverse-copy-v1" {
+					return nil, TextReverseCopyOutput{}, errors.New("invalid reverse text request")
+				}
+				outcome := s.reverse.ReverseCopy(ctx, input.OperationID, input.File)
+				defer clear(outcome.Text)
+				output := TextReverseCopyOutput{Status: "unknown"}
+				if outcome.Status == appstorecrypto.DeliveryWithheld {
+					output.Status = "withheld"
+				} else if outcome.Status == appstorecrypto.DeliveryReceived && ctx.Err() == nil && len(outcome.Text) <= 1<<20 && utf8.Valid(outcome.Text) && bytes.IndexByte(outcome.Text, 0) < 0 {
+					text := string(outcome.Text)
+					output.Status = "received"
+					output.Text = &text
+				}
+				return nil, output, nil
+			})
+	}
 	if s.textAdapter != nil {
 		mcp.AddTool(api, &mcp.Tool{Name: "text_hydrate", Description: "Hydrate one explicitly granted text input; only a bounded status is returned."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, input TextHydrateInput) (*mcp.CallToolResult, TextHydrateOutput, error) {
@@ -195,6 +234,17 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 			})
 	}
 	return api
+}
+
+type TextReverseCopyInput struct {
+	OperationID string `json:"operation_id"`
+	File        string `json:"file"`
+	Mode        string `json:"mode"`
+}
+
+type TextReverseCopyOutput struct {
+	Status string  `json:"status"`
+	Text   *string `json:"text,omitempty"`
 }
 
 type TextHydrateInput struct {

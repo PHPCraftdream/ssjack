@@ -27,11 +27,11 @@ def main() -> int:
         binary.chmod(0o755)
         env = os.environ.copy()
         env["SSJACK_TEXT_ADAPTER_CI_ACCEPTANCE"] = "1"
-        acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestTextAdapter(Connected|Bounds)$", "-test.timeout=240s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+        acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected))$", "-test.timeout=480s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=540)
         sys.stdout.write(acceptance.stdout)
         if acceptance.returncode != 0:
             return acceptance.returncode
-        for name in ("TestTextAdapterConnected", "TestTextAdapterBounds"):
+        for name in ("TestTextAdapterConnected", "TestTextAdapterBounds", "TestTextReverseConnected", "TestTextReverseMappingsConnected", "TestTextReverseLateConnected", "TestTextReverseExpiryConnected"):
             if re.search(rf"(?m)^--- SKIP: {re.escape(name)}(?:\s|$)", acceptance.stdout):
                 raise SystemExit(f"{name} was skipped")
             if not re.search(rf"(?m)^--- PASS: {re.escape(name)}(?:\s|$)", acceptance.stdout):

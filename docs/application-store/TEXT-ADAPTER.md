@@ -32,7 +32,7 @@ One selected file per capability, at most 16 mappings in one immutable snapshot,
 
 Matching follows the accepted engine: leftmost-longest, nonoverlapping matches; output is never rescanned. Equal references or equal secret values are rejected even during hydration. Empty values and values containing the literal `$ssjack` marker are rejected. JSON quoting, escapes, URL encoding, and derived representations are not applied automatically; provide a consumer-compatible exact value and template or the selected text may be incompatible. Only configured literal matches are covered.
 
-This adapter accepts only hydrate-v1. Reverse modes are rejected before destination effects; the existing synthetic reverse mode is unchanged. Returned secret-bearing text must not later be routed through generic transport_read: task259 needs a private trusted read path and must never rewrite live files as a backup side effect.
+The forward context accepts only hydrate-v1. A separately root-approved reverse-copy-v1 context is documented in [TEXT-REVERSE-COPY.md](TEXT-REVERSE-COPY.md); forward and synthetic grants never authorize its private reads. Task259 owns downstream backup/restore clients, and task260 owns paired integration.
 
 ## Verification boundary
 

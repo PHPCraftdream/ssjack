@@ -68,7 +68,7 @@ func validateTextAdapter(g TextAdapterGrant, active bool, now time.Time) error {
 	if g.Command == "" || len(g.Command) > 8192 || strings.IndexByte(g.Command, 0) >= 0 {
 		return ErrAuthority
 	}
-	if g.File == "" || len(g.File) > 4096 || !filepath.IsAbs(g.File) || filepath.Clean(g.File) != g.File || g.Mode != "hydrate-v1" {
+	if g.File == "" || len(g.File) > 4096 || !filepath.IsAbs(g.File) || filepath.Clean(g.File) != g.File || g.Mode != "hydrate-v1" && g.Mode != "reverse-copy-v1" {
 		return ErrAuthority
 	}
 
