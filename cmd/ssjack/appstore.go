@@ -8,7 +8,7 @@ import (
 
 func runAppstore(ctx context.Context, args []string) (int, error) {
 	if len(args) == 0 {
-		return 1, errors.New("usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock HARNESS [ARGS...]")
+		return 1, errors.New("usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]")
 	}
 	switch args[0] {
 	case "setup":
@@ -28,10 +28,10 @@ func runAppstore(ctx context.Context, args []string) (int, error) {
 		return runAppstoreInspect(ctx, args[1])
 	case "unlock":
 		if len(args) < 2 {
-			return 1, errors.New("usage: ssjack appstore unlock HARNESS [ARGS...]")
+			return 1, errors.New("usage: ssjack appstore unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]")
 		}
 		return runAppstoreUnlock(ctx, args[1:])
 	default:
-		return 1, fmt.Errorf("usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock HARNESS [ARGS...]")
+		return 1, fmt.Errorf("usage: ssjack appstore setup DIR | put DIR | inspect DIR | unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]")
 	}
 }

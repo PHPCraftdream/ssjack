@@ -73,6 +73,10 @@ type deliveryCLIRefusal struct{ Class, Code string }
 func (e *deliveryCLIRefusal) Error() string { return "delivery CLI authority refusal" }
 
 func (f *deliveryFixture) tryDeliveryCLIAs(t *testing.T, uid int, answers []deliveryAnswer, args ...string) (string, error) {
+	return f.tryDeliveryCLIAsWithText(t, uid, answers, nil, args...)
+}
+
+func (f *deliveryFixture) tryDeliveryCLIAsWithText(t *testing.T, uid int, answers []deliveryAnswer, text []byte, args ...string) (string, error) {
 	t.Helper()
 	payloadAnswers := make([]struct {
 		Prompt string `json:"prompt"`
@@ -100,8 +104,31 @@ func (f *deliveryFixture) tryDeliveryCLIAs(t *testing.T, uid int, answers []deli
 		return "", errors.New("delivery workspace ownership failed")
 	}
 	cmd := exec.Command("python3", append([]string{helper, f.cli}, args...)...)
+	var readFD *os.File
+	var writeFD *os.File
+	if text != nil {
+		if len(text) > 4096 {
+			return "", errors.New("text selection exceeds bounded fixture limit")
+		}
+		readFD, writeFD, err = os.Pipe()
+		if err != nil {
+			return "", errors.New("text selection pipe unavailable")
+		}
+		if _, err = writeFD.Write(text); err != nil {
+			_ = readFD.Close()
+			_ = writeFD.Close()
+			return "", errors.New("text selection pipe write failed")
+		}
+		_ = writeFD.Close()
+		defer readFD.Close()
+	}
 	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "SSJACK_DELIVERY_UID="+strconv.Itoa(uid))
+	if text != nil {
+		cmd.ExtraFiles = []*os.File{readFD}
+		cmd.Env = append(cmd.Env, "SSJACK_DELIVERY_TEXT_FD=3")
+		readFD = nil
+	}
 	cmd.Stdin = bytes.NewReader(payload)
 	out, err := cmd.Output()
 	if err != nil {
@@ -152,6 +179,15 @@ func (f *deliveryFixture) requireDeliveryRefusal(t *testing.T, err error, code s
 	if !errors.As(err, &refusal) || refusal.Class != "authority" || refusal.Code != code {
 		t.Fatalf("expected typed authority refusal %q", code)
 	}
+}
+
+func (f *deliveryFixture) runDeliveryCLIAsWithText(t *testing.T, uid int, answers []deliveryAnswer, text []byte, args ...string) string {
+	t.Helper()
+	out, err := f.tryDeliveryCLIAsWithText(t, uid, answers, text, args...)
+	if err != nil {
+		t.Fatalf("delivery CLI helper failed: %v", err)
+	}
+	return out
 }
 
 func (f *deliveryFixture) runDeliveryCLIAs(t *testing.T, uid int, answers []deliveryAnswer, args ...string) string {

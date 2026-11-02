@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchorreply"
@@ -101,7 +103,44 @@ func runAppstoreInspect(ctx context.Context, dir string) (int, error) {
 	return 0, nil
 }
 
+func parseTextUnlock(command []string) ([]string, int, bool, bool, error) {
+	if len(command) == 0 || command[0] != "--text-mode" {
+		return command, -1, false, false, nil
+	}
+	if len(command) < 5 || (command[1] != "hydrate" && command[1] != "reverse") || command[2] != "--text-fd" {
+		return nil, -1, false, true, errors.New("usage: ssjack appstore unlock --text-mode hydrate|reverse --text-fd FD HARNESS [ARGS...]")
+	}
+	fd, err := strconv.Atoi(command[3])
+	if err != nil || fd < 3 || fd > 1024 || command[4] == "" {
+		return nil, -1, false, true, errors.New("invalid trusted text descriptor or missing harness")
+	}
+	return command[4:], fd, command[1] == "reverse", true, nil
+}
+
 func runAppstoreUnlock(ctx context.Context, command []string) (int, error) {
+	var selection io.Reader
+	var selectionFile *os.File
+	var reverse bool
+	var textMode bool
+	var fd int
+	var err error
+	command, fd, reverse, textMode, err = parseTextUnlock(command)
+	if err != nil {
+		return 1, err
+	}
+	if textMode {
+		selectionFile = os.NewFile(uintptr(fd), "trusted-text-selection")
+		if selectionFile == nil {
+			return 1, errors.New("trusted text descriptor unavailable")
+		}
+		selection = selectionFile
+	}
+	if selectionFile != nil {
+		defer selectionFile.Close()
+	}
+	if len(command) == 0 {
+		return 1, errors.New("usage: ssjack appstore unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]")
+	}
 	if err := rejectAppstoreBrokerEnv(); err != nil {
 		return 1, err
 	}
@@ -175,10 +214,21 @@ func runAppstoreUnlock(ctx context.Context, command []string) (int, error) {
 		installation.Close()
 		return 1, errAppstore
 	}
-	session, err := declarativeslice.NewDelivery(ctx, installation, parsed)
+	var session *declarativeslice.Session
+	if selection != nil {
+		session, err = declarativeslice.NewTextDelivery(ctx, installation, parsed, selection, reverse)
+		_ = selectionFile.Close()
+		selectionFile = nil
+	} else {
+		session, err = declarativeslice.NewDelivery(ctx, installation, parsed)
+	}
 	if err != nil {
 		installation.Close()
 		return 1, err
+	}
+	if selectionFile != nil {
+		_ = selectionFile.Close()
+		selectionFile = nil
 	}
 	defer installation.Close()
 	defer session.Close()

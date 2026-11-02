@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -27,14 +28,16 @@ const DeliveryProtocol = "ssjack-synthetic-confidential-delivery-1"
 var ErrInvalid = errors.New("invalid declarative slice request")
 
 type Session struct {
-	mu         sync.Mutex
-	id         string
-	runner     *immutableexec.Runner
-	grant      declarativeauthority.Grant
-	capability *appstorecrypto.DeliveryCapability
-	plans      map[string]*planEntry
-	requests   map[string]string
-	closed     bool
+	mu          sync.Mutex
+	id          string
+	runner      *immutableexec.Runner
+	grant       declarativeauthority.Grant
+	capability  *appstorecrypto.DeliveryCapability
+	textInput   []byte
+	textReverse bool
+	plans       map[string]*planEntry
+	requests    map[string]string
+	closed      bool
 }
 type planEntry struct {
 	desired                                 []byte
@@ -107,6 +110,37 @@ func New() (*Session, error) {
 	return newSession(g, nil)
 }
 func NewDelivery(ctx context.Context, installation *appstorecrypto.Installation, ref appstoreref.Ref) (*Session, error) {
+	return newDelivery(ctx, installation, ref, nil, false)
+}
+
+// NewTextDelivery retains a bounded selection from a trusted application-owned
+// reader. The selection is never part of a model request or tool result.
+func NewTextDelivery(ctx context.Context, installation *appstorecrypto.Installation, ref appstoreref.Ref, source io.Reader, reverse bool) (*Session, error) {
+	if ctx == nil || source == nil || ctx.Err() != nil {
+		return nil, ErrInvalid
+	}
+	selected, err := readTextSelection(source)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	s, err := newDelivery(ctx, installation, ref, selected, reverse)
+	clear(selected)
+	return s, err
+}
+
+func readTextSelection(source io.Reader) ([]byte, error) {
+	if source == nil {
+		return nil, ErrInvalid
+	}
+	selected, err := io.ReadAll(io.LimitReader(source, maxDocument+1))
+	if err != nil || len(selected) == 0 || len(selected) > maxDocument {
+		clear(selected)
+		return nil, ErrInvalid
+	}
+	return selected, nil
+}
+
+func newDelivery(ctx context.Context, installation *appstorecrypto.Installation, ref appstoreref.Ref, selected []byte, reverse bool) (*Session, error) {
 	if ctx == nil || !ref.Valid() || os.Geteuid() == 0 {
 		return nil, ErrInvalid
 	}
@@ -129,6 +163,10 @@ func NewDelivery(ctx context.Context, installation *appstorecrypto.Installation,
 	if err != nil {
 		_ = capability.Close()
 		return nil, err
+	}
+	if len(selected) != 0 {
+		s.textInput = append([]byte(nil), selected...)
+		s.textReverse = reverse
 	}
 	return s, nil
 }
@@ -189,6 +227,8 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	clear(s.textInput)
+	s.textInput = nil
 	var e error
 	if s.runner != nil {
 		e = s.runner.Close()
@@ -303,6 +343,7 @@ func (s *Session) Plan(ctx context.Context, input []byte) (PlanResult, error) {
 	}
 	sum := sha256.Sum256(canon)
 	digest := hex.EncodeToString(sum[:])
+	baseDigest := digest
 	p := &planEntry{desired: desired, revision: revision, digest: digest, resource: in.ResourceID, expires: expiry}
 	class, summary := "metadata", "cache.update"
 	if s.capability != nil {
@@ -310,7 +351,22 @@ func (s *Session) Plan(ctx context.Context, input []byte) (PlanResult, error) {
 		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 			deadline = d
 		}
-		p.deliveryPlan = s.capability.Prepare(ctx, appstorecrypto.OperationBinding{SessionID: s.id, PlanID: id, Digest: digest, ObservedRevision: revision, Policy: s.grant.PolicyRevision, Deadline: deadline})
+		operation := appstorecrypto.OperationBinding{SessionID: s.id, PlanID: id, Digest: digest, ObservedRevision: revision, Policy: s.grant.PolicyRevision, Deadline: deadline}
+		if len(s.textInput) > 0 {
+			digest, err = s.capability.BindTextOperation(baseDigest, s.textInput, s.textReverse)
+			if err != nil {
+				return out, ErrInvalid
+			}
+			p.digest = digest
+			operation.Digest = digest
+			if s.textReverse {
+				p.deliveryPlan = s.capability.PrepareReverseCopy(ctx, operation, baseDigest, s.textInput)
+			} else {
+				p.deliveryPlan = s.capability.PrepareHydration(ctx, operation, baseDigest, s.textInput)
+			}
+		} else {
+			p.deliveryPlan = s.capability.Prepare(ctx, operation)
+		}
 		if p.deliveryPlan == nil {
 			return out, ErrInvalid
 		}

@@ -39,6 +39,21 @@ type pinnedSnapshot struct{ state *pinnedSnapshotState }
 func (m *Master) deliverCurrent(ctx context.Context, directory *appstorefile.Directory, anchor interface {
 	Read(context.Context) (appstoreanchorreply.Reply, error)
 }, reference appstoreref.Ref, consumer *appstoresink.Consumer, checks ...func() error) (appstoresink.Result, error) {
+	return m.deliverSelected(ctx, directory, anchor, reference, consumer, nil, checks...)
+}
+
+func (m *Master) deliverCurrentText(ctx context.Context, directory *appstorefile.Directory, anchor interface {
+	Read(context.Context) (appstoreanchorreply.Reply, error)
+}, reference appstoreref.Ref, consumer *appstoresink.Consumer, selection *textSelection, checks ...func() error) (appstoresink.Result, error) {
+	if selection == nil || len(selection.input) > 32<<10 {
+		return appstoresink.Result{}, ErrDelivery
+	}
+	return m.deliverSelected(ctx, directory, anchor, reference, consumer, selection, checks...)
+}
+
+func (m *Master) deliverSelected(ctx context.Context, directory *appstorefile.Directory, anchor interface {
+	Read(context.Context) (appstoreanchorreply.Reply, error)
+}, reference appstoreref.Ref, consumer *appstoresink.Consumer, selection *textSelection, checks ...func() error) (appstoresink.Result, error) {
 	if ctx == nil || directory == nil || anchor == nil || consumer == nil {
 		return appstoresink.Result{}, ErrSnapshot
 	}
@@ -134,6 +149,9 @@ func (m *Master) deliverCurrent(ctx context.Context, directory *appstorefile.Dir
 	freshPointer, err := tx.ReadPointer()
 	if err != nil || freshPointer != wanted {
 		return appstoresink.Result{}, ErrWriterPointerLag
+	}
+	if selection != nil {
+		return m.deliverTextSelection(ctx, spool, entry, reference, consumer, encoded, selection, check)
 	}
 	session, err := consumer.Begin(ctx, reference, encoded, entry.Length())
 	if err != nil {
@@ -326,6 +344,11 @@ type deliveryPlanState struct {
 	owner   *DeliveryCapability
 	binding OperationBinding
 	used    bool
+	text    *textSelection
+}
+type textSelection struct {
+	input   []byte
+	reverse bool
 }
 type OperationBinding struct {
 	SessionID, PlanID, Digest string
@@ -334,19 +357,21 @@ type OperationBinding struct {
 	Deadline                  time.Time
 }
 type DeliveryCapability struct {
-	mu              sync.Mutex
-	operationMu     sync.Mutex
-	operationCancel context.CancelFunc
-	boundSession    string
-	tuples          map[string]bool
-	installation    *Installation
-	ref             appstoreref.Ref
-	grant           declarativeauthority.DeliveryGrant
-	store           *appstoreentry.Store
-	directory       *appstorefile.Directory
-	anchor          *appstoreanchortls.Writer
-	used            map[string]bool
-	closed          bool
+	mu                sync.Mutex
+	operationMu       sync.Mutex
+	operationCancel   context.CancelFunc
+	boundSession      string
+	tuples            map[string]bool
+	installation      *Installation
+	ref               appstoreref.Ref
+	grant             declarativeauthority.DeliveryGrant
+	store             *appstoreentry.Store
+	directory         *appstorefile.Directory
+	anchor            *appstoreanchortls.Writer
+	used              map[string]bool
+	pendingSelections map[*deliveryPlanState]struct{}
+	textBinding       textBinding
+	closed            bool
 }
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -406,20 +431,46 @@ func (c *DeliveryCapability) Check(ctx context.Context) error {
 	return ctx.Err()
 }
 func (c *DeliveryCapability) Prepare(ctx context.Context, operation OperationBinding) *DeliveryPlan {
+	return c.prepare(ctx, operation, nil)
+}
+
+func (c *DeliveryCapability) prepare(ctx context.Context, operation OperationBinding, text *textSelection) *DeliveryPlan {
+	if text != nil && !digestPattern.MatchString(operation.Digest) {
+		return nil
+	}
+	if text != nil {
+		if len(text.input) > 32<<10 {
+			return nil
+		}
+		text = &textSelection{input: append([]byte(nil), text.input...), reverse: text.reverse}
+	}
 	if c == nil || ctx == nil || !canonicalID(operation.SessionID) || !canonicalID(operation.PlanID) || !digestPattern.MatchString(operation.Digest) || len(operation.ObservedRevision) == 0 || len(operation.ObservedRevision) > 128 || operation.Policy != declarativeauthority.DeliveryPolicyRevision || operation.Deadline.IsZero() || operation.Deadline.Location() == nil {
+		if text != nil {
+			clear(text.input)
+		}
 		return nil
 	}
 	if !operation.Deadline.After(time.Now()) || operation.Deadline.After(time.Now().Add(time.Minute)) || c.Check(ctx) != nil {
+		if text != nil {
+			clear(text.input)
+		}
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || (c.boundSession != "" && c.boundSession != operation.SessionID) || len(c.tuples) >= 128 || c.tuples[operation.PlanID] {
+	if c.closed || (c.boundSession != "" && c.boundSession != operation.SessionID) || len(c.tuples) >= 128 || len(c.pendingSelections) >= 128 || c.tuples[operation.PlanID] {
+		if text != nil {
+			clear(text.input)
+		}
 		return nil
 	}
 	c.boundSession = operation.SessionID
 	c.tuples[operation.PlanID] = true
-	return &DeliveryPlan{state: &deliveryPlanState{owner: c, binding: operation}}
+	state := &deliveryPlanState{owner: c, binding: operation, text: text}
+	if text != nil {
+		c.pendingSelections[state] = struct{}{}
+	}
+	return &DeliveryPlan{state: state}
 }
 func (c *DeliveryCapability) Deliver(ctx context.Context, plan *DeliveryPlan, operationID string, lease *declarativeauthority.TargetLease) DeliveryOutcome {
 	if c == nil || ctx == nil || plan == nil || plan.state == nil || lease == nil || !canonicalID(operationID) {
@@ -435,16 +486,32 @@ func (c *DeliveryCapability) Deliver(ctx context.Context, plan *DeliveryPlan, op
 	}
 	defer c.operationMu.Unlock()
 	if !operation.Deadline.After(time.Now()) || operation.Deadline.After(time.Now().Add(time.Minute)) {
+		c.mu.Lock()
+		if state.text != nil {
+			clear(state.text.input)
+			delete(c.pendingSelections, state)
+			state.used = true
+		}
+		c.mu.Unlock()
 		return DeliveryOutcome{DeliveryWithheld}
 	}
 	deadlineCtx, cancel := context.WithDeadline(ctx, operation.Deadline)
 	defer cancel()
 	c.mu.Lock()
 	if c.closed || state.used || c.used[operationID] || len(c.used) >= 128 || c.boundSession != operation.SessionID {
+		if state.text != nil {
+			clear(state.text.input)
+			delete(c.pendingSelections, state)
+			state.used = true
+		}
 		c.mu.Unlock()
 		return DeliveryOutcome{DeliveryWithheld}
 	}
 	state.used = true
+	if state.text != nil {
+		defer clear(state.text.input)
+		delete(c.pendingSelections, state)
+	}
 	c.used[operationID] = true
 	c.operationCancel = cancel
 	c.mu.Unlock()
@@ -488,9 +555,16 @@ func (c *DeliveryCapability) Deliver(ctx context.Context, plan *DeliveryPlan, op
 		return DeliveryOutcome{DeliveryWithheld}
 	}
 	defer consumer.Close()
-	result, err := c.installation.master.deliverCurrent(ctx, c.directory, c.anchor, c.ref, consumer, func() error { return c.Check(ctx) }, func() error {
-		return lease.CheckReference(ctx, operation.ObservedRevision, operationID, operation.Digest, c.grant.Ref)
-	})
+	deliver := func() (appstoresink.Result, error) {
+		checks := []func() error{func() error { return c.Check(ctx) }, func() error {
+			return lease.CheckReference(ctx, operation.ObservedRevision, operationID, operation.Digest, c.grant.Ref)
+		}}
+		if state.text != nil {
+			return c.installation.master.deliverCurrentText(ctx, c.directory, c.anchor, c.ref, consumer, state.text, checks...)
+		}
+		return c.installation.master.deliverCurrent(ctx, c.directory, c.anchor, c.ref, consumer, checks...)
+	}
+	result, err := deliver()
 	if err == nil && result.Complete {
 		return DeliveryOutcome{DeliveryReceived}
 	}
@@ -520,6 +594,8 @@ func (c *DeliveryCapability) Close() error {
 		return nil
 	}
 	c.closed = true
+	clear(c.textBinding.key[:])
+	c.textBinding.initialized = false
 	if c.operationCancel != nil {
 		c.operationCancel()
 	}
@@ -528,6 +604,13 @@ func (c *DeliveryCapability) Close() error {
 	defer c.operationMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for state := range c.pendingSelections {
+		if state != nil && state.text != nil {
+			clear(state.text.input)
+			state.text = nil
+		}
+	}
+	c.pendingSelections = nil
 	if c.anchor != nil {
 		_ = c.anchor.Close()
 	}
@@ -595,7 +678,13 @@ func NewDeliveryCapability(ctx context.Context, installation *Installation, ref 
 		_ = directory.Close()
 		return fail()
 	}
-	c := &DeliveryCapability{installation: installation, ref: ref, grant: g, store: store, directory: directory, anchor: anchor, used: make(map[string]bool), tuples: make(map[string]bool)}
+	binding, err := newTextBinding()
+	if err != nil {
+		_ = anchor.Close()
+		_ = directory.Close()
+		return fail()
+	}
+	c := &DeliveryCapability{installation: installation, ref: ref, grant: g, store: store, directory: directory, anchor: anchor, textBinding: binding, used: make(map[string]bool), tuples: make(map[string]bool), pendingSelections: make(map[*deliveryPlanState]struct{})}
 	if err = c.Check(ctx); err != nil {
 		_ = c.Close()
 		return nil, ErrDelivery

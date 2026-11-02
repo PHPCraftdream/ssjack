@@ -49,6 +49,9 @@ def main() -> int:
             if os.geteuid() == 0:
                 os.setgid(uid)
                 os.setuid(uid)
+            text_fd = int(os.environ.get("SSJACK_DELIVERY_TEXT_FD", "-1"))
+            if text_fd >= 0:
+                os.set_inheritable(text_fd, True)
             os.execv(sys.argv[1], sys.argv[1:])
         except BaseException:
             os._exit(127)

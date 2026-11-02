@@ -5,6 +5,8 @@ package declarativeslice
 import (
 	"context"
 	"errors"
+	"io"
+
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeschemas"
@@ -49,6 +51,10 @@ func New() (*Session, error) { return nil, ErrInvalid }
 func NewDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref) (*Session, error) {
 	return nil, ErrInvalid
 }
+func NewTextDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref, io.Reader, bool) (*Session, error) {
+	return nil, ErrInvalid
+}
+func readTextSelection(io.Reader) ([]byte, error) { return nil, ErrInvalid }
 func (*Session) IsDelivery() bool                                   { return false }
 func (*Session) Close() error                                       { return ErrInvalid }
 func (*Session) Describe() ([]declarativeschemas.Tool, error)       { return nil, ErrInvalid }

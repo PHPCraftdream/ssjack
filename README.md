@@ -122,6 +122,12 @@ The current full MCP `remote_*` tools execute commands with the configured remot
 
 A Docker/Incus administrator socket or sudo rule, or an alternate SSH channel available to trusted code, may bypass a future restricted API. A future declarative MCP would be a separate authorization and dispatch surface; it is not a relabeling or restriction of `app_*` or current `remote_*`. Until then, enforce least privilege in the operator-controlled host, guest and backend configuration. Closing SSH does not necessarily terminate detached processes; output and metadata can contain sensitive information. See [scoped application transport](docs/APP-TRANSPORT.md).
 
+## Trusted application text handoff
+
+CLI syntax: `ssjack appstore unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]`. In text mode, a trusted caller passes one inherited descriptor; EOF ends the read, which may block until the writer closes it. An arbitrary `io.Reader` cannot be interrupted by cancellation. The nonempty selection is 1 byte–32 KiB and identifies one exact reference and owner, not 128 mappings. Secret and output are each limited to 1 MiB. The inherited trusted pipe carries plaintext; command arguments, environment, model context, and tool requests/results carry metadata only, never plaintext. On a selected copy, `hydrate` replaces the exact reference with its value; `reverse` replaces the matching value with its placeholder. This does not rewrite live text. Existing finite authorization and fixed approved sink remain required; raw unlock is unchanged.
+
+
+
 ## Verification and documentation
 
 Project validation builds and tests run in GitHub CI, not automatically on a contributor's machine. Local work normally needs only formatting; source installation is an explicit operator choice, not permission for an assistant to run local builds without approval. The matrix covers Linux/macOS/Windows, Linux race detection, native CLI/installer fixtures, a dedicated production-1-GiB encrypted-vault integration path, command/help regression tests, and synthetic SSH servers. Writing tests is not evidence of a passing run. UI tests require a compatible authoring environment and are not replaced by fake checks.

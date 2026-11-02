@@ -130,6 +130,18 @@ func TestDeliveryScopedAcceptance(t *testing.T) {
 	if len(after)-len(before) != 96 {
 		t.Fatalf("expected two 48-byte delivery markers, got delta %d", len(after)-len(before))
 	}
+	textBefore := len(after)
+	selection := []byte(ref)
+	textOut := f.runDeliveryCLIAsWithText(t, 65534, []deliveryAnswer{{"Exact canonical delivery reference: ", []byte(ref)}, {"Application-store master secret: ", []byte(f.anchor.master)}}, selection, "appstore", "unlock", "--text-mode", "hydrate", "--text-fd", "3", filepath.Join(artifacts, "harness"), ref, "golden")
+	clear(selection)
+	if !strings.Contains(textOut, "DELIVERY_ACCEPTANCE_OK") {
+		t.Fatal("text hydration did not reach the admitted fixed consumer")
+	}
+	textAfter, err := os.ReadFile(marker)
+	if err != nil || len(textAfter)-textBefore != 96 {
+		t.Fatal("text hydration did not produce the expected two receipts")
+	}
+	f.deliveryTextReverseAcceptance(t, ref, fields, artifacts)
 	f.deliveryForeignAcceptance(t, ref, artifacts)
 	f.deliveryConcurrentAcceptance(t, ref, fields, artifacts)
 	f.deliveryNegativeAcceptance(t, ref, fields, artifacts)

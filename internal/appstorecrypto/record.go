@@ -40,6 +40,30 @@ func snapshotEOF(ctx context.Context, f *os.File) error {
 }
 
 func (m *Master) streamPinnedObject(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink *appstoresink.Delivery, checks ...func() error) (appstoresink.Result, error) {
+	if sink == nil {
+		return appstoresink.Result{}, ErrSnapshot
+	}
+	return m.streamPinnedObjectTo(ctx, pinned, entry, sink, checks...)
+}
+
+type writerBuffer struct {
+	data *[]byte
+}
+
+func (w writerBuffer) Write(p []byte) (int, error) {
+	*w.data = append(*w.data, p...)
+	return len(p), nil
+}
+
+func (m *Master) streamPinnedObjectTo(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink io.Writer, checks ...func() error) (appstoresink.Result, error) {
+	var result appstoresink.Result
+	if sink == nil {
+		return result, ErrSnapshot
+	}
+	return m.streamPinnedObjectToChecked(ctx, pinned, entry, sink, checks...)
+}
+
+func (m *Master) streamPinnedObjectToChecked(ctx context.Context, pinned *pinnedSnapshot, entry appstorecatalog.Entry, sink io.Writer, checks ...func() error) (appstoresink.Result, error) {
 	var result appstoresink.Result
 	if ctx == nil || pinned == nil || pinned.state == nil || sink == nil {
 		return result, ErrSnapshot
