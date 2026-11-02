@@ -49,6 +49,15 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn("scripts/ci/plan.py plan --base", section)
         self.assertIn("if: steps.scope.outputs.declarative == 'true'", section)
         self.assertIn("python3 scripts/ci/declarative_scoped.py", section)
+        self.assertIn("python3 scripts/ci/text_adapter_scoped.py", section)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        root_delivery = ci.split("  delivery-root:\n", 1)[1].split("  full-profile:\n", 1)[0]
+        self.assertIn("container:\n      image: golang:1.26.0", root_delivery)
+        self.assertIn("python3 scripts/ci/text_adapter_scoped.py", root_delivery)
+        runner = (ROOT / "scripts/ci/text_adapter_scoped.py").read_text(encoding="utf-8")
+        self.assertIn("os.geteuid() != 0", runner)
+        self.assertIn('"-test.run", "^TestTextAdapter(Connected|Bounds)$"', runner)
+        self.assertIn("TestTextAdapterConnected", runner)
         planner = (ROOT / "scripts/ci/plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./internal/declarativeslice" in plan["packages"]).lower()', planner)
 

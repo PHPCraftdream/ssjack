@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Run the connected text-adapter acceptance in a Linux root container."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def main() -> int:
+    if sys.platform != "linux":
+        raise SystemExit("connected text-adapter acceptance is Linux-only")
+    if os.geteuid() != 0:
+        raise SystemExit("connected text-adapter acceptance requires root")
+    with tempfile.TemporaryDirectory(prefix="ssjack-text-adapter-", dir="/tmp") as tempdir:
+        Path(tempdir).chmod(0o755)
+        binary = Path(tempdir) / "acceptance"
+        build = subprocess.run(["go", "test", "-mod=readonly", "-c", "-o", str(binary), "./internal/appstorecrypto"], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        sys.stdout.write(build.stdout)
+        if build.returncode != 0:
+            return build.returncode
+        binary.chmod(0o755)
+        env = os.environ.copy()
+        env["SSJACK_TEXT_ADAPTER_CI_ACCEPTANCE"] = "1"
+        acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestTextAdapter(Connected|Bounds)$", "-test.timeout=240s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+        sys.stdout.write(acceptance.stdout)
+        if acceptance.returncode != 0:
+            return acceptance.returncode
+        for name in ("TestTextAdapterConnected", "TestTextAdapterBounds"):
+            if re.search(rf"(?m)^--- SKIP: {re.escape(name)}(?:\s|$)", acceptance.stdout):
+                raise SystemExit(f"{name} was skipped")
+            if not re.search(rf"(?m)^--- PASS: {re.escape(name)}(?:\s|$)", acceptance.stdout):
+                raise SystemExit(f"{name} did not report PASS")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

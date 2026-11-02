@@ -32,7 +32,7 @@ func createMarker(data []byte) error {
 func atomicFile(data []byte) error { return atomicNamed(GrantsName, data) }
 
 func atomicNamed(name string, data []byte) error {
-	if name != GrantsName && name != "delivery-grants.json" {
+	if name != GrantsName && name != "delivery-grants.json" && name != textAdapterName {
 		return ErrAuthority
 	}
 	if os.Geteuid() != 0 || safeDirectory(false) != nil {

@@ -149,6 +149,8 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, errors.New("specify a command; default profile is main")
 	}
 	switch command[0] {
+	case "text-adapter":
+		return runTextAdapterCommand(ctx, *vaultPath, profile, command[1:])
 	case "ssh":
 		if len(command) != 1 {
 			return 1, errors.New("usage: ssjack [-p PROFILE] ssh")

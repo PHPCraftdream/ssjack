@@ -25,6 +25,35 @@ class SelectionTests(unittest.TestCase):
     def selected(self, *paths):
         return plan.select(self.graph, paths)["packages"]
 
+    def test_new_text_adapter_paths_select_owner_and_scoped_reverse_dependencies(self):
+        # Model the production package graph: each changed source file selects its
+        # owner package, then reverse dependencies drive the scoped workflow outputs.
+        graph = [
+            {"directory": "cmd/ssjack", "import": "example.test/app/cmd/ssjack",
+             "dependencies": ["example.test/app/internal/appstorecrypto",
+                             "example.test/app/internal/apptransport",
+                             "example.test/app/internal/declarativeslice"]},
+            {"directory": "internal/appstorecrypto", "import": "example.test/app/internal/appstorecrypto",
+             "dependencies": []},
+            {"directory": "internal/apptransport", "import": "example.test/app/internal/apptransport",
+             "dependencies": []},
+            {"directory": "internal/declarativeauthority", "import": "example.test/app/internal/declarativeauthority",
+             "dependencies": []},
+            {"directory": "internal/declarativeslice", "import": "example.test/app/internal/declarativeslice",
+             "dependencies": ["example.test/app/internal/declarativeauthority"]},
+        ]
+        cases = {
+            "cmd/ssjack/text_adapter.go": {"./cmd/ssjack"},
+            "internal/appstorecrypto/text_adapter.go": {"./internal/appstorecrypto", "./cmd/ssjack"},
+            "internal/declarativeauthority/text_adapter.go": {"./internal/declarativeauthority", "./internal/declarativeslice", "./cmd/ssjack"},
+            "internal/declarativeslice/text_adapter_test.go": {"./internal/declarativeslice", "./cmd/ssjack"},
+            "internal/apptransport/server.go": {"./internal/apptransport", "./cmd/ssjack"},
+            "internal/apptransport/text_adapter_test.go": {"./internal/apptransport", "./cmd/ssjack"},
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(set(plan.select(graph, [path])["packages"]), expected)
+
     def test_transitive_reverse_dependencies(self):
         self.assertEqual(self.selected("internal/core/core.go"),
                          ["./cmd/app", "./internal/consumer", "./internal/core"])

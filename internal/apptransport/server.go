@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
@@ -42,16 +43,32 @@ type InfoOutput struct {
 	Cancellation string   `json:"cancellation"`
 }
 
+type TextHydrator interface {
+	Hydrate(context.Context, string, string, []byte) appstorecrypto.DeliveryOutcome
+}
+
 type Server struct {
-	bootstrap Bootstrap
-	http      *http.Server
-	streams   *streams
-	cancel    context.CancelFunc
-	done      chan struct{}
-	once      sync.Once
+	bootstrap   Bootstrap
+	textAdapter TextHydrator
+	http        *http.Server
+	streams     *streams
+	cancel      context.CancelFunc
+	done        chan struct{}
+	once        sync.Once
 }
 
 func Listen(parent context.Context, profile string, runner remote.StreamRunner) (*Server, error) {
+	return listen(parent, profile, runner, nil)
+}
+
+func ListenWithTextAdapter(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator) (*Server, error) {
+	if adapter == nil {
+		return nil, errors.New("invalid text adapter")
+	}
+	return listen(parent, profile, runner, adapter)
+}
+
+func listen(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator) (*Server, error) {
 	if parent.Err() != nil || profile == "" || len(profile) > 64 || runner == nil {
 		return nil, errors.New("invalid application transport scope")
 	}
@@ -68,7 +85,7 @@ func Listen(parent context.Context, profile string, runner remote.StreamRunner) 
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{streams: newStreams(ctx, profile, runner), cancel: cancel, done: make(chan struct{})}
+	s := &Server{streams: newStreams(ctx, profile, runner), textAdapter: adapter, cancel: cancel, done: make(chan struct{})}
 	s.bootstrap = Bootstrap{Endpoint: "https://" + listener.Addr().String() + "/mcp", Token: token, Pin: pin}
 	api := s.mcpServer(profile)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return api }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
@@ -129,30 +146,66 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 	api := mcp.NewServer(&mcp.Implementation{Name: "ssjack-app-transport", Version: buildinfo.Version}, nil)
 	mcp.AddTool(api, &mcp.Tool{Name: "transport_info", Description: "Read the scoped transport protocol and capabilities."},
 		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, InfoOutput, error) {
+			var capabilities []string
+			if s.textAdapter == nil {
+				capabilities = []string{"exec", "stdin", "binary", "backpressure", "cancel"}
+			} else {
+				capabilities = []string{"text_hydrate"}
+			}
 			return nil, InfoOutput{Protocol: Protocol, Profile: profile, Commit: buildinfo.Revision(), ChunkSize: ChunkSize,
-				Capabilities: []string{"exec", "stdin", "binary", "backpressure", "cancel"}, Cancellation: "connection-only"}, nil
+				Capabilities: capabilities, Cancellation: "connection-only"}, nil
 		})
-	mcp.AddTool(api, &mcp.Tool{Name: "transport_start", Description: "Start a command on the one delegated SSH profile."},
-		func(_ context.Context, _ *mcp.CallToolRequest, input StartInput) (*mcp.CallToolResult, StartOutput, error) {
-			out, err := s.streams.start(input)
-			return nil, out, err
-		})
-	mcp.AddTool(api, &mcp.Tool{Name: "transport_input", Description: "Queue one base64 stdin chunk or EOF. Retry only when accepted is false."},
-		func(_ context.Context, _ *mcp.CallToolRequest, input InputInput) (*mcp.CallToolResult, InputOutput, error) {
-			out, err := s.streams.write(input)
-			return nil, out, err
-		})
-	mcp.AddTool(api, &mcp.Tool{Name: "transport_read", Description: "Consume one lossless base64 stdout/stderr chunk, a pending reply, or final status."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, input JobInput) (*mcp.CallToolResult, ReadOutput, error) {
-			out, err := s.streams.read(ctx, input)
-			return nil, out, err
-		})
-	mcp.AddTool(api, &mcp.Tool{Name: "transport_cancel", Description: "Close the command SSH connection. Detached remote processes may survive."},
-		func(_ context.Context, _ *mcp.CallToolRequest, input JobInput) (*mcp.CallToolResult, CancelOutput, error) {
-			out, err := s.streams.stop(input)
-			return nil, out, err
-		})
+	if s.textAdapter == nil {
+		mcp.AddTool(api, &mcp.Tool{Name: "transport_start", Description: "Start a command on the one delegated SSH profile."},
+			func(_ context.Context, _ *mcp.CallToolRequest, input StartInput) (*mcp.CallToolResult, StartOutput, error) {
+				out, err := s.streams.start(input)
+				return nil, out, err
+			})
+		mcp.AddTool(api, &mcp.Tool{Name: "transport_input", Description: "Queue one base64 stdin chunk or EOF. Retry only when accepted is false."},
+			func(_ context.Context, _ *mcp.CallToolRequest, input InputInput) (*mcp.CallToolResult, InputOutput, error) {
+				out, err := s.streams.write(input)
+				return nil, out, err
+			})
+		mcp.AddTool(api, &mcp.Tool{Name: "transport_read", Description: "Consume one lossless base64 stdout/stderr chunk, a pending reply, or final status."},
+			func(ctx context.Context, _ *mcp.CallToolRequest, input JobInput) (*mcp.CallToolResult, ReadOutput, error) {
+				out, err := s.streams.read(ctx, input)
+				return nil, out, err
+			})
+		mcp.AddTool(api, &mcp.Tool{Name: "transport_cancel", Description: "Close the command SSH connection. Detached remote processes may survive."},
+			func(_ context.Context, _ *mcp.CallToolRequest, input JobInput) (*mcp.CallToolResult, CancelOutput, error) {
+				out, err := s.streams.stop(input)
+				return nil, out, err
+			})
+	}
+	if s.textAdapter != nil {
+		mcp.AddTool(api, &mcp.Tool{Name: "text_hydrate", Description: "Hydrate one explicitly granted text input; only a bounded status is returned."},
+			func(ctx context.Context, _ *mcp.CallToolRequest, input TextHydrateInput) (*mcp.CallToolResult, TextHydrateOutput, error) {
+				if input.OperationID == "" || len(input.OperationID) > 128 || input.File == "" || len(input.File) > 4096 || input.Mode != "hydrate-v1" || len(input.Template) > 32<<10 {
+					return nil, TextHydrateOutput{}, errors.New("invalid text hydration request")
+				}
+				outcome := s.textAdapter.Hydrate(ctx, input.OperationID, input.File, []byte(input.Template))
+				status := "unknown"
+				switch outcome.Status {
+				case appstorecrypto.DeliveryReceived:
+					status = "received"
+				case appstorecrypto.DeliveryWithheld:
+					status = "withheld"
+				}
+				return nil, TextHydrateOutput{Status: status}, nil
+			})
+	}
 	return api
+}
+
+type TextHydrateInput struct {
+	OperationID string `json:"operation_id"`
+	File        string `json:"file"`
+	Template    string `json:"template"`
+	Mode        string `json:"mode"`
+}
+
+type TextHydrateOutput struct {
+	Status string `json:"status"`
 }
 
 func Environment(base []string, bootstrap Bootstrap) []string {

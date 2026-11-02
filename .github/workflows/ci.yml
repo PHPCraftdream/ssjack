@@ -170,6 +170,8 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           python3 scripts/ci/delivery_scoped.py
+      - name: Connected text-adapter acceptance
+        run: python3 scripts/ci/text_adapter_scoped.py
 
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
