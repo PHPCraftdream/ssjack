@@ -133,9 +133,6 @@ func reverseLateConnectedChild(t *testing.T) {
 	defer grantPipe.Close()
 	defer ackPipe.Close()
 	installation, grant, placeholder := appstorecrypto.TextAdapterFixture(t)
-	if err := ackPipe.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
 	grant.Mode = "reverse-copy-v1"
 	if err := json.NewEncoder(grantPipe).Encode(grant); err != nil {
 		t.Fatal(err)

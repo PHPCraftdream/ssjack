@@ -260,9 +260,6 @@ func reverseExpiryConnectedChild(t *testing.T) {
 	}
 	defer grantPipe.Close()
 	defer ackPipe.Close()
-	if err := ackPipe.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
 	installation, grant, _ := appstorecrypto.TextAdapterFixture(t)
 	grant.Mode = "reverse-copy-v1"
 	grant.ExpiresAt = time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339)
@@ -272,9 +269,6 @@ func reverseExpiryConnectedChild(t *testing.T) {
 	var control declarativeauthority.TextAdapterGrant
 	if err := json.NewDecoder(ackPipe).Decode(&control); err != nil {
 		t.Fatalf("read positive-control grant: %v", err)
-	}
-	if err := ackPipe.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
 	}
 	reverseExpiryPositiveControl(t, installation, control)
 	if _, err := grantPipe.Write([]byte{1}); err != nil {

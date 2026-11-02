@@ -19,7 +19,7 @@ Source-only handoff. All listed authored tests are SOURCE-PRESENT ONLY, AUTHORED
 - `internal/appstorecrypto/text_reverse_effect_edges_linux_amd64_test.go`
 - `internal/appstorecrypto/text_reverse_authority_linux_amd64_test.go`, `text_reverse_capture_linux_amd64_test.go`
 - `internal/appstorecrypto/text_adapter_linux_amd64.go`
-- `internal/apptransport/server.go`, `text_reverse_response.go`, `text_reverse_test.go`, `text_reverse_response_test.go`, `text_reverse_wire_test.go`, `text_reverse_write_test.go`
+- `internal/apptransport/server.go`, `text_reverse_response.go`, `text_reverse_test.go`, `text_reverse_response_test.go`, `text_reverse_wire_test.go`, `text_reverse_write_test.go`, `text_reverse_request.go`, `text_reverse_request_test.go`
 - `docs/application-store/TEXT-ADAPTER.md`, `TEXT-REVERSE-COPY.md`
 - `scripts/ci/test_declarative_scoped.py`, `scripts/ci/text_adapter_scoped.py` (inventory previously missing)
 - `.github/workflows/feature.yml` and `.github/workflows/ci.yml` are read-only existing callsites; not changed.
@@ -38,3 +38,11 @@ The reverse server buffers the complete SDK body before attempting publication a
 - Real live SSH is intentionally excluded from this acceptance scope. Future Task259/260 client work remains separate.
 
 These are execution/review and explicitly excluded-scope gaps, not claims that authored required cases are missing. Previously accepted producer CI run `41533475792` is parent-reported, not new validation for this source-only handoff.
+
+## First published candidate CI and follow-up source
+
+Parent-published candidate `bb97175` was tested in CI run `41547256956`. Observed results: `TestTextAdapterConnected`, `TestTextAdapterBounds`, and `TestTextReverseMappingsConnected` passed; the lost-HTTP-context runner did not finish within 10 seconds; the expiry child inherited an FD where `SetReadDeadline` was unsupported, followed by late parent EOF. These are log observations, not claims about SDK internals.
+
+The follow-up source changes capture the outer HTTP request context per request and combine it with the SDK context, with owned cleanup. The child-ack pipe `SetReadDeadline` was removed; parent-context kill/wait and the parent-grant read deadline are bounded. The production 10s deadline begins immediately before network publication; expiry readiness is independent test setup.
+
+This patch is AUTHORED NOT RUN; no new CI run was performed. The earlier blanket “all tests not run” qualification applies to the new changes only; the candidate CI observations above are prior evidence.

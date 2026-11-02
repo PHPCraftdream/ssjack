@@ -127,7 +127,9 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 256*1024)
 			if s.reverse != nil {
-				serveBoundedReverseResponse(w, r, handler)
+				reverseAPI := s.mcpServerForRequest(profile, r.Context())
+				reverseHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return reverseAPI }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+				serveBoundedReverseResponse(w, r, reverseHandler)
 				return
 			}
 			handler.ServeHTTP(w, r)
@@ -161,6 +163,10 @@ func (s *Server) Close() {
 }
 
 func (s *Server) mcpServer(profile string) *mcp.Server {
+	return s.mcpServerForRequest(profile, nil)
+}
+
+func (s *Server) mcpServerForRequest(profile string, requestCtx context.Context) *mcp.Server {
 	api := mcp.NewServer(&mcp.Implementation{Name: "ssjack-app-transport", Version: buildinfo.Version}, nil)
 	mcp.AddTool(api, &mcp.Tool{Name: "transport_info", Description: "Read the scoped transport protocol and capabilities."},
 		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, InfoOutput, error) {
@@ -203,12 +209,14 @@ func (s *Server) mcpServer(profile string) *mcp.Server {
 				if input.OperationID == "" || len(input.OperationID) > 128 || input.File == "" || len(input.File) > 4096 || input.Mode != "reverse-copy-v1" {
 					return nil, TextReverseCopyOutput{}, errors.New("invalid reverse text request")
 				}
-				outcome := s.reverse.ReverseCopy(ctx, input.OperationID, input.File)
+				operationCtx, cleanup := reverseRequestContext(ctx, requestCtx)
+				defer cleanup()
+				outcome := s.reverse.ReverseCopy(operationCtx, input.OperationID, input.File)
 				defer clear(outcome.Text)
 				output := TextReverseCopyOutput{Status: "unknown"}
 				if outcome.Status == appstorecrypto.DeliveryWithheld {
 					output.Status = "withheld"
-				} else if outcome.Status == appstorecrypto.DeliveryReceived && ctx.Err() == nil && len(outcome.Text) <= 1<<20 && utf8.Valid(outcome.Text) && bytes.IndexByte(outcome.Text, 0) < 0 {
+				} else if outcome.Status == appstorecrypto.DeliveryReceived && operationCtx.Err() == nil && len(outcome.Text) <= 1<<20 && utf8.Valid(outcome.Text) && bytes.IndexByte(outcome.Text, 0) < 0 {
 					text := string(outcome.Text)
 					output.Status = "received"
 					output.Text = &text

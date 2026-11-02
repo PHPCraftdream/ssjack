@@ -30,6 +30,12 @@ Reverse replacement uses the engine's exact supplied reference-to-value mapping,
 
 There are at most 16 references; aggregate decrypted selected values are bounded to 1 MiB. Raw stdout and transformed output are each bounded to 1 MiB. HTTP bodies are bounded to 256 KiB; decoded file input to 4096 bytes; server operation ID input to 128 bytes, while core canonical ID length is exactly 16 decoded bytes. The operation deadline is the earliest of 60 seconds, grant expiry, and caller deadline.
 
+### Cancellation linkage
+
+Each authenticated reverse HTTP request owns an immutable, request-local MCP server/handler closure that captures that request's actual outer `r.Context`. A helper combines the captured request context with the SDK tool context, preserving the earlier deadline; cancellation observed by HTTP or cancellation from the SDK cancels the operation. Cleanup stops the cancellation registration and cancels the derived context. This uses neither a global context nor header-derived authority. It does not promise that an instant disconnect kills a remote process or that process death/adoption can be inferred. The finite core limit remains at most 60 seconds, bounded by grant expiry and caller deadline; network response writing remains separately bounded to 10 seconds as described above.
+
+MCP notification/session cancellation is not synonymous with HTTP disconnect: this linkage is explicit. Prior CI run 41547256956 established that SDK callback-context cancellation alone did not cancel the prompt runner; it did not inspect the SDK's internal cancellation cause. The new real-pinned-HTTP concurrency test (positive B while A and C follow cancellation) is authored, NOT RUN. The actual-root lost-response test retains unchanged assertions. Inherited-pipe child tests use bounded parent kill/wait and do not assume runtime pipe polling is available; no public contract depends on that runtime assumption, and the source handoff already records it.
+
 The user remains responsible for exact value mapping completeness, escaping/representation, consumer compatibility, and storage. The engine provides no JSON quoting, escaping, URL encoding, derived-secret handling, or discovery of unknown secrets. No unknown-secret certification is made.
 
 ## MCP response size (enforced complete-body bound)
