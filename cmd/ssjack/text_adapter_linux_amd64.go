@@ -105,6 +105,12 @@ func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args 
 	if len(args) > 0 && args[0] == "register" {
 		return registerTextAdapter(ctx, args[1:])
 	}
+	if len(args) > 0 && args[0] == "register-stream" {
+		return registerTextAdapterMode(ctx, args[1:], "hydrate-stream-v2")
+	}
+	if len(args) > 0 && args[0] == "revoke-stream" {
+		return revokeTextStreamAdapter(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "register-reverse" {
 		return registerReverseTextAdapter(ctx, args[1:])
 	}
@@ -129,8 +135,9 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		fmt.Fprintln(os.Stdout, digest)
 		return 0, nil
 	}
-	if len(args) < 3 || args[0] != "serve" {
-		return 1, errors.New("usage: ssjack [-p PROFILE] text-adapter serve GRANT_ID HARNESS [ARGS...] | identity")
+	streaming := len(args) > 0 && args[0] == "serve-stream"
+	if len(args) < 3 || (args[0] != "serve" && !streaming) {
+		return 1, errors.New("usage: ssjack [-p PROFILE] text-adapter serve|serve-stream GRANT_ID HARNESS [ARGS...] | identity")
 	}
 	if rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 		return 1, errors.New("text adapter requires a non-root terminal outside broker sessions")
@@ -139,8 +146,8 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	if err != nil {
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}
-	grant, err := declarativeauthority.LoadTextAdapter(args[1], os.Geteuid(), time.Now())
-	if err != nil || grant.Profile != profile || grant.CredentialSHA256 != digest {
+	grant, err := loadCLITextGrant(args[1], streaming)
+	if err != nil || (streaming && grant.Mode != "hydrate-stream-v2") || grant.Profile != profile || grant.CredentialSHA256 != digest {
 		return 1, errors.New("no matching active text-adapter grant")
 	}
 	store, err := appstoreentry.Open(grant.StorePath)
@@ -179,6 +186,9 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		return 1, errAppstore
 	}
 	defer installation.Close()
+	if streaming {
+		return runForwardStreamHarness(ctx, installation, args[1], profile, digest, runner, args[2:])
+	}
 	var adapter *appstorecrypto.TextAdapter
 	if grant.Mode == "reverse-copy-v1" {
 		adapter, err = appstorecrypto.NewReverseTextAdapter(ctx, installation, args[1], profile, digest, runner)
@@ -221,7 +231,7 @@ func registerReverseTextAdapter(ctx context.Context, args []string) (int, error)
 }
 
 func registerTextAdapterMode(_ context.Context, args []string, mode string) (int, error) {
-	if mode != "hydrate-v1" && mode != "reverse-copy-v1" {
+	if mode != "hydrate-v1" && mode != "reverse-copy-v1" && mode != "hydrate-stream-v2" {
 		return 1, errors.New("invalid text-adapter mode")
 	}
 	if os.Geteuid() != 0 {
@@ -303,7 +313,12 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 		grant.References = append(grant.References, ref)
 	}
 	grant.Mode = mode
-	if err = declarativeauthority.ValidateTextAdapterGrant(grant, time.Now()); err != nil {
+	validate := declarativeauthority.ValidateTextAdapterGrant
+	register := declarativeauthority.RegisterTextAdapter
+	if mode == "hydrate-stream-v2" {
+		validate, register = declarativeauthority.ValidateTextStreamGrant, declarativeauthority.RegisterTextStream
+	}
+	if err = validate(grant, time.Now()); err != nil {
 		return 1, errors.New("invalid grant metadata")
 	}
 	metadata, err := json.MarshalIndent(grant, "", "  ")
@@ -312,6 +327,10 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 	}
 	fmt.Fprintln(os.Stderr, string(metadata))
 	phrase := "APPROVE TEXT ADAPTER " + grant.ID
+	if mode == "hydrate-stream-v2" {
+		phrase = "APPROVE STREAM TEXT ADAPTER " + grant.ID
+		fmt.Fprintln(os.Stderr, "Approve only the exact streamed target command/file and references, with finite 64 MiB bounds; no raw fallback or automatic retry is authorized.")
+	}
 	if mode == "reverse-copy-v1" {
 		phrase = "APPROVE REVERSE TEXT COPY " + grant.ID
 		fmt.Fprintln(os.Stderr, "Approve only the exact source command and file for a reference-only selected copy; raw fallback and live-file rewrites are not authorized.")
@@ -320,7 +339,7 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 	if err = confirmVisibleValue("Type exact approval phrase", phrase); err != nil {
 		return 1, err
 	}
-	if err = declarativeauthority.RegisterTextAdapter(grant); err != nil {
+	if err = register(grant); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stdout, grant.ID)

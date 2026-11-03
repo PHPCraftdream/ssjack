@@ -1,9 +1,27 @@
 # Private forward-stream HTTP transport APIs
 
 Status: internal forward transport wiring, not a delivered Clawwright feature.
-CLI registration/startup, actual root-granted route acceptance and the streaming
-client are still pending. Reverse streaming is not implemented by this route.
+Explicit forward CLI registration/startup is wired. Actual root-granted route
+acceptance and the streaming client are still pending. Reverse streaming is not implemented by this route.
 V1 remains unchanged.
+
+## Explicit CLI path
+
+An independently trusted root operator runs `ssjack text-adapter register-stream`
+and enters the finite exact registration metadata interactively, including the
+resolved credential record identity, refs/snapshot, file, command and expiry.
+The displayed v2 grant requires the exact `APPROVE STREAM TEXT ADAPTER GRANT_ID`
+phrase before writing the separate registry. Flags or a parsed grant are not
+human approval. `revoke-stream GRANT_ID` addresses only that v2 namespace.
+
+The non-root operator starts
+`ssjack [-p PROFILE] text-adapter serve-stream GRANT_ID HARNESS [ARGS...]`.
+Named `--server`/`--account` selectors also resolve through the authenticated vault
+load; the stable selected record ID is used for grant checks and server scope.
+The operator unlocks the credential database and bound application-store
+installation through hidden terminal input. The child receives only the usual
+private endpoint/token/pin bootstrap, not vault/master values. Broker sessions,
+wrong grants and reverse-v2 grants refuse; no fallback to v1 occurs.
 
 `ListenWithTextStreamAdapter` explicitly enables two POST paths on the existing
 pinned loopback TLS listener: `/text-stream-v2/prepare` and
