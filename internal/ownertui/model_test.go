@@ -19,13 +19,15 @@ import (
 )
 
 type fakeBackend struct {
-	metadata    vault.DirectoryMetadata
-	status      ownerdb.Status
-	edits       int
-	submissions int
-	closes      int
-	closeErr    error
-	change      vault.OwnerChange
+	metadata      vault.DirectoryMetadata
+	status        ownerdb.Status
+	edits         int
+	submissions   int
+	closes        int
+	closeErr      error
+	change        vault.OwnerChange
+	exports       int
+	exportRequest ownerdb.ExportRequest
 }
 
 func (b *fakeBackend) Metadata() (vault.DirectoryMetadata, error) { return b.metadata, nil }
@@ -37,11 +39,17 @@ func (b *fakeBackend) Submit(change vault.OwnerChange) error {
 	b.change.Value = append([]byte(nil), change.Value...)
 	return nil
 }
-func (b *fakeBackend) Link(string, []byte) error   { return nil }
-func (b *fakeBackend) Reconcile() error            { return nil }
-func (b *fakeBackend) ResumeDraft() error          { return nil }
-func (b *fakeBackend) CancelDraft() error          { return nil }
-func (b *fakeBackend) RetryDatabase() error        { return nil }
+func (b *fakeBackend) Link(string, []byte) error { return nil }
+func (b *fakeBackend) Reconcile() error          { return nil }
+func (b *fakeBackend) ResumeDraft() error        { return nil }
+func (b *fakeBackend) CancelDraft() error        { return nil }
+func (b *fakeBackend) RetryDatabase() error      { return nil }
+func (b *fakeBackend) Export(request ownerdb.ExportRequest) error {
+	b.exports++
+	b.exportRequest = request
+	return nil
+}
+func (b *fakeBackend) Flush(context.Context) error { return nil }
 func (b *fakeBackend) Close(context.Context) error { b.closes++; return b.closeErr }
 
 func testModel(b *fakeBackend) *Model {
@@ -230,7 +238,10 @@ func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
 	program.Send(tea.PasteMsg{Content: "synthetic-terminal-private"})
 	program.Send(tea.KeyPressMsg{Code: 27})
 	program.Send(tea.KeyPressMsg{Code: 27})
-	for range 4 {
+	for _, item := range navigation(location{screen: databaseScreen}, backend.metadata) {
+		if item.action == "exit" {
+			break
+		}
 		program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	program.Send(tea.KeyPressMsg{Code: 13})

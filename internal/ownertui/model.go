@@ -21,6 +21,8 @@ type backend interface {
 	ResumeDraft() error
 	CancelDraft() error
 	RetryDatabase() error
+	Export(ownerdb.ExportRequest) error
+	Flush(context.Context) error
 	Close(context.Context) error
 }
 
@@ -30,7 +32,10 @@ type refreshMsg struct {
 	err      error
 }
 
-type operationMsg struct{ err error }
+type operationMsg struct {
+	err    error
+	action string
+}
 type closeMsg struct{ err error }
 type tickMsg time.Time
 
@@ -90,6 +95,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nextTick()
 	case operationMsg:
 		m.working = false
+		if msg.action == "export" {
+			m.message = "Export written to the selected new file."
+			if msg.err != nil {
+				m.message = "Export failed; inspect the selected destination before retrying. No automatic retry."
+			}
+			return m, nil
+		}
 		if msg.err != nil {
 			m.message = "Operation failed; changes may still need saving or reconciliation."
 		} else {
@@ -206,6 +218,9 @@ func (m *Model) View() tea.View {
 	out.WriteString(description + "\n")
 	if m.form != nil {
 		out.WriteString(escaped(m.form.action) + "\n\n")
+		if m.form.scopeLabel != "" {
+			out.WriteString(m.form.scopeLabel + "\n")
+		}
 		for i, current := range m.form.fields {
 			marker := "  "
 			if m.form.focus == i {

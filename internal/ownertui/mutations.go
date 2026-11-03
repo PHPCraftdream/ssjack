@@ -1,18 +1,90 @@
 package ownertui
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 var errForm = errors.New("invalid owner form")
+
+func (m *Model) prepareExportForm(f *form) error {
+	selection := vault.ExportSelection{Servers: make(map[string][]string)}
+	accountCount := 0
+	switch f.origin.screen {
+	case databaseScreen:
+		selection.GlobalSecrets = true
+		for _, server := range m.metadata.Servers {
+			for _, account := range server.Accounts {
+				selection.Servers[server.ID] = append(selection.Servers[server.ID], account.Name)
+				accountCount++
+			}
+		}
+		f.scopeLabel = "All " + strconv.Itoa(len(selection.Servers)) + " servers / " + strconv.Itoa(accountCount) + " accounts; global and server secrets."
+	case serverScreen, accountScreen:
+		for _, server := range m.metadata.Servers {
+			if server.ID != f.origin.server {
+				continue
+			}
+			for _, account := range server.Accounts {
+				if f.origin.account == "" || account.Name == f.origin.account {
+					selection.Servers[server.ID] = append(selection.Servers[server.ID], account.Name)
+				}
+			}
+			accountCount = len(selection.Servers[server.ID])
+			f.scopeLabel = "Server " + escaped(server.Name) + " / " + strconv.Itoa(accountCount) + " selected accounts; all server-local secrets, no global fallback."
+		}
+		if accountCount == 0 {
+			return errForm
+		}
+	case secretsScreen:
+		if f.origin.server != "" {
+			return errForm
+		}
+		selection.GlobalSecrets = true
+		f.scopeLabel = "Global secret values only; no SSH credentials or server-local secrets."
+	default:
+		return errForm
+	}
+	f.exportScope = &selection
+	f.scopeLabel += "\nWARNING: plaintext exposes selected private keys, passwords and application values."
+	f.fields = []field{
+		input("Destination", "A new private ZIP file; no overwrite or plaintext staging.", 4096, false, ""),
+		input("Format", "encrypted (default), or plaintext after the disclosure warning.", 16, false, "encrypted"),
+		input("Confirmation", "For plaintext only, type EXPORT PLAINTEXT. Leave empty for encrypted export.", 32, false, ""),
+	}
+	return nil
+}
+
+func (m *Model) performExport(f *form) error {
+	if f.exportScope == nil {
+		return errForm
+	}
+	format, confirmation := string(f.fields[1].value), string(f.fields[2].value)
+	if (format != "encrypted" && format != "plaintext") || (format == "encrypted" && confirmation != "") || (format == "plaintext" && confirmation != "EXPORT PLAINTEXT") {
+		return errForm
+	}
+	ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	request := ownerdb.ExportRequest{Selection: *f.exportScope, Destination: string(f.fields[0].value), PlaintextConfirmation: confirmation}
+	if err := m.backend.Export(request); err != nil {
+		return err
+	}
+	return m.backend.Flush(ctx)
+}
 
 func editDirectory(v *vault.Vault, f *form) error {
 	text := func(index int) string { return string(f.fields[index].value) }

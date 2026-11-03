@@ -1,6 +1,6 @@
-# Owner export archive core (not yet wired to a command)
+# Explicit owner export archives
 
-The archive core is an internal building block, not a delivered owner export CLI.
+The archive is connected to the explicit trusted-terminal owner editor.
 It has no MCP registration and no secret/master getter. No real operator export
 is performed by its development or tests.
 
@@ -67,7 +67,24 @@ refuses pending/unsaved database state and refuses publication after the capture
 revision changes or the session closes. Encrypted publication reuses the retained
 authenticated key; it does not run another unlock during export.
 
-Owner coordinator, exact private value collection, scope-selection UI and export
-commands are not yet connected. Plaintext archive unit tests do not prove the
-encrypted production path; a dedicated production-profile helper checks the actual
-sealed credential archive and wrong-password rejection in full CI.
+The owner coordinator queues export through its existing single worker and waits
+for a saved, unchanged database snapshot. Selected values are copied privately
+from a clean authenticated owner editor into the concrete opaque plan; no generic
+value sink or getter is exposed. Exact version/snapshot references and signed
+anchor/history state are checked before and after collection. Collection failure
+closes the plan, so partial or stale copies cannot later be published.
+
+The explicit owner menu offers all contents, one server, one account plus that
+server's secrets, or global values only. The scope is captured before Apply,
+encrypted format is the default, and plaintext requires a visible warning and
+`EXPORT PLAINTEXT`. Cancel never queues export. Completion waits for the worker;
+errors require inspection of the selected destination, not an automatic replay.
+Exports do not rewrite the source database or create a new application-store
+snapshot. They describe the authenticated captured selection, not a claim of
+future latest-state freshness.
+
+Full CI helpers cover actual sealed credentials, wrong-password rejection and
+private app-store value collection, plus plaintext export and overwrite refusal.
+The reader/import interface and verified Windows ACL publication path remain
+unfinished. Existing keyfile tools can decode each authenticated container; the
+actual Ktav directory entry retains the ordinary v2 database shape.

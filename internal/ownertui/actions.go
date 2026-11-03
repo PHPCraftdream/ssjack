@@ -116,6 +116,11 @@ func (m *Model) openForm(action string) {
 		}
 	case "rename-server":
 		f.fields = []field{input("Server name", "Stable identity and secret scopes are preserved.", 64, false, "")}
+	case "export":
+		if err := m.prepareExportForm(f); err != nil {
+			m.message = "Export scope is unavailable."
+			return
+		}
 	case "link":
 		f.fields = []field{
 			input("Store directory", "Existing authenticated installation; no new store is created.", 4096, false, ""),
@@ -158,13 +163,15 @@ func (m *Model) applyForm() tea.Cmd {
 	m.working = true
 	return func() tea.Msg {
 		defer f.clear()
-		return operationMsg{err: m.perform(f)}
+		return operationMsg{err: m.perform(f), action: f.action}
 	}
 }
 
 func (m *Model) perform(f *form) error {
 	value := func(index int) string { return string(f.fields[index].value) }
 	switch f.action {
+	case "export":
+		return m.performExport(f)
 	case "link":
 		return m.backend.Link(value(0), f.fields[1].value)
 	case "add-server", "add-account", "edit-account", "rename-server", "edit-server":

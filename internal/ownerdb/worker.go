@@ -20,6 +20,15 @@ func (m *Manager) run() {
 			ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
 			var err error
 			switch id {
+			case ":export":
+				m.mu.Lock()
+				request := m.exportRequest
+				m.mu.Unlock()
+				if request == nil {
+					err = ErrPending
+				} else {
+					err = m.exportArchive(ctx, *request)
+				}
 			case ":link":
 				err = m.linkStore(ctx)
 			case ":save":
@@ -49,6 +58,9 @@ func (m *Manager) run() {
 			cancel()
 			m.mu.Lock()
 			m.busy, m.err = false, err
+			if id == ":export" {
+				m.exportRequest = nil
+			}
 			m.signal()
 			m.mu.Unlock()
 		}

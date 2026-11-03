@@ -39,7 +39,7 @@ func escaped(value string) string { return strconv.Quote(value) }
 func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	switch at.screen {
 	case databaseScreen:
-		return []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}
+		return []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}
 	case serversScreen:
 		result := []item{{label: "[Add server]", action: "add-server"}}
 		for _, server := range metadata.Servers {
@@ -55,9 +55,9 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 				}
 			}
 		}
-		return result
+		return append(result, item{label: "Export server credentials and values", action: "export"})
 	case accountScreen:
-		return []item{{label: "[Edit SSH account]", action: "edit-account"}}
+		return []item{{label: "[Edit SSH account]", action: "edit-account"}, {label: "Export account and server secrets", action: "export"}}
 	case secretsScreen:
 		result := []item{{label: "[Add secret]", action: "add-secret"}}
 		var ids []string
@@ -69,6 +69,9 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 		sort.Slice(ids, func(i, j int) bool { return metadata.Secrets[ids[i]].Name < metadata.Secrets[ids[j]].Name })
 		for _, id := range ids {
 			result = append(result, item{label: metadata.Secrets[id].Name, target: location{screen: secretScreen, server: at.server, secret: id}})
+		}
+		if at.server == "" {
+			result = append(result, item{label: "Export global secret values", action: "export"})
 		}
 		return result
 	case secretScreen:

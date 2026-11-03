@@ -3,6 +3,8 @@ package ownertui
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 type field struct {
@@ -14,10 +16,12 @@ type field struct {
 }
 
 type form struct {
-	action string
-	fields []field
-	focus  int
-	origin location
+	action      string
+	fields      []field
+	focus       int
+	origin      location
+	exportScope *vault.ExportSelection
+	scopeLabel  string
 }
 
 func (f *form) clear() {

@@ -115,6 +115,7 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	if err := manager.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
+	ownerExportAcceptance(t, ctx, manager, path, password, server, alias, v.Targets["legacy"])
 	if err := manager.Close(ctx); err != nil {
 		t.Fatal(err)
 	}

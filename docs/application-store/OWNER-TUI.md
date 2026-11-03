@@ -57,8 +57,14 @@ These tests do not exercise real operator databases or servers.
 
 ## Current boundaries
 
-This implementation does not yet include owner export forms,
-multiline secret input, or interactive
+The Export menu captures a visible server/account/global scope and defaults to
+encrypted output. Plaintext requires a separate format choice and the exact
+`EXPORT PLAINTEXT` confirmation after its disclosure warning. Output is exclusive;
+Cancel does not queue export. See [owner export format](OWNER-EXPORT-FORMAT.md).
+Windows export is refused until verified restrictive ACL publication is available.
+
+This implementation does not yet include
+multiline secret input or interactive
 secret rename without a value replacement. Existing command paths remain available
 for their documented operations. Connected terminal/process-fault acceptance is a
 separate gate; pure message tests do not establish it. Linked app-store value

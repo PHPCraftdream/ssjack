@@ -2,6 +2,7 @@ package ownertui
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -16,7 +17,11 @@ func TestNavigationKeepsServerSecretScopesSeparate(t *testing.T) {
 	}}
 	for scope, want := range map[string]string{"": "global", "first-server": "first", "second-server": "second"} {
 		items := navigation(location{screen: secretsScreen, server: scope}, metadata)
-		if len(items) != 2 || items[1].target.secret != want || items[1].target.server != scope {
+		count := 2
+		if scope == "" {
+			count++
+		}
+		if len(items) != count || items[1].target.secret != want || items[1].target.server != scope {
 			t.Fatal("navigation selected another server's secret or a global fallback")
 		}
 	}
@@ -53,6 +58,53 @@ func TestNamedStartupOpensOnlyTheSelectedServerOrAccount(t *testing.T) {
 	if b.edits != 0 || b.submissions != 0 || b.closes != 0 {
 		t.Fatal("startup selection performed a mutation")
 	}
+}
+
+func TestExportFormCapturesScopeDefaultsEncryptedAndRequiresPlaintextConfirmation(t *testing.T) {
+	b := &fakeBackend{metadata: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Accounts: []vault.AccountMetadata{{Name: "deploy"}, {Name: "maintenance"}}}}}}
+	m := testModel(b)
+	m.at = location{screen: accountScreen, server: "server", account: "deploy"}
+	m.openForm("export")
+	if m.form == nil || m.form.exportScope.GlobalSecrets || len(m.form.exportScope.Servers["server"]) != 1 || m.form.exportScope.Servers["server"][0] != "deploy" || string(m.form.fields[1].value) != "encrypted" || !strings.Contains(m.View().Content, "WARNING") {
+		t.Fatal("export form did not expose an exact encrypted-default scope")
+	}
+	m.metadata.Servers[0].Accounts[0].Name = "changed-after-open"
+	if m.form.exportScope.Servers["server"][0] != "deploy" {
+		t.Fatal("open export scope borrowed mutable metadata")
+	}
+	m.form.fields[0].value = []byte("synthetic-export.zip")
+	m.form.fields[1].value = []byte("plaintext")
+	if err := m.perform(m.form); err == nil || b.exports != 0 {
+		t.Fatal("plaintext export bypassed explicit confirmation")
+	}
+	m.form.fields[2].value = []byte("EXPORT PLAINTEXT")
+	if err := m.perform(m.form); err != nil || b.exports != 1 || b.exportRequest.Selection.GlobalSecrets || b.exportRequest.PlaintextConfirmation != "EXPORT PLAINTEXT" {
+		t.Fatal("explicit export lost its captured scope or format")
+	}
+	m.back()
+	m.metadata.Servers[0].Accounts[0].Name = "deploy"
+	m.openForm("export")
+	if m.form == nil {
+		t.Fatal("export cancellation fixture did not open")
+	}
+	m.back()
+	if b.exports != 1 {
+		t.Fatal("cancelled export invoked the backend")
+	}
+}
+
+func TestPreCancelledExportDoesNotQueueAnArtifact(t *testing.T) {
+	b := &fakeBackend{}
+	m := testModel(b)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.ctx = ctx
+	m.openForm("export")
+	m.form.fields[0].value = []byte("synthetic-export.zip")
+	if err := m.perform(m.form); err == nil || b.exports != 0 {
+		t.Fatal("pre-cancelled export queued an artifact")
+	}
+	m.back()
 }
 
 func TestDisplayEscapesTerminalControlSequences(t *testing.T) {

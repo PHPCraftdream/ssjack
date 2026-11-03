@@ -23,24 +23,25 @@ type Status struct {
 }
 
 type Manager struct {
-	mu        sync.Mutex
-	closeMu   sync.Mutex
-	path      string
-	db        *vault.Session
-	link      *vault.OwnerStore
-	linking   *vault.OwnerStore
-	pending   *vault.OwnerIntent
-	confirmed *appstorecrypto.SnapshotCommit
-	resources *resources
-	busy      bool
-	closed    bool
-	closing   bool
-	err       error
-	jobs      chan string
-	changed   chan struct{}
-	done      chan struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
+	mu            sync.Mutex
+	closeMu       sync.Mutex
+	path          string
+	db            *vault.Session
+	link          *vault.OwnerStore
+	linking       *vault.OwnerStore
+	pending       *vault.OwnerIntent
+	confirmed     *appstorecrypto.SnapshotCommit
+	resources     *resources
+	exportRequest *ExportRequest
+	busy          bool
+	closed        bool
+	closing       bool
+	err           error
+	jobs          chan string
+	changed       chan struct{}
+	done          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 func Open(ctx context.Context, path string, password []byte) (*Manager, error) {

@@ -1,0 +1,64 @@
+package appstorecrypto
+
+import (
+	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
+)
+
+func TestOwnerExportSelectionRequiresExactCleanCurrentReferences(t *testing.T) {
+	ctx, installation, directory := ownerFixture(t)
+	owner := openOwnerFixture(t, ctx, installation, directory)
+	object, err := owner.Add("text/plain", []byte("synthetic owner export value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := owner.Commit(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := commit.Refs[0]
+	binding := func(reference appstoreref.Ref) map[string]vault.SecretBinding {
+		encoded, err := appstoreplaceholder.Encode(reference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]vault.SecretBinding{"alias": {Name: "token", Ref: string(encoded)}}
+	}
+	owner.mu.Lock()
+	selected, err := owner.exportReferences(binding(ref))
+	owner.mu.Unlock()
+	if err != nil || selected["alias"] != ref {
+		t.Fatal("current exact export reference was refused")
+	}
+	version := ref.VersionID()
+	version[0] ^= 128
+	if version == ([16]byte{}) {
+		version[1] = 1
+	}
+	changed, err := appstoreref.New(ref.StoreID(), ref.ObjectID(), version, ref.SnapshotID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.mu.Lock()
+	_, staleErr := owner.exportReferences(binding(changed))
+	_, malformedErr := owner.exportReferences(map[string]vault.SecretBinding{"alias": {Name: "token", Ref: "not a reference"}})
+	owner.mu.Unlock()
+	if staleErr == nil || malformedErr == nil {
+		t.Fatal("export silently used the latest value for another selected reference")
+	}
+	if err := owner.Update(object, []byte("uncommitted replacement")); err != nil {
+		t.Fatal(err)
+	}
+	owner.mu.Lock()
+	_, dirtyErr := owner.exportReferences(binding(ref))
+	owner.mu.Unlock()
+	if dirtyErr == nil {
+		t.Fatal("export included uncommitted owner RAM values")
+	}
+	if err := owner.AppendOwnerExport(ctx, &vault.OwnerExportPlan{}); err == nil {
+		t.Fatal("export accepted an unauthenticated opaque plan")
+	}
+}

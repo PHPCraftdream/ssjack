@@ -102,7 +102,7 @@ def main():
         expect("[Add server]")
         keys("Escape")
         expect("Global secrets")
-        keys("Down", "Down", "Down", "Down", "Enter")
+        keys("Down", "Down", "Down", "Down", "Down", "Enter")
         tmux("wait-for", "finished")
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
