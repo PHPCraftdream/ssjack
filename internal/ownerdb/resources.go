@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
@@ -46,7 +47,10 @@ func openResources(ctx context.Context, link *vault.OwnerStore) (_ *resources, e
 		return nil, errors.New("linked application-store unlock failed")
 	}
 	storeID := r.installation.Header().StoreID()
-	if hex.EncodeToString(storeID[:]) != link.StoreID {
+	actualStore := hex.EncodeToString(storeID[:])
+	if link.StoreID == "" {
+		link.StoreID = actualStore
+	} else if actualStore != link.StoreID {
 		return nil, errors.New("linked application-store identity changed")
 	}
 	dev, ino, err := r.store.Identity()
@@ -113,4 +117,69 @@ func (r *resources) close() {
 	if r.store != nil {
 		r.store.Close()
 	}
+}
+
+// Link authenticates existing installation material before recording its ID.
+func (m *Manager) Link(directory string, master []byte) error {
+	if !appstoreentry.Supported() || len(master) == 0 || len(master) > 16384 {
+		return errors.New("owner-store linking is unsupported or has invalid input")
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil || m.link != nil {
+		return ErrPending
+	}
+	clearLink(m.linking)
+	m.linking = &vault.OwnerStore{Directory: absolute, Master: append([]byte(nil), master...)}
+	m.busy = true
+	m.jobs <- ":link"
+	m.signal()
+	return nil
+}
+
+func (m *Manager) linkStore(ctx context.Context) error {
+	m.mu.Lock()
+	link := copyLink(m.linking)
+	m.mu.Unlock()
+	if link == nil {
+		return ErrPending
+	}
+	defer clearLink(link)
+	resource, err := openResources(ctx, link)
+	if err != nil {
+		return err
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			resource.close()
+		}
+	}()
+	if err := m.db.Apply(func(v *vault.Vault) error { return v.LinkOwnerStore(*link) }); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.link = copyLink(link)
+	clearLink(m.linking)
+	m.linking = nil
+	m.mu.Unlock()
+	m.resources, retained = resource, true
+	return syncDatabase(ctx, m.path, m.db)
+}
+
+// RetryDatabase retries encrypted local persistence, never a remote mutation.
+func (m *Manager) RetryDatabase() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil {
+		return ErrPending
+	}
+	m.busy = true
+	m.jobs <- ":save"
+	m.signal()
+	return nil
 }

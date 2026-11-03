@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/pem"
 	"path/filepath"
 	"testing"
@@ -49,10 +48,6 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	if err := v.SetAccount(server, "second", second); err != nil {
 		t.Fatal(err)
 	}
-	store := initial.StoreID()
-	if err := v.LinkOwnerStore(vault.OwnerStore{Directory: storeDirectory, StoreID: hex.EncodeToString(store[:]), Master: []byte(master)}); err != nil {
-		t.Fatal(err)
-	}
 	encoded, err := appstoreplaceholder.Encode(initial)
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +67,15 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 		t.Fatal(err)
 	}
 	defer manager.Discard()
+	linkMaster := []byte(master)
+	linkErr := manager.Link(storeDirectory, linkMaster)
+	clear(linkMaster)
+	if linkErr != nil {
+		t.Fatal(linkErr)
+	}
+	if err := manager.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.Submit(vault.OwnerChange{Action: "update", AliasID: alias, Name: "initial", PreviousReference: string(encoded), MediaType: "text/plain", Value: []byte("updated owner fixture value")}); err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,13 @@ func (m *Manager) run() {
 			ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
 			var err error
 			switch id {
+			case ":link":
+				err = m.linkStore(ctx)
+			case ":save":
+				err = m.db.Retry()
+				if err == nil {
+					err = syncDatabase(ctx, m.path, m.db)
+				}
 			case ":reconcile":
 				err = m.reconcile(ctx)
 			case ":cancel":

@@ -28,6 +28,7 @@ type Manager struct {
 	path      string
 	db        *vault.Session
 	link      *vault.OwnerStore
+	linking   *vault.OwnerStore
 	pending   *vault.OwnerIntent
 	confirmed *appstorecrypto.SnapshotCommit
 	resources *resources
@@ -239,6 +240,7 @@ func (m *Manager) stop() {
 	<-m.done
 	m.resources.close()
 	clearLink(m.link)
+	clearLink(m.linking)
 	if m.pending != nil {
 		clear(m.pending.Change.Value)
 	}
