@@ -63,7 +63,12 @@ jobs:
           if after.get("charm.land/bubbletea/v2") != "v2.0.10":
               raise SystemExit("Bubble Tea pin mismatch")
           PY
-      - name: Collect exact added-module license sources for review
+      - name: Collect linked framework inventory for every release target
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go list -mod=readonly -deps -json ./cmd/ssjack charm.land/bubbletea/v2 > "$RUNNER_TEMP/linked-${target%/*}-${target#*/}.json"
+          done
+      - name: Collect exact module license sources for review
         shell: bash
         run: |
           python3 - <<'PY'
@@ -84,11 +89,8 @@ jobs:
                   text = text[length:]
               return result
 
-          before = records("before-modules.json")
           added = []
           for name, item in sorted(records("after-modules.json").items()):
-              if name in before:
-                  continue
               directory = Path(item["Dir"])
               sources = sorted(path for path in directory.iterdir()
                                if path.is_file() and path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING")))
@@ -119,5 +121,6 @@ jobs:
             go.sum
             ${{ runner.temp }}/after-modules.json
             ${{ runner.temp }}/added-module-licenses.json
+            ${{ runner.temp }}/linked-*.json
           if-no-files-found: error
           retention-days: 7
