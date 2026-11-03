@@ -158,13 +158,20 @@ func TestOwnerEditorRefusesInvalidValuesWithoutMutation(t *testing.T) {
 	for _, input := range []struct {
 		media string
 		value []byte
-	}{{"invalid", []byte("value")}, {"text/plain", make([]byte, maxRAMSecretSize+1)}} {
+	}{{"invalid/type/extra", []byte("value")}, {"text/plain", make([]byte, maxRAMSecretSize+1)}} {
 		if _, err := owner.Add(input.media, input.value); err == nil {
 			t.Fatal("invalid owner object was accepted")
 		}
 	}
 	if len(owner.Objects()) != 0 {
 		t.Fatal("invalid owner input changed the object set")
+	}
+	validID, err := owner.Add("opaque", []byte("valid media label"))
+	if err != nil {
+		t.Fatal("owner editor narrowed the existing media-label grammar")
+	}
+	if err := owner.Remove(validID); err != nil {
+		t.Fatal(err)
 	}
 	if err := owner.Update([16]byte{1}, []byte("value")); err == nil {
 		t.Fatal("missing object update was accepted")
