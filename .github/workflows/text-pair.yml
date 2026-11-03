@@ -1,0 +1,60 @@
+name: Pinned Clawwright text pair
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing ssjack source to verify
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      source_ref:
+        description: Existing ssjack source to verify
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CLAWWRIGHT_COMMIT: 765efb5eb33934c189bf372a8464e31e2ae9421f
+
+jobs:
+  pair:
+    name: Actual Clawwright keeper SSH round trip
+    runs-on: ubuntu-latest
+    container: golang:1.26.0
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: PHPCraftdream/clawwright
+          ref: ${{ env.CLAWWRIGHT_COMMIT }}
+          path: clawwright-pair
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Prepare isolated orchestration dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/clawwright-pair"
+          npm ci --prefix clawwright-pair
+      - name: Require actual registered CLI and private keeper round trip
+        env:
+          SSJACK_CLAWWRIGHT_PAIR_ROOT: ${{ github.workspace }}/clawwright-pair
+          EXPECTED_CLAWWRIGHT_COMMIT: ${{ env.CLAWWRIGHT_COMMIT }}
+        run: python3 scripts/ci/text_pair_scoped.py

@@ -190,3 +190,8 @@ jobs:
           CGO_ENABLED: '0'
           SSJACK_TEST_FULL_KDF: '1'
         run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./cmd/ssjack
+
+  text-pair:
+    uses: ./.github/workflows/text-pair.yml
+    with:
+      source_ref: ${{ inputs.source_ref || github.sha }}

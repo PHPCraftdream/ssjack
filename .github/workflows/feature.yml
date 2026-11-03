@@ -136,3 +136,9 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
       - name: Check exact release dependency and notice policy (factual source consistency only)
         run: python3 scripts/check_licenses.py
+
+  text-pair:
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
+    uses: ./.github/workflows/text-pair.yml
+    with:
+      source_ref: ${{ github.sha }}

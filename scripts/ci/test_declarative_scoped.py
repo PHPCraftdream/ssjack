@@ -65,6 +65,24 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         planner = (ROOT / "scripts/ci/plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./internal/declarativeslice" in plan["packages"]).lower()', planner)
 
+    def test_text_pair_is_pinned_and_mandatory_in_both_tiers(self):
+        feature = (ROOT / ".github/workflows/feature.yml").read_text(encoding="utf-8")
+        full = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for source in (feature, full):
+            self.assertIn("  text-pair:\n", source)
+            self.assertIn("uses: ./.github/workflows/text-pair.yml", source)
+        workflow = (ROOT / ".github/workflows/text-pair.yml").read_text(encoding="utf-8")
+        self.assertIn("765efb5eb33934c189bf372a8464e31e2ae9421f", workflow)
+        self.assertIn("repository: PHPCraftdream/clawwright", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("python3 scripts/ci/text_pair_scoped.py", workflow)
+        runner = (ROOT / "scripts/ci/text_pair_scoped.py").read_text(encoding="utf-8")
+        self.assertIn("os.geteuid() != 0", runner)
+        self.assertIn("actual != expected", runner)
+        self.assertIn('NAME = "TestClawwrightTextPairConnected"', runner)
+        self.assertIn("^--- SKIP: {NAME}", runner)
+        self.assertIn("^--- PASS: {NAME}", runner)
+
     def test_fixture_request_identifiers_are_exact_16_bytes(self):
         files = (ROOT / "internal/declarativeslice").glob("scoped*_test.go")
         identifiers = []
