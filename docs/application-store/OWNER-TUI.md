@@ -39,6 +39,16 @@ failure or external cancellation attempts a bounded final close and returns an
 error if unresolved state remains. This is not a process-crash durability guarantee
 for unsaved input. There is no implicit discard action.
 
+## Verification paths
+
+Fast CI drives Bubble Tea messages and the actual framework event loop/renderer
+with synthetic input. Full-profile Linux acceptance additionally drives the CLI
+through a real pseudo-terminal and a production-encrypted synthetic database:
+unlock, rename, cancel a credential form, exit, and reopen to verify persistence
+and preservation of both SSH accounts. The driver never prints its terminal
+transcript or places password bytes in arguments, environment variables or files.
+These tests do not exercise real operator databases or servers.
+
 ## Current boundaries
 
 This implementation does not yet include owner export forms, named startup

@@ -153,4 +153,5 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	if err := restarted.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	ownerTerminalAcceptance(t, ctx, path, password, v, server)
 }
