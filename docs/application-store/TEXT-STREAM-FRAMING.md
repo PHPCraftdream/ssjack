@@ -1,7 +1,8 @@
 # Private selected-text v2 framing core
 
-Status: framing implementation only. No v2 HTTP endpoint, grant mode, preparation
-ticket, streaming SSH producer or Clawwright client is delivered by this package.
+Status: framing and incremental template validation only. No v2 HTTP endpoint,
+streaming SSH producer or Clawwright client is delivered by this package. Separate
+crypto/authority modules prepare private tickets, but there is no execution route.
 V1 CLI/transport limits and behavior are unchanged. An operation ID is correlation
 metadata, not authorization or human approval.
 
@@ -35,3 +36,18 @@ are detached or started by this synchronous codec.
 This package must only receive public template bytes or the already-transformed
 private result appropriate to its direction. It does not authorize framing raw
 registered secret values into any model-facing transport or result.
+
+## Preparation API boundary
+
+The incremental template scanner accepts UTF-8 without NUL, preserves scalar
+boundaries and permits reserved `$ssjack` markers only inside exactly selected
+canonical placeholders. It owns bounded lookahead, not a whole-document buffer.
+
+`TextStreamAdapter.Prepare` checks its authenticated v2 grant, fixed file and
+operation identity before reading, then rechecks authority after validation. A
+separate-domain per-capability HMAC covers the metadata binding, template bytes
+and final byte count. Only a random process-local ticket and count are returned;
+the MAC and template content are never returned. At most one ticket is retained,
+with finite expiry and best-effort MAC cleanup on Close. Preparation never calls
+SSH. Ticket consumption, comparison with the execution pass, HTTP framing and
+actual SSH execution still require integration and are not claimed by this API.

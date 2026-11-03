@@ -10,7 +10,8 @@ import (
 )
 
 type TextStreamAdapter struct {
-	adapter *TextAdapter
+	adapter  *TextAdapter
+	prepared *textStreamTicket
 }
 
 func NewTextStreamAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextStreamAdapter, error) {
@@ -53,5 +54,12 @@ func (c *TextStreamAdapter) Close() error {
 	if c == nil || c.adapter == nil {
 		return nil
 	}
-	return c.adapter.Close()
+	err := c.adapter.Close()
+	c.adapter.operationMu.Lock()
+	defer c.adapter.operationMu.Unlock()
+	if c.prepared != nil {
+		clear(c.prepared.mac[:])
+		c.prepared = nil
+	}
+	return err
 }
