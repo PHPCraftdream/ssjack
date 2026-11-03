@@ -122,4 +122,41 @@ func connectedStreamChild(t *testing.T) {
 	if status, reply := post(apptransport.TextStreamExecutePath, encode(header, input)); status != http.StatusOK || reply.Status != "withheld" || target.accepted.Load() != accepted {
 		t.Fatal("stream ticket replay contacted SSH")
 	}
+	server.Close()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err = appstorecrypto.NewTextStreamAdapter(ctx, installation, grant.ID, grant.Profile, credential, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	server, err = apptransport.ListenWithTextStreamAdapter(ctx, grant.Profile, runner, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	bootstrap = server.Bootstrap()
+	tlsConfig, err = wire.ClientTLS(bootstrap.Pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.CloseIdleConnections()
+	client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer client.CloseIdleConnections()
+	header.Ticket = ""
+	status, prepared = post(apptransport.TextStreamPreparePath, encode(header, input))
+	if status != http.StatusOK || prepared.Status != "prepared" || prepared.Ticket == "" || prepared.Bytes != uint64(len(input)) || target.accepted.Load() != accepted {
+		t.Fatal("second preparation failed or contacted SSH")
+	}
+	header.Ticket = prepared.Ticket
+	input[0] = 'L'
+	status, delivered = post(apptransport.TextStreamExecutePath, encode(header, input))
+	if status != http.StatusOK || delivered.Status != "unknown" || target.accepted.Load() <= accepted {
+		t.Fatal("changed second-pass source was not unknown after SSH dispatch")
+	}
+	accepted = target.accepted.Load()
+	if status, reply := post(apptransport.TextStreamExecutePath, encode(header, input)); status != http.StatusOK || reply.Status != "withheld" || target.accepted.Load() != accepted {
+		t.Fatal("changed-source ticket was reusable")
+	}
 }
