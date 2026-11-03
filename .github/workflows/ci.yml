@@ -1,8 +1,13 @@
-name: CI
+name: Full sprint CI
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing ref to verify at sprint completion
+        required: false
+        type: string
+        default: ''
   workflow_call:
     inputs:
       source_ref:
@@ -93,6 +98,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  licenses:
+    name: License policy audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify CI selection regressions
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Exercise fail-closed audit rejection cases
+        run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
+      - name: Check exact release dependency and notice policy (factual source consistency only)
+        run: python3 scripts/check_licenses.py
+
   race:
     name: Go race detector
     runs-on: ubuntu-latest
@@ -109,6 +132,47 @@ jobs:
           CGO_ENABLED: '1'
         run: go test -mod=readonly -race -count=1 -timeout 180s . ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
 
+  scoped-appstore:
+    name: Scoped app-store CLI acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run scoped CLI acceptance with private overlay
+        env:
+          CGO_ENABLED: '1'
+        run: python3 scripts/ci/appstore_scoped.py
+
+  delivery-root:
+    name: Root confidential-delivery acceptance
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.26.0
+      options: --user 0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Python for scoped runner
+        run: |
+          apt-get update
+          apt-get install -y python3
+      - name: Public confidential-delivery acceptance
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 scripts/ci/delivery_scoped.py
+      - name: Connected text-adapter acceptance
+        run: python3 scripts/ci/text_adapter_scoped.py
+
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
     runs-on: ubuntu-latest
@@ -121,8 +185,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Verify production vault encryption and reload
+      - name: Verify production vault and app-store master profiles
         env:
           CGO_ENABLED: '0'
           SSJACK_TEST_FULL_KDF: '1'
-        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile
+        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./cmd/ssjack
+
+  text-pair:
+    uses: ./.github/workflows/text-pair.yml
+    with:
+      source_ref: ${{ inputs.source_ref || github.sha }}

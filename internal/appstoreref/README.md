@@ -1,0 +1,11 @@
+# Exact application-store references
+
+`Ref` is an internal nominal value for the proposed tuple `(store_id, object_id, version_id, snapshot_id)`. `New` requires four nonzero 16-byte IDs, copies them by value, and returns a zero Ref plus `ErrInvalid` on failure. Fields are private and ID accessors return array copies. The zero Ref is invalid. A structurally valid Ref is not evidence that any snapshot or object exists.
+
+No text, JSON, URI or placeholder grammar is defined or implemented here. Generic JSON encoding is not a reference codec. There is no implicit current snapshot, latest version, omitted-field default, random ID generation, migration or reference rewriting.
+
+`FindMetadata` takes a Ref and a structurally admitted `appstorecatalog.Catalog`. It rejects invalid values, requires the exact store and snapshot IDs, then matches the complete object/version pair. `ErrScope` and `ErrNotFound` return a zero Entry, never metadata from another scope or version. Matching scans at most the catalog's 16383 entries and copies only bounded metadata. It does not read object bytes or a file, select a path, follow another snapshot, call an anchor, unlock a master, or perform KDF/AEAD operations.
+
+Metadata matching is NOT secret resolution, membership in an authenticated store, authorization or a bearer capability. Both catalog and public header admission remain unauthenticated. Historical resolution additionally requires a trusted captured expected snapshot hash; it must never use the current anchor tuple as the historical expectation. Nothing here establishes that hash, parent identity, retention, immutable content, version freshness or no resurrection. A future approved consumer/sink must enforce authenticated snapshot/context and policy before release. No model-facing get/resolve endpoint or MCP tool is introduced.
+
+Tests cover each mandatory field, tuple and copy ownership, full-ID equality, multiple exact versions, shared version IDs across different objects, missing-version behavior, cross-store/snapshot rejection, swapped identities, empty/invalid catalogs and zero metadata on errors. Tests were authored but not run locally; public GitHub CI supplies execution evidence. Local work ran formatting only. SSH interfaces and the mandatory four independent 1-GiB Argon2id derivations/1000 AES data layers are unchanged.

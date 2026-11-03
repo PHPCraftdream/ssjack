@@ -1,0 +1,63 @@
+//go:build !linux || !amd64
+
+package declarativeslice
+
+import (
+	"context"
+	"errors"
+	"io"
+
+	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/declarativeschemas"
+)
+
+var ErrInvalid = errors.New("invalid declarative slice request")
+
+type Session struct{}
+type PlanInput struct {
+	Target     string         `json:"target"`
+	DriverID   string         `json:"driver_id"`
+	Kind       string         `json:"kind"`
+	SchemaID   string         `json:"schema_id"`
+	ResourceID string         `json:"resource_id"`
+	Desired    map[string]any `json:"desired"`
+	RequestID  string         `json:"request_id"`
+}
+type PlanResult struct {
+	PlanID       string   `json:"plan_id"`
+	Digest       string   `json:"digest"`
+	ExpiresAt    string   `json:"expires_at"`
+	Effects      []Effect `json:"effects"`
+	Precondition *string  `json:"precondition"`
+}
+type Effect struct {
+	Class       string `json:"class"`
+	SummaryID   string `json:"summary_id"`
+	Destructive bool   `json:"destructive"`
+}
+type ApplyInput struct {
+	PlanID    string `json:"plan_id"`
+	RequestID string `json:"request_id"`
+}
+type ApplyResult struct {
+	OperationID string `json:"operation_id"`
+	State       string `json:"state"`
+	Delivery    string `json:"delivery,omitempty"`
+}
+type ContractInfo struct{ Target, Kind, DesiredSchemaID, DesiredSchemaSHA256, ProjectionSchemaID, ProjectionSchemaSHA256 string }
+
+func New() (*Session, error) { return nil, ErrInvalid }
+func NewDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref) (*Session, error) {
+	return nil, ErrInvalid
+}
+func NewTextDelivery(context.Context, *appstorecrypto.Installation, appstoreref.Ref, io.Reader, bool) (*Session, error) {
+	return nil, ErrInvalid
+}
+func readTextSelection(io.Reader) ([]byte, error)                   { return nil, ErrInvalid }
+func (*Session) IsDelivery() bool                                   { return false }
+func (*Session) Close() error                                       { return ErrInvalid }
+func (*Session) Describe() ([]declarativeschemas.Tool, error)       { return nil, ErrInvalid }
+func (*Session) Plan(context.Context, []byte) (PlanResult, error)   { return PlanResult{}, ErrInvalid }
+func (*Session) Apply(context.Context, []byte) (ApplyResult, error) { return ApplyResult{}, ErrInvalid }
+func Contract() ContractInfo                                        { return ContractInfo{} }

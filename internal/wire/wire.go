@@ -109,6 +109,29 @@ func Encode(value any) (string, error) {
 	return text, nil
 }
 
+func DecodeStrict(data string, value any, allowed ...string) error {
+	if !utf8.ValidString(data) {
+		return errors.New("invalid Ktav arguments")
+	}
+	parsed, err := pure.Loads(data)
+	if err != nil {
+		return errors.New("invalid Ktav arguments")
+	}
+	fields, ok := parsed.(map[string]any)
+	if !ok || len(fields) != len(allowed) {
+		return errors.New("invalid Ktav arguments")
+	}
+	for _, key := range allowed {
+		if _, ok := fields[key]; !ok {
+			return errors.New("invalid Ktav arguments")
+		}
+	}
+	if pure.LoadsInto(data, value) != nil {
+		return errors.New("invalid Ktav arguments")
+	}
+	return nil
+}
+
 func Decode(data string, value any) error {
 	if !utf8.ValidString(data) || pure.LoadsInto(data, value) != nil {
 		return errors.New("invalid Ktav arguments")

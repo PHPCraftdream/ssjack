@@ -1,6 +1,6 @@
 # Third-party notices
 
-The ssjack dual license applies to project-owned material, not these third-party components. The following license texts and copyright notices are retained for source and binary redistribution. They are also embedded in the CLI and available through `ssjack --licenses`. Versions below match the pinned module/toolchain inputs; do not update dependency versions merely to update this file.
+The project-owned material is offered under the alternative license expression MIT OR Apache-2.0; recipients may choose either project license. This choice does not replace third-party license terms, which may be dual, multiple, or include additional grants; each component's terms continue to apply independently. The following license texts and copyright notices are retained for source and binary redistribution. They are also embedded in the CLI and available through `ssjack --licenses`. Versions below match the pinned module/toolchain inputs; do not update dependency versions merely to update this file.
 
 ## Ktav pure-Go implementation
 
@@ -134,6 +134,7 @@ These components have the same Go Authors license text, reproduced once below:
 - golang.org/x/crypto v0.53.0: https://github.com/golang/crypto/blob/v0.53.0/LICENSE
 - golang.org/x/sys v0.46.0: https://github.com/golang/sys/blob/v0.46.0/LICENSE
 - golang.org/x/term v0.44.0: https://github.com/golang/term/blob/v0.44.0/LICENSE
+- golang.org/x/text v0.38.0: https://github.com/golang/text/blob/v0.38.0/LICENSE
 
 ```text
 Copyright 2009 The Go Authors.
@@ -165,9 +166,8 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Additional Go patent grant
+The Go runtime and the four Go extended libraries above also ship this identical additional grant. Sources: https://github.com/golang/go/blob/go1.26.0/PATENTS, https://github.com/golang/crypto/blob/v0.53.0/PATENTS, https://github.com/golang/sys/blob/v0.46.0/PATENTS, https://github.com/golang/term/blob/v0.44.0/PATENTS, and https://github.com/golang/text/blob/v0.38.0/PATENTS. The cached x/text v0.38.0 module LICENSE and PATENTS bytes match the recorded hashes; pinned upstream LICENSE and PATENTS bytes and the sum.golang.org module checksum were independently compared (see docs/LICENSE-COMPLIANCE.md). The archived notice blocks are checked against these source digests by CI; factual source matching is not legal approval.
 
-The Go runtime and the three Go extended libraries above also ship this identical additional grant. Sources: the `PATENTS` files at their pinned refs (go1.26.0, v0.53.0, v0.46.0, and v0.44.0).
 
 ```text
 Additional IP Rights Grant (Patents)

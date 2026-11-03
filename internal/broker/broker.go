@@ -226,6 +226,35 @@ func Connect(ctx context.Context, endpoint, pin string, auth wire.Auth) (*Client
 
 func (c *Client) Close() error { return c.conn.Close() }
 
+func (c *Client) CallRaw(ctx context.Context, operation string, input any) (string, error) {
+	data, err := wire.Encode(input)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	c.conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { c.conn.Close() })
+	defer stop()
+	var reply wire.Reply
+	if wire.Write(c.conn, wire.Request{Operation: operation, Data: data}) != nil || wire.Read(c.conn, &reply) != nil {
+		c.conn.Close()
+		return "", errors.New("keeper connection closed; start a new session")
+	}
+	c.conn.SetDeadline(time.Time{})
+	if !reply.OK {
+		return "", errors.New(reply.Error)
+	}
+	return reply.Data, nil
+}
+
 func (c *Client) Call(ctx context.Context, operation string, input, output any) error {
 	data, err := wire.Encode(input)
 	if err != nil {

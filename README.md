@@ -118,7 +118,15 @@ This is not isolation from a targeted process running as the same OS user. Admin
 
 IPC is restricted to canonical `127.0.0.1`/`tcp4`, with numeric-port and loopback-peer checks before authentication, pinned TLS 1.3, and atomic single-use capabilities. SSH outbound is performed only by the keeper for the selected approved credentials. These controls are not an OS firewall.
 
-Commands run with the remote account's permissions. Use least-privilege users and VM/container boundaries. Do not expose administrative Incus sockets to service agents. Closing SSH does not necessarily terminate detached processes. Remote output and deliberately displayed metadata can contain sensitive information; cards are not an immutable audit log.
+The current full MCP `remote_*` tools execute commands with the configured remote SSH principal's authority. A name such as `mcp-agent` does not establish that principal as non-admin: the operator controls server-side sudo rules, groups, socket access and backend memberships, which may permit host-root or equivalent access. For optional Incus routing, the selected host principal must be authorized for the fixed `sudo -n incus exec` operation, and the configured guest user has its guest privileges. Application registration fixes program selection against model substitution in tool arguments, but the admitted Clawwright entry/package and host-side paths remain trusted mutable code, not a sandbox. Admitted `app_exec` commands, including secret-reporting commands, may perform general operations or expose values. Output capture masks only exact child bootstrap-token occurrences; it is not general secret redaction. Safe SSH-key custody and captured output are no guarantee of secret nondisclosure.
+
+A Docker/Incus administrator socket or sudo rule, or an alternate SSH channel available to trusted code, may bypass a future restricted API. A future declarative MCP would be a separate authorization and dispatch surface; it is not a relabeling or restriction of `app_*` or current `remote_*`. Until then, enforce least privilege in the operator-controlled host, guest and backend configuration. Closing SSH does not necessarily terminate detached processes; output and metadata can contain sensitive information. See [scoped application transport](docs/APP-TRANSPORT.md).
+
+## Trusted application text handoff
+
+CLI syntax: `ssjack appstore unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]`. In text mode, a trusted caller passes one inherited descriptor; EOF ends the read, which may block until the writer closes it. An arbitrary `io.Reader` cannot be interrupted by cancellation. The nonempty selection is 1 byte–32 KiB and identifies one exact reference and owner, not 128 mappings. Secret and output are each limited to 1 MiB. The inherited trusted pipe carries plaintext; command arguments, environment, model context, and tool requests/results carry metadata only, never plaintext. On a selected copy, `hydrate` replaces the exact reference with its value; `reverse` replaces the matching value with its placeholder. This does not rewrite live text. Existing finite authorization and fixed approved sink remain required; raw unlock is unchanged.
+
+
 
 ## Verification and documentation
 
@@ -128,6 +136,7 @@ Project validation builds and tests run in GitHub CI, not automatically on a con
 - [Key format and derivation details](docs/KEYS.md)
 - [Cryptographic audit scope and known limitations](docs/AUDIT.md)
 - [Architecture, MCP bootstrap, and updates](SSJACK.md)
+- [Proposed universal declarative contract](docs/declarative/README.md)
 - [SSH interoperability and server trust](SSH.md)
 - [Release assets and installers](docs/RELEASES.md)
 - [UI plugin development](plugins/ssjack-ui/README.md)

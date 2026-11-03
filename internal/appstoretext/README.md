@@ -1,0 +1,9 @@
+# Bounded exact-reference text replacement
+
+`internal/appstoretext.Replace` handles one caller-selected whole byte buffer (maximum 1 MiB) and 1–128 explicit exact mappings. Forward replacement uses each reference's canonical `ssjack-secret-ref-v1` JSON token. Reverse replacement uses only the exact supplied values and references; it never looks up or selects a latest version. No JSON/YAML unescaping, normalization, or other representation detection is performed.
+
+Matching is literal bytes, leftmost-longest, and non-overlapping. Equal references or values are rejected in either direction. Values containing `$ssjack` are conservatively rejected. Reverse mode rejects an input containing a canonical placeholder for one of its registered references, preventing literal-placeholder ambiguity; unknown or malformed `$ssjack` text is not rejected merely for containing the marker, and is preserved unless it exactly matches a mapping value. Replacement output is never rescanned. Newlines, Unicode, and arbitrary non-UTF-8 bytes have no special treatment. Output is capped at 1 MiB.
+
+These rules do not guarantee round trips for arbitrary documents: overlapping values select the leftmost-longest match, and adjacent matches can hydrate into an overlapping value that reverse mode selects instead (for example, mapping `a` to A and `ab` to B means A followed by literal `b` hydrates to `ab`, then reverses as B). Registered literal placeholders are ambiguous in reverse mode. There is no streaming or chunk API; callers must provide the complete buffer, so matches may span any presumed chunk boundary.
+
+The replacement engine grants no authority. Invoke it only inside a finite, operation-bound trusted handoff whose exact Ref, approved operation, recipient, and protected sink are independently authorized. It is not a plaintext getter or destination-selection API. Values must not enter model/MCP context, logs, argv, environments, or incidental staging.

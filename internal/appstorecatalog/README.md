@@ -1,0 +1,15 @@
+# Application-store catalog structure
+
+This isolated package implements only the catalog-structure prerequisite from `docs/application-store/WIRE.md`. It accepts a framing-admitted `appstoreheader.Header` and exactly 1 MiB of catalog bytes. Neither input is authenticated by this package. It performs no KDF, AEAD, final transcript verification, file I/O, nonce reservation, history lookup, object-byte release or SecretRef resolution. It does not wire a store, consumer or MCP tool.
+
+`Parse` requires `SSCAT001`, matching store/snapshot IDs, count 0..16383 and the exact fixed 64-byte entry construction. Nonzero object/version IDs must be strictly ordered by their combined 32-byte key; equal pairs reject. The same object may have different ordered versions, and a version ID may occur for distinct objects. The parser cannot prove historical version freshness, byte identity with a parent, no resurrection, retention or authority.
+
+Media fields contain 1..15 bytes from lowercase ASCII `[a-z0-9.+-]`, optionally one slash between nonempty components, followed only by zero padding to 16 bytes. A full 16-byte nonzero field is invalid, including conventional media strings longer than this proposed field permits. All unused catalog tail bytes must be zero.
+
+Entry offsets are relative to the payload after the catalog, not chunk indices or file offsets. Starting at cursor zero, each entry's offset must equal the cursor and its length must fit in the remaining declared payload before addition. Empty objects consume no bytes and use that same cursor. The final cursor must equal `header.PlaintextSize()-1048576`. Gaps, overlap, overrun, under-coverage and wrapping uint64 ranges reject. Chunk boundaries do not partition objects.
+
+Only fixed-size input is copied before validation; entry allocation follows the count cap. Work is bounded by one catalog and at most 16383 entries, never by a claimed payload size. The temporary input copy is cleared best-effort; no guaranteed runtime erasure is claimed. `Catalog` and `Entry` fields are private; entries and ID arrays are returned as copies. A zero Catalog is invalid; errors return a zero Catalog and `ErrInvalid` without partial metadata.
+
+Returned metadata is not an authenticated snapshot or permission to expose anything to a model. A future caller must verify every chunk and final tag/transcript, exact spans and the authenticated anchor/context, then enforce consumer policy before release. Four sequential independent 1-GiB Argon2id derivations, 1000 AES-256-GCM layers per data/final record, writer serialization and production operation limits remain separate unimplemented requirements. SSH formats are unchanged.
+
+Independent fixtures cover ordered versions, empty entries, all spans and media rules, a wraparound witness that naive summation would admit, the maximum catalog count, 1-TiB metadata without payload allocation, and ownership of returned values. Tests are authored but not executed locally; public GitHub CI supplies execution evidence. Only formatting is permitted locally.

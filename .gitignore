@@ -19,3 +19,7 @@
 *.ssjack.ktav.pub
 *.ssjack.ktav.lock
 .ssjack-vault-*
+
+# Isolated task worktrees and local rush control files.
+/worktrees/
+/.rush/
