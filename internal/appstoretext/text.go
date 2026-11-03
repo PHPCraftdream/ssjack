@@ -29,30 +29,12 @@ type Mapping struct {
 // unknown and malformed marker text is preserved byte-for-byte. Bytes are literal,
 // including arbitrary bytes, newlines, and UTF-8, with no escape syntax.
 func Replace(input []byte, mappings []Mapping, reverse bool) ([]byte, error) {
-	if len(input) > MaxText || len(mappings) == 0 || len(mappings) > MaxMappings {
+	if len(input) > MaxText {
 		return nil, ErrInvalid
 	}
-	placeholders := make([][]byte, len(mappings))
-	tokens := make([][]byte, len(mappings))
-	for i, m := range mappings {
-		if !m.Reference.Valid() || len(m.Value) == 0 || len(m.Value) > MaxText || bytes.Contains(m.Value, []byte("$ssjack")) {
-			return nil, ErrInvalid
-		}
-		placeholder, err := appstoreplaceholder.Encode(m.Reference)
-		if err != nil {
-			return nil, ErrInvalid
-		}
-		placeholders[i] = placeholder
-		if reverse {
-			tokens[i] = m.Value // Borrowed only for this synchronous call.
-		} else {
-			tokens[i] = placeholder
-		}
-		for j := 0; j < i; j++ {
-			if m.Reference == mappings[j].Reference || bytes.Equal(m.Value, mappings[j].Value) {
-				return nil, ErrInvalid
-			}
-		}
+	placeholders, tokens, err := prepareMappings(mappings, reverse)
+	if err != nil {
+		return nil, err
 	}
 	if reverse {
 		for _, placeholder := range placeholders {
@@ -91,4 +73,32 @@ func Replace(input []byte, mappings []Mapping, reverse bool) ([]byte, error) {
 		at += len(tokens[best])
 	}
 	return out, nil
+}
+
+func prepareMappings(mappings []Mapping, reverse bool) ([][]byte, [][]byte, error) {
+	if len(mappings) == 0 || len(mappings) > MaxMappings {
+		return nil, nil, ErrInvalid
+	}
+	placeholders, tokens := make([][]byte, len(mappings)), make([][]byte, len(mappings))
+	for i, m := range mappings {
+		if !m.Reference.Valid() || len(m.Value) == 0 || len(m.Value) > MaxText || bytes.Contains(m.Value, []byte("$ssjack")) {
+			return nil, nil, ErrInvalid
+		}
+		placeholder, err := appstoreplaceholder.Encode(m.Reference)
+		if err != nil {
+			return nil, nil, ErrInvalid
+		}
+		placeholders[i] = placeholder
+		if reverse {
+			tokens[i] = m.Value // Borrowed only for this synchronous call.
+		} else {
+			tokens[i] = placeholder
+		}
+		for j := 0; j < i; j++ {
+			if m.Reference == mappings[j].Reference || bytes.Equal(m.Value, mappings[j].Value) {
+				return nil, nil, ErrInvalid
+			}
+		}
+	}
+	return placeholders, tokens, nil
 }
