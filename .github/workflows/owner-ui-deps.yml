@@ -89,16 +89,22 @@ jobs:
           for name, item in sorted(records("after-modules.json").items()):
               if name in before:
                   continue
-              source = Path(item["Dir"]) / "LICENSE"
+              directory = Path(item["Dir"])
+              sources = sorted(path for path in directory.iterdir()
+                               if path.is_file() and path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING")))
+              if not sources:
+                  raise SystemExit("No upstream license source for " + name)
+              source = next((path for path in sources if path.name == "LICENSE"), sources[0])
               raw = source.read_bytes().decode("utf-8")
               normalized = raw.replace("\r\n", "\n").strip()
-              additional = {}
+              additional = {path.name: path.read_bytes().decode("utf-8")
+                            for path in sources if path != source}
               for filename in ("PATENTS", "NOTICE", "COPYRIGHT"):
                   extra = Path(item["Dir"]) / filename
                   if extra.is_file():
                       additional[filename] = extra.read_bytes().decode("utf-8")
               added.append({"additional": additional, "path": name, "version": item["Version"],
-                            "license_file": "LICENSE", "text": raw,
+                            "license_file": source.name, "text": raw,
                             "source_sha256": hashlib.sha256(raw.encode()).hexdigest(),
                             "license_sha256": hashlib.sha256(normalized.encode()).hexdigest()})
           output = Path(os.environ["RUNNER_TEMP"]) / "added-module-licenses.json"
