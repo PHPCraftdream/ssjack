@@ -91,6 +91,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
+	interactive := flags.Bool("interactive", false, "Open the trusted-terminal owner database editor")
 	version := flags.Bool("version", false, "Print version, commit, and platform")
 	licenses := flags.Bool("licenses", false, "Print project licenses and third-party notices")
 	var profile string
@@ -116,6 +117,18 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 	})
 	command := flags.Args()
+	if *interactive {
+		conflict := len(command) != 0
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name != "interactive" && f.Name != "vault" {
+				conflict = true
+			}
+		})
+		if conflict {
+			return 1, errors.New("--interactive accepts only --vault and no command")
+		}
+		return runInteractive(ctx, *vaultPath)
+	}
 	if (metadataSupplied || policySupplied || identitySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
 		return 1, errors.New("--enrollment-metadata, --policy-snapshot, and --enrollment-identity are only available for declarative run")
 	}

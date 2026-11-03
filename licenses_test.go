@@ -40,6 +40,19 @@ func TestNoticesMatchLinkedModuleLicenses(t *testing.T) {
 		Path, Version, Dir string
 		Main               bool
 	}
+	policyBytes, err := os.ReadFile("license-policy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		Modules map[string]struct {
+			Version     string `json:"version"`
+			LicenseFile string `json:"license_file"`
+		} `json:"modules"`
+	}
+	if err := json.Unmarshal(policyBytes, &policy); err != nil {
+		t.Fatal(err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(output))
 	seen := make(map[string]bool)
 	for {
@@ -59,7 +72,11 @@ func TestNoticesMatchLinkedModuleLicenses(t *testing.T) {
 		if !strings.Contains(thirdPartyNotices, m.Path+" "+m.Version) {
 			t.Fatalf("unlisted linked module: %s %s", m.Path, m.Version)
 		}
-		content, err := os.ReadFile(filepath.Join(m.Dir, "LICENSE"))
+		entry, exists := policy.Modules[m.Path]
+		if !exists || entry.Version != m.Version || entry.LicenseFile == "" || filepath.Base(entry.LicenseFile) != entry.LicenseFile {
+			t.Fatalf("missing exact license-file policy: %s", m.Path)
+		}
+		content, err := os.ReadFile(filepath.Join(m.Dir, entry.LicenseFile))
 		if err != nil {
 			t.Fatalf("read pinned module license %s: %v", m.Path, err)
 		}
