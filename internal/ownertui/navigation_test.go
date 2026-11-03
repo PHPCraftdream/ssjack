@@ -22,6 +22,39 @@ func TestNavigationKeepsServerSecretScopesSeparate(t *testing.T) {
 	}
 }
 
+func TestNamedStartupOpensOnlyTheSelectedServerOrAccount(t *testing.T) {
+	b := &fakeBackend{metadata: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{
+		{ID: "first", Name: "production", Accounts: []vault.AccountMetadata{{Name: "deploy"}, {Name: "maintenance"}}},
+		{ID: "second", Name: "other", Accounts: []vault.AccountMetadata{{Name: "deploy"}}},
+	}}}
+	m := testModel(b)
+	if err := m.Select("production", "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if m.at.server != "first" || m.at.account != "maintenance" || m.at.screen != accountScreen {
+		t.Fatal("startup selection crossed the server/account scope")
+	}
+	m.back()
+	if m.at.screen != serverScreen || m.at.server != "first" {
+		t.Fatal("selected account lost its parent server")
+	}
+	m.back()
+	m.back()
+	before := m.at
+	if err := m.Select("missing", "deploy"); err == nil || m.at != before {
+		t.Fatal("unknown startup server silently fell back")
+	}
+	if err := m.Select("production", "missing"); err == nil || m.at != before {
+		t.Fatal("unknown startup account silently fell back")
+	}
+	if err := m.Select("production", ""); err != nil || m.at.screen != serverScreen {
+		t.Fatal("interactive server selection did not expose its explicit account list")
+	}
+	if b.edits != 0 || b.submissions != 0 || b.closes != 0 {
+		t.Fatal("startup selection performed a mutation")
+	}
+}
+
 func TestDisplayEscapesTerminalControlSequences(t *testing.T) {
 	value := "user\x1b[31m\nnext"
 	got := escaped(value)

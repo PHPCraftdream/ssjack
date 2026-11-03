@@ -16,7 +16,7 @@ import (
 )
 
 func runRotation(ctx context.Context, path, name string) (int, error) {
-	if err := vault.ValidateName(name); err != nil {
+	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
 	}
 	v, secret, err := openManagedVault(path)
@@ -25,6 +25,10 @@ func runRotation(ctx context.Context, path, name string) (int, error) {
 	}
 	defer clear(secret)
 	defer v.Close()
+	name, err = chooseCredential(v, name)
+	if err != nil {
+		return 1, err
+	}
 	target, exists := v.Targets[name]
 	if !exists {
 		return 1, errors.New("credential record does not exist")

@@ -1,10 +1,48 @@
 package ownertui
 
 import (
+	"errors"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
+
+func (m *Model) Select(serverName, accountName string) error {
+	if serverName == "" {
+		if accountName != "" {
+			return errors.New("account selection requires a named server")
+		}
+		return nil
+	}
+	metadata, err := m.backend.Metadata()
+	if err != nil {
+		return errors.New("cannot load named server metadata")
+	}
+	for _, server := range metadata.Servers {
+		if server.Name != serverName {
+			continue
+		}
+		at := location{screen: serverScreen, server: server.ID}
+		stack := []location{{screen: databaseScreen}, {screen: serversScreen}}
+		if accountName != "" {
+			found := false
+			for _, account := range server.Accounts {
+				if account.Name == accountName {
+					found = true
+				}
+			}
+			if !found {
+				return errors.New("selected named SSH account does not exist")
+			}
+			stack = append(stack, at)
+			at.screen, at.account = accountScreen, accountName
+		}
+		m.metadata, m.at, m.stack, m.cursor = metadata, at, stack, 0
+		return nil
+	}
+	return errors.New("selected named server does not exist")
+}
 
 func (m *Model) describe() string {
 	at := m.at

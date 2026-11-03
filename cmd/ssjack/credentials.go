@@ -15,8 +15,12 @@ func chooseCredential(v *vault.Vault, name string) (string, error) {
 	if name == "" {
 		name = "main"
 	}
-	if err := vault.ValidateName(name); err != nil {
+	server, account, named, err := parseCredentialSelection(name)
+	if err != nil {
 		return "", err
+	}
+	if named {
+		return resolveNamedCredential(v, server, account)
 	}
 	if _, exists := v.Targets[name]; !exists {
 		return "", errors.New("selected profile does not exist; create it with ssjack -p NAME add")
@@ -26,7 +30,7 @@ func chooseCredential(v *vault.Vault, name string) (string, error) {
 
 func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, string, error) {
 	if name != "" {
-		if err := vault.ValidateName(name); err != nil {
+		if err := validateCredentialSelection(name); err != nil {
 			return nil, "", "", err
 		}
 	}

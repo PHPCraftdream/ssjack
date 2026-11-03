@@ -65,7 +65,8 @@ def main():
     try:
         tmux("new-session", "-d", "-s", "owner", "-x", "120", "-y", "40",
              "sh", "-c", 'stty -echo; exec "$@"', "owner-cli", executable,
-             "-test.run=^TestOwnerInteractivePTYChild$", "--", "--interactive", "--vault", database)
+             "-test.run=^TestOwnerInteractivePTYChild$", "--", "--interactive", "--vault", database,
+             "--server", "legacy", "--account", "second")
         owned_pid = int(tmux("display-message", "-p", "-t", "owner", "#{pid}").strip())
         if owned_pid <= 1:
             raise RuntimeError("invalid owned terminal server identity")
@@ -78,9 +79,8 @@ def main():
         expect("Vault secret:")
         paste(password + b"\n")
         expect("owner database")
-        keys("Enter")
-        expect("[Add server]")
-        keys("Down", "Enter")
+        expect('Account "second"')
+        keys("Escape")
         expect("[Rename server]")
         keys("Enter")
         expect("Server name:")

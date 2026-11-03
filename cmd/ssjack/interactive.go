@@ -13,7 +13,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 )
 
-func runInteractive(ctx context.Context, path string) (int, error) {
+func runInteractive(ctx context.Context, path, server, account string) (int, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return 1, errors.New("--interactive requires a trusted input and output terminal")
 	}
@@ -30,6 +30,14 @@ func runInteractive(ctx context.Context, path string) (int, error) {
 		return 1, errors.New("cannot unlock owner database; legacy databases require explicit vault migrate-directory")
 	}
 	model := ownertui.New(ctx, manager)
+	if err := model.Select(server, account); err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if closeErr := manager.Close(closeCtx); closeErr != nil {
+			return 1, errors.New("named selection failed; inspect the saved owner database and pending recovery")
+		}
+		return 1, err
+	}
 	_, runErr := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run()
 	model.ClearInput()
 	closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)

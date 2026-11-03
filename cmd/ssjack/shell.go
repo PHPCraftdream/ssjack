@@ -10,11 +10,10 @@ import (
 	"golang.org/x/term"
 
 	"github.com/PHPCraftdream/ssjack/internal/remote"
-	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runVaultShell(ctx context.Context, path, name string) (int, error) {
-	if err := vault.ValidateName(name); err != nil {
+	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
 	}
 	inputFD, outputFD := int(os.Stdin.Fd()), int(os.Stdout.Fd())

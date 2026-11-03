@@ -19,7 +19,7 @@ func runSafetyCommand(ctx context.Context, path string, args []string) (int, err
 		return runDoctor(ctx, path)
 	}
 	if len(args) == 2 && args[0] == "check" {
-		if err := vault.ValidateName(args[1]); err != nil {
+		if err := validateCredentialSelection(args[1]); err != nil {
 			return 1, err
 		}
 		config, address, name, err := readVaultCredential(path, args[1], "")

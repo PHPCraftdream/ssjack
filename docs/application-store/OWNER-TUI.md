@@ -1,9 +1,15 @@
 # Explicit owner terminal editor
 
 Start the Bubble Tea editor with `ssjack --interactive --vault DATABASE`.
-No command, omitted selectors, and terminal detection never enable it implicitly.
+Use `ssjack --interactive --server production --account deploy --vault DATABASE`
+to open a particular account directly. With only `--server`, the server page
+lists its accounts for explicit navigation. Unknown selectors refuse, and legacy
+`--profile`/`-p` cannot be combined with named server selectors.
+No command, omitted selectors, and terminal detection never enable the editor implicitly.
 Interactive mode requires terminal input and output and refuses command/mode
-combinations before requesting the database password. Legacy databases require
+combinations before requesting the database password. Named selector syntax and
+conflicts are also checked before unlock; actual directory names are resolved only
+after authentication. Legacy databases require
 an explicit `vault migrate-directory NEW_FILE` first; opening this editor does
 not silently migrate or rewrite them.
 
@@ -51,8 +57,8 @@ These tests do not exercise real operator databases or servers.
 
 ## Current boundaries
 
-This implementation does not yet include owner export forms, named startup
-selectors, multiline secret input, or interactive
+This implementation does not yet include owner export forms,
+multiline secret input, or interactive
 secret rename without a value replacement. Existing command paths remain available
 for their documented operations. Connected terminal/process-fault acceptance is a
 separate gate; pure message tests do not establish it. Linked app-store value

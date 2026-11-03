@@ -92,6 +92,8 @@ func run(ctx context.Context, args []string) (int, error) {
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
 	interactive := flags.Bool("interactive", false, "Open the trusted-terminal owner database editor")
+	server := flags.String("server", "", "Select a named server from the directory database")
+	account := flags.String("account", "", "Select a named SSH account on --server")
 	version := flags.Bool("version", false, "Print version, commit, and platform")
 	licenses := flags.Bool("licenses", false, "Print project licenses and third-party notices")
 	var profile string
@@ -117,17 +119,21 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 	})
 	command := flags.Args()
+	selector, named, selectionErr := startupSelection(flags, profile, *server, *account)
+	if selectionErr != nil {
+		return 1, selectionErr
+	}
 	if *interactive {
 		conflict := len(command) != 0
 		flags.Visit(func(f *flag.Flag) {
-			if f.Name != "interactive" && f.Name != "vault" {
+			if f.Name != "interactive" && f.Name != "vault" && f.Name != "server" && f.Name != "account" {
 				conflict = true
 			}
 		})
 		if conflict {
-			return 1, errors.New("--interactive accepts only --vault and no command")
+			return 1, errors.New("--interactive accepts only --vault, --server and --account; no command")
 		}
-		return runInteractive(ctx, *vaultPath)
+		return runInteractive(ctx, *vaultPath, *server, *account)
 	}
 	if (metadataSupplied || policySupplied || identitySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
 		return 1, errors.New("--enrollment-metadata, --policy-snapshot, and --enrollment-identity are only available for declarative run")
@@ -150,6 +156,12 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	if err := vault.ValidateName(profile); err != nil {
 		return 1, err
+	}
+	if named {
+		if *modeFlag != string(broker.ModeFull) || *generatePath != "" || *protectPath != "" || *keyOutput != "" || !namedCommandAllowed(command) {
+			return 1, errors.New("--server/--account select SSH, check, rotate, text-adapter or a full-mode harness; use --interactive for directory editing")
+		}
+		profile = selector
 	}
 	if *generatePath != "" || *protectPath != "" || *keyOutput != "" {
 		if flags.NArg() != 0 {
@@ -289,6 +301,11 @@ func run(ctx context.Context, args []string) (int, error) {
 		runner, streamRunner, targets, err = cliLoadAgentCredentials(*vaultPath, profile)
 		if err != nil {
 			return 1, err
+		}
+		if named {
+			if err := bindNamedApplication(applicationOptions, targets); err != nil {
+				return 1, err
+			}
 		}
 	}
 	var handler broker.Handler
