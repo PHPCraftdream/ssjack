@@ -89,7 +89,7 @@ func runStreamConnected(t *testing.T, mode string, runChild func(*testing.T)) {
 		}
 	}
 	if err := declarativeauthority.RegisterTextStream(grant); err != nil {
-		t.Fatal(err)
+		t.Fatal("register streaming authority:", err)
 	}
 	defer declarativeauthority.RevokeTextStream(grant.ID)
 	if _, err := declarativeauthority.LoadTextAdapter(grant.ID, 65534, time.Now()); err == nil {
