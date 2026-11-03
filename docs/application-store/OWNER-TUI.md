@@ -22,7 +22,9 @@ blank credential keeps its current credential only when the selected authenticat
 kind matches. New key authentication imports a bounded existing private-key file;
 it does not create plaintext staging. Server creation requires independently
 verified bare OpenSSH host keys separated by `|`. No scan or SSH connection is
-performed by these forms. Duplicate account creation refuses rather than replacing
+performed by these forms. Server connection edits update every account together;
+blank replacement host keys retain the verified pins, and public fingerprints
+are displayed in the server view. Duplicate account creation refuses rather than replacing
 an existing account. Existing account names are not renamed through this form.
 
 Secret scope is selected through the tree, not inferred through fallback. Removal
@@ -40,7 +42,7 @@ for unsaved input. There is no implicit discard action.
 ## Current boundaries
 
 This implementation does not yet include owner export forms, named startup
-selectors, server address/host-key editing, multiline secret input, or interactive
+selectors, multiline secret input, or interactive
 secret rename without a value replacement. Existing command paths remain available
 for their documented operations. Connected terminal/process-fault acceptance is a
 separate gate; pure message tests do not establish it. Linked app-store value

@@ -29,7 +29,9 @@ func runInteractive(ctx context.Context, path string) (int, error) {
 	if err != nil {
 		return 1, errors.New("cannot unlock owner database; legacy databases require explicit vault migrate-directory")
 	}
-	_, runErr := tea.NewProgram(ownertui.New(ctx, manager), tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run()
+	model := ownertui.New(ctx, manager)
+	_, runErr := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run()
+	model.ClearInput()
 	closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := manager.Close(closeCtx); err != nil {

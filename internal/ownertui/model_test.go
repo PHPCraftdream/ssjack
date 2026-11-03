@@ -2,11 +2,14 @@ package ownertui
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -107,6 +110,92 @@ func TestTeaCloseFailureDoesNotQuitOrDiscard(t *testing.T) {
 	if next != nil || b.closes != 1 || m.working || !strings.Contains(m.message, "Exit stopped") {
 		t.Fatal("failed persistence allowed exit")
 	}
+}
+
+func TestDirectoryFormsPreserveAccountsAndRequireNewAuthMaterial(t *testing.T) {
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := vault.New()
+	defer v.Close()
+	if err := v.UpgradeDirectory(); err != nil {
+		t.Fatal(err)
+	}
+	m := testModel(&fakeBackend{})
+	m.openForm("add-server")
+	for i, text := range []string{"production", "localhost:22", "main", "first", "password", "synthetic-first", "both", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))} {
+		m.form.fields[i].value = []byte(text)
+	}
+	if err := editDirectory(v, m.form); err != nil {
+		t.Fatal(err)
+	}
+	m.back()
+	id, err := v.ServerID("production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.at = location{screen: serverScreen, server: id}
+	m.openForm("add-account")
+	for i, text := range []string{"second", "another", "password", "synthetic-second", "human"} {
+		m.form.fields[i].value = []byte(text)
+	}
+	if err := editDirectory(v, m.form); err != nil {
+		t.Fatal(err)
+	}
+	if err := editDirectory(v, m.form); err == nil {
+		t.Fatal("add silently overwrote an account")
+	}
+	m.back()
+	first, _ := v.AccountProfile(id, "main")
+	second, _ := v.AccountProfile(id, "second")
+	if first == second || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second" {
+		t.Fatal("account form lost or shared another account's credentials")
+	}
+	m.at = location{screen: accountScreen, server: id, account: "second"}
+	m.openForm("edit-account")
+	for i, text := range []string{"second", "changed", "password", "", "human"} {
+		m.form.fields[i].value = []byte(text)
+	}
+	if err := editDirectory(v, m.form); err != nil {
+		t.Fatal(err)
+	}
+	if string(v.Targets[second].Password) != "synthetic-second" || v.Targets[second].User != "changed" {
+		t.Fatal("blank credential did not preserve selected account")
+	}
+	m.form.fields[2].value = []byte("key")
+	if err := editDirectory(v, m.form); err == nil {
+		t.Fatal("authentication switch reused the wrong credential kind")
+	}
+	if err := editServer(v, id, "changed:2222", "invalid pin"); err == nil || v.Targets[first].Address != "localhost:22" || v.Targets[second].Address != "localhost:22" {
+		t.Fatal("invalid server edit partially changed accounts")
+	}
+	if err := editServer(v, id, "changed:2222", ""); err != nil {
+		t.Fatal(err)
+	}
+	if v.Targets[first].Address != "changed:2222" || v.Targets[second].Address != "changed:2222" || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second" {
+		t.Fatal("server edit lost account metadata or credentials")
+	}
+	m.back()
+}
+
+func TestPasteUsesMaskedBoundedFormInput(t *testing.T) {
+	m := testModel(&fakeBackend{})
+	m.openForm("add-secret")
+	m.form.focus = 1
+	m.Update(tea.PasteMsg{Content: "synthetic-paste"})
+	if string(m.form.fields[1].value) != "synthetic-paste" || strings.Contains(m.View().Content, "synthetic-paste") {
+		t.Fatal("paste was lost or exposed")
+	}
+	m.Update(tea.PasteMsg{Content: "\x1b[31m"})
+	if string(m.form.fields[1].value) != "synthetic-paste" {
+		t.Fatal("paste accepted terminal control input")
+	}
+	m.back()
 }
 
 func TestTeaRefreshHasOneScheduledSuccessor(t *testing.T) {

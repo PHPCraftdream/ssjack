@@ -56,6 +56,13 @@ func New(ctx context.Context, manager *ownerdb.Manager) *Model {
 
 func (m *Model) Init() tea.Cmd { return m.refresh() }
 
+func (m *Model) ClearInput() {
+	if m.form != nil {
+		m.form.clear()
+		m.form = nil
+	}
+}
+
 func nextTick() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(at time.Time) tea.Msg { return tickMsg(at) })
 }
@@ -195,7 +202,8 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	var out strings.Builder
 	out.WriteString("ssjack — owner database\n")
-	out.WriteString(m.describe() + "\n")
+	description := m.describe()
+	out.WriteString(description + "\n")
 	if m.form != nil {
 		out.WriteString(escaped(m.form.action) + "\n\n")
 		for i, current := range m.form.fields {
@@ -217,7 +225,7 @@ func (m *Model) View() tea.View {
 		}
 	} else {
 		items := navigation(m.at, m.metadata)
-		rows := m.height - 12
+		rows := m.height - 12 - strings.Count(description, "\n")
 		if rows < 3 {
 			rows = 3
 		}

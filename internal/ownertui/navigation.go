@@ -47,7 +47,7 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 		}
 		return result
 	case serverScreen:
-		result := []item{{label: "[Rename server]", action: "rename-server"}, {label: "[Add SSH account]", action: "add-account"}, {label: "Server secrets", target: location{screen: secretsScreen, server: at.server}}}
+		result := []item{{label: "[Rename server]", action: "rename-server"}, {label: "[Edit server connection]", action: "edit-server"}, {label: "[Add SSH account]", action: "add-account"}, {label: "Server secrets", target: location{screen: secretsScreen, server: at.server}}}
 		for _, server := range metadata.Servers {
 			if server.ID == at.server {
 				for _, account := range server.Accounts {

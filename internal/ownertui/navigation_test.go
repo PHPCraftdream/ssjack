@@ -43,6 +43,19 @@ func TestSecretFieldMasksInputAndClearsCancelledBytes(t *testing.T) {
 	}
 }
 
+func TestInputGrowthClearsSupersededBuffer(t *testing.T) {
+	old := []byte("synthetic-input")
+	f := form{fields: []field{{value: old, secret: true, limit: 4096}}}
+	f.insert("-next")
+	if string(f.fields[0].value) != "synthetic-input-next" || cap(f.fields[0].value) != 4096 {
+		t.Fatal("input did not allocate its bounded owned buffer")
+	}
+	if !bytes.Equal(old, make([]byte, len(old))) {
+		t.Fatal("input growth retained the superseded bytes")
+	}
+	f.clear()
+}
+
 func TestFieldBoundsUnicodeBackspaceAndButtonFocus(t *testing.T) {
 	f := form{fields: []field{{label: "Name", limit: 8}}}
 	f.insert("é")

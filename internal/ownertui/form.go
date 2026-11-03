@@ -40,6 +40,12 @@ func (f *form) insert(text string) {
 	if len(text) > current.limit-len(current.value) {
 		return
 	}
+	if cap(current.value) < current.limit {
+		owned := make([]byte, len(current.value), current.limit)
+		copy(owned, current.value)
+		clear(current.value)
+		current.value = owned
+	}
 	current.value = append(current.value, text...)
 }
 

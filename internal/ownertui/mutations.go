@@ -16,6 +16,9 @@ var errForm = errors.New("invalid owner form")
 
 func editDirectory(v *vault.Vault, f *form) error {
 	text := func(index int) string { return string(f.fields[index].value) }
+	if f.action == "edit-server" {
+		return editServer(v, f.origin.server, text(0), text(1))
+	}
 	if f.action == "rename-server" {
 		return v.RenameServer(f.origin.server, text(0))
 	}
@@ -75,6 +78,35 @@ func editDirectory(v *vault.Vault, f *form) error {
 		return err
 	}
 	return v.SetAccount(f.origin.server, account, target)
+}
+
+func editServer(v *vault.Vault, id, address, replacement string) error {
+	server, exists := v.Servers[id]
+	if !exists {
+		return errForm
+	}
+	var pins []string
+	if replacement != "" {
+		for _, pin := range strings.Split(replacement, "|") {
+			pins = append(pins, strings.TrimSpace(pin))
+		}
+	}
+	updated := make(map[string]vault.Target, len(server.Accounts))
+	for _, profile := range server.Accounts {
+		target := v.Targets[profile]
+		target.Address = address
+		if len(pins) != 0 {
+			target.HostKeys = append([]string(nil), pins...)
+		}
+		if err := target.Validate(); err != nil {
+			return errForm
+		}
+		updated[profile] = target
+	}
+	for profile, target := range updated {
+		v.Targets[profile] = target
+	}
+	return nil
 }
 
 func readPrivateKey(path string) ([]byte, error) {
