@@ -74,7 +74,8 @@ func (r *resources) check() error {
 	if err := r.store.VerifyUnchanged(r.digest); err != nil {
 		return errors.New("linked installation changed during the owner session")
 	}
-	dev, ino, err := r.directory.Identity()
+	// The data transaction may already hold directory.Identity's mutex.
+	dev, ino, err := r.store.Identity()
 	if err != nil || !r.installation.DirectoryMatches(dev, ino) {
 		return errors.New("linked application-store directory changed")
 	}
