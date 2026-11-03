@@ -123,6 +123,21 @@ func (v *Vault) RenameServer(id, name string) error {
 	return v.applyDirectory(copy)
 }
 
+func (v *Vault) RemoveSecretBinding(id string) error {
+	if v.OwnerStore != nil && v.OwnerStore.Pending != nil {
+		return errors.New("resolve the pending owner intent before removing secret bindings")
+	}
+	copy, err := v.directoryCopy()
+	if err != nil {
+		return err
+	}
+	if _, exists := copy.Secrets[id]; !exists {
+		return errors.New("named secret does not exist")
+	}
+	delete(copy.Secrets, id)
+	return v.applyDirectory(copy)
+}
+
 // BindSecret updates exact metadata only; value writes use the app-store lifecycle.
 func (v *Vault) BindSecret(id string, secret SecretBinding) (string, error) {
 	if v.OwnerStore != nil && v.OwnerStore.Pending != nil {

@@ -249,6 +249,9 @@ func appstoreCLIAcceptance(t *testing.T) {
 	if repeatErr == nil && repeatCode == 0 || cursor != 1 {
 		t.Fatal("repeat first-entry put did not refuse before secret prompt")
 	}
+	if os.Getenv("SSJACK_TEST_FULL_KDF") == "1" {
+		ownerDatabaseAcceptance(t, ctx, storeDir, master, ref)
+	}
 }
 
 func sha256Bytes(b []byte) []byte { h := sha256.Sum256(b); return h[:] }
