@@ -66,11 +66,38 @@ backup, editor temporary file, command-line password, environment password, or
 secret-bearing diagnostic is permitted. Existing host-key verification stays
 in force even though SSH server hardening is outside this scope.
 
+## Explicit migration command
+
+```sh
+ssjack --vault old-database.ssjack.ktav vault migrate-directory new-database.ssjack.ktav
+```
+
+The command requests the database password through the trusted hidden terminal
+prompt, verifies the replacement, and requires `MIGRATE DIRECTORY` confirmation.
+It never changes the selected default database or opens an SSH connection.
+Use `--vault new-database.ssjack.ktav` explicitly after migration. The destination
+is staged as ciphertext, checked byte-for-byte, and published exclusively using
+a same-directory hard link; filesystems without hard-link support refuse without
+replacing the source. Publication does not claim directory crash durability.
+
+## Owner-controlled export
+
+Possession of the database password gives its holder ownership of all its
+contents. A future explicit export path must support encrypted export by default
+and deliberate plaintext export to an owner-selected file after warning and
+confirmation. Plaintext output is an authorized final artifact, not permission
+for incidental decrypted staging, MCP disclosure, logs, or model-visible output.
+Actual application-secret export must resolve exact values through the trusted
+owner-unlock path; exporting reference metadata alone is not full secret export.
+The operator owns access control, backups and subsequent handling of an exported
+plaintext file. No real credentials are exported while implementing this work.
+
 ## Implementation status
 
-The first implementation slice adds versioned directory serialization,
-in-memory migration, owned-buffer account edits, explicit-scope reference lookup,
-and password credential representation. It is not yet the interactive editor,
-a published migration command, or complete password-enabled keeper transport.
-Those caller paths and synthetic end-to-end CI acceptance are separate tasks.
-No real user database is migrated by implementing or testing this feature.
+The implemented source includes versioned directory serialization, owned-buffer
+account edits, explicit-scope reference lookup, password representation, and an
+explicit encrypted migration command. The interactive editor, export commands,
+and complete password-enabled keeper transport remain separate tasks. Source
+availability is not end-to-end sprint acceptance; CI receipts determine what
+has been verified. No real user database is migrated by implementing or testing
+this feature.
