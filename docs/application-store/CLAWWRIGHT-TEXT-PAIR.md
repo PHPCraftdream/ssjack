@@ -2,7 +2,7 @@
 
 Status: **AUTHORED-NOT-RUN**. This file records the task260 acceptance design, not a passing result.
 
-The paired workflow checks out Clawwright `765efb5eb33934c189bf372a8464e31e2ae9421f` and the explicitly selected ssjack revision. It prints both exact Git revisions and requires `TestClawwrightTextPairConnected` to report PASS without SKIP. Feature and full workflows both call this gate.
+The paired workflow checks out Clawwright `506ff2a2802bbfa5cf931f735f1b06aaee7f5244` and the explicitly selected ssjack revision. It prints both exact Git revisions and requires `TestClawwrightTextPairConnected` to report PASS without SKIP. Feature and full workflows both call this gate.
 
 ## Observable path
 
@@ -11,6 +11,10 @@ A root test parent registers finite, distinct synthetic grants for a non-root ch
 The authored positive path hydrates two overlapping literal values into the approved target, backs up the selected source into exact canonical versioned placeholders without rewriting the target, changes the target as test setup, and restores the captured copy to the original target bytes. Operator-owned files and bounded CLI diagnostics are checked for the configured synthetic values. Target plaintext is deliberate final-consumer storage, not operator staging. Secret-bearing SSH stderr is deliberately injected and must remain discarded.
 
 Counterfactuals cover an absent adapter context, wrong expected profile, wrong selected file, oversized forward input, missing object/version mappings, equal mapping values, and duplicate approved references. Refused pre-dispatch calls must not reach the SSH target; successful controls and invocation counts accompany the negative cases.
+
+## First composition result
+
+Run `41567828346` on ssjack `989e5cb69dd5665acf5b62d6308e1694636494e8` passed the existing component checks but failed the real CLI composition with Clawwright `765efb5`. The text client advertised only JSON, while pinned MCP SDK v1.0.0 requires both JSON and SSE in the POST Accept header even for its JSON-response mode. Clawwright `506ff2a` fixes that header and adds a request-header regression without relaxing TLS, authority, JSON-body admission or bounds. The updated pin above remains unaccepted until public paired CI succeeds.
 
 ## Boundaries
 

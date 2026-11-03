@@ -72,7 +72,7 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
             self.assertIn("  text-pair:\n", source)
             self.assertIn("uses: ./.github/workflows/text-pair.yml", source)
         workflow = (ROOT / ".github/workflows/text-pair.yml").read_text(encoding="utf-8")
-        self.assertIn("765efb5eb33934c189bf372a8464e31e2ae9421f", workflow)
+        self.assertIn("506ff2a2802bbfa5cf931f735f1b06aaee7f5244", workflow)
         self.assertIn("repository: PHPCraftdream/clawwright", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("python3 scripts/ci/text_pair_scoped.py", workflow)

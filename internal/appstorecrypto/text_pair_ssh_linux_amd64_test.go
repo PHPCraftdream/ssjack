@@ -30,6 +30,7 @@ type pairTarget struct {
 	closed      bool
 	connections map[net.Conn]bool
 	workers     sync.WaitGroup
+	accepted    atomic.Int32
 	writes      atomic.Int32
 	reads       atomic.Int32
 }
@@ -78,6 +79,7 @@ func newPairTarget(t *testing.T, profile string) (*pairTarget, remote.StreamRunn
 				_ = connection.Close()
 				return
 			}
+			target.accepted.Add(1)
 			target.connections[connection] = true
 			target.workers.Add(1)
 			target.mu.Unlock()

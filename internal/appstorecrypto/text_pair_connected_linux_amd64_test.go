@@ -188,11 +188,12 @@ func pairConnectedChild(t *testing.T) {
 		cli.run(t, &bootstrap, "", false, "deploy-text", "--file", target.path, "--template", cli.template, "--profile", "wrong-profile")
 		cli.run(t, &bootstrap, "withheld", false, "deploy-text", "--file", target.path+".wrong", "--template", cli.template, "--profile", base.Profile)
 		oversize := filepath.Join(cli.root, "oversize.txt")
-		if err := os.WriteFile(oversize, bytes.Repeat([]byte{'x'}, (32<<10)+1), 0o600); err != nil {
+		oversizeText := append([]byte(template), bytes.Repeat([]byte{'x'}, (32<<10)+1-len(template))...)
+		if err := os.WriteFile(oversize, oversizeText, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cli.run(t, &bootstrap, "", false, "deploy-text", "--file", target.path, "--template", oversize, "--profile", base.Profile)
-		if target.writes.Load() != 0 || target.reads.Load() != 0 {
+		if target.accepted.Load() != 0 || target.writes.Load() != 0 || target.reads.Load() != 0 {
 			t.Fatal("a refused call contacted the SSH target")
 		}
 		cli.run(t, &bootstrap, "received", true, "deploy-text", "--file", target.path, "--template", cli.template, "--profile", base.Profile)
@@ -238,11 +239,11 @@ func pairConnectedChild(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before := target.writes.Load()
+			before, beforeConnections := target.writes.Load(), target.accepted.Load()
 			bootstrap := pairServer(t, currentInstallation, grant, runner)
 			cli.run(t, &bootstrap, "withheld", false, "deploy-text", "--file", target.path, "--template", selected, "--profile", base.Profile)
 			pairAssertFile(t, target.path, expected)
-			if target.writes.Load() != before {
+			if target.writes.Load() != before || target.accepted.Load() != beforeConnections {
 				t.Fatal("invalid exact mapping reached the SSH target")
 			}
 		})
