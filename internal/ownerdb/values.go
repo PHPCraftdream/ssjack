@@ -19,7 +19,7 @@ type ExportRequest struct {
 }
 
 func (m *Manager) Export(request ExportRequest) error {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("owner export requires a supported private-file runtime")
 	}
 	if request.Destination == "" || len(request.Destination) > 4096 || strings.ContainsAny(request.Destination, "\x00\r\n") || (request.PlaintextConfirmation != "" && request.PlaintextConfirmation != "EXPORT PLAINTEXT") {

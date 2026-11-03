@@ -59,7 +59,7 @@ func TestOwnerExportSelectsAccountsAndExplicitSecretScopes(t *testing.T) {
 	if status := s.Status(); status.Pending || status.Revision != 0 {
 		t.Fatal("export preparation queued database persistence")
 	}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return
 	}
 	path := filepath.Join(t.TempDir(), "selected.zip")

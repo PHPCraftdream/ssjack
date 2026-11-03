@@ -53,12 +53,16 @@ It must never accept this approval through a model-facing call.
 ## Publication boundary
 
 The bounded archive is assembled in RAM, then written only to the explicitly
-selected new final file with exclusive creation and `0600` permissions. There is
+selected new final file with exclusive creation and `0600` permissions on Unix.
+Windows creates the file with a protected owner-only DACL, then verifies the actual
+file-handle owner, inheritance protection and sole allow entry before writing. There is
 no plaintext temporary/staging file or implicit overwrite. Failed publication
 attempts remove only the same file identity created by that operation; callers
 must inspect the destination after errors and must not report success. File sync
-is performed; directory crash durability is not claimed. Windows is refused
-before publication until a verified restrictive ACL path is implemented.
+is performed; directory crash durability is not claimed. Unsupported private-file
+runtimes refuse before publication. Linked application-store collection still
+requires its existing supported Linux runtime; unsupported platforms never omit
+selected values to produce a credential-only artifact silently.
 
 The session API prepares an opaque export plan from explicit server/account IDs
 and an explicit global-secret selection. It returns reference metadata only;
@@ -85,6 +89,5 @@ future latest-state freshness.
 
 Full CI helpers cover actual sealed credentials, wrong-password rejection and
 private app-store value collection, plus plaintext export and overwrite refusal.
-The reader/import interface and verified Windows ACL publication path remain
-unfinished. Existing keyfile tools can decode each authenticated container; the
+The reader/import interface remains unfinished. Existing keyfile tools can decode each authenticated container; the
 actual Ktav directory entry retains the ordinary v2 database shape.

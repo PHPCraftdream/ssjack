@@ -45,7 +45,7 @@ func (a *Archive) write(ctx context.Context, destination string, seal func([]byt
 	if ctx == nil || a == nil || a.closed || len(a.values) != len(a.refs) || destination == "" {
 		return ErrArchive
 	}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("owner export requires a supported private-file runtime")
 	}
 	if err := ctx.Err(); err != nil {
@@ -130,7 +130,7 @@ func (a *Archive) write(ctx context.Context, destination string, seal func([]byt
 }
 
 func publish(ctx context.Context, destination string, encoded []byte) error {
-	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := newPrivateFile(destination)
 	if err != nil {
 		return errors.New("owner export destination must be new and privately writable")
 	}
@@ -149,8 +149,8 @@ func publish(ctx context.Context, destination string, encoded []byte) error {
 			}
 		}
 	}()
-	if identity.Mode().Perm() != 0600 {
-		return errors.New("owner export file permissions are not private")
+	if err := checkPrivateFile(file, identity); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err

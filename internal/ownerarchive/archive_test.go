@@ -65,7 +65,7 @@ func TestArchiveRequiresExactCompleteSelectedValues(t *testing.T) {
 }
 
 func TestPlaintextArchivePreservesBytesAndNeverOverwrites(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		t.Skip("private-file runtime unavailable")
 	}
 	a, ref := fixture(t)
@@ -82,8 +82,17 @@ func TestPlaintextArchivePreservesBytesAndNeverOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0600 {
-		t.Fatal("export permissions are not private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateErr := checkPrivateFile(file, info)
+	file.Close()
+	if privateErr != nil {
+		t.Fatal(privateErr)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
@@ -155,7 +164,7 @@ func TestArchiveCancellationAndCleanup(t *testing.T) {
 }
 
 func TestEncryptedValueFramingPreservesEmptyValues(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		t.Skip("private-file runtime unavailable")
 	}
 	a, ref := fixture(t)

@@ -29,7 +29,7 @@ func TestExportRequestOwnsItsSelectionAndRejectsConcurrentRequests(t *testing.T)
 	m := &Manager{db: &vault.Session{}, jobs: make(chan string, 1), changed: make(chan struct{})}
 	request := ExportRequest{Selection: vault.ExportSelection{Servers: map[string][]string{"server": {"deploy"}}}, Destination: "synthetic-export.zip"}
 	if err := m.Export(request); err != nil {
-		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 			return
 		}
 		t.Fatal(err)

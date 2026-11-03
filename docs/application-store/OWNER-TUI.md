@@ -61,7 +61,9 @@ The Export menu captures a visible server/account/global scope and defaults to
 encrypted output. Plaintext requires a separate format choice and the exact
 `EXPORT PLAINTEXT` confirmation after its disclosure warning. Output is exclusive;
 Cancel does not queue export. See [owner export format](OWNER-EXPORT-FORMAT.md).
-Windows export is refused until verified restrictive ACL publication is available.
+Windows credential export uses a protected owner-only ACL checked before writing.
+Linked value collection retains the Linux-only backend boundary; selected values
+are never silently omitted on other platforms.
 
 This implementation does not yet include
 multiline secret input or interactive
