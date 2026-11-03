@@ -22,21 +22,23 @@ type sessionJob struct {
 
 // Session owns its decrypted state, one bounded save worker and its unlock key.
 type Session struct {
-	mu       sync.Mutex
-	closeMu  sync.Mutex
-	state    *Vault
-	revision uint64
-	saved    uint64
-	saveErr  error
-	closing  bool
-	closed   bool
-	jobs     chan sessionJob
-	changed  chan struct{}
-	done     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	save     func(context.Context, []byte) error
-	release  func()
+	mu          sync.Mutex
+	closeMu     sync.Mutex
+	state       *Vault
+	revision    uint64
+	saved       uint64
+	saveErr     error
+	closing     bool
+	closed      bool
+	jobs        chan sessionJob
+	changed     chan struct{}
+	done        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	save        func(context.Context, []byte) error
+	release     func()
+	saveDigest  func() [sha256.Size]byte
+	savedCipher [sha256.Size]byte
 }
 
 // OpenSession unlocks once. Close or explicit Discard must join its worker.
@@ -48,9 +50,18 @@ func OpenSession(ctx context.Context, path string, password []byte) (*Session, e
 	if err != nil {
 		return nil, err
 	}
-	if v.Version != 2 {
+	return StartSession(ctx, path, v)
+}
+
+// StartSession takes ownership of an unchanged authenticated vault, including on
+// error. Callers must not retain or mutate its buffers after handing it over.
+func StartSession(ctx context.Context, path string, v *Vault) (*Session, error) {
+	if v == nil {
+		return nil, errors.New("database session requires an authenticated vault")
+	}
+	if err := verifySessionAdoption(ctx, path, v); err != nil {
 		v.Close()
-		return nil, errors.New("migrate the database before opening the directory editor")
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		v.Close()
@@ -75,7 +86,12 @@ func OpenSession(ctx context.Context, path string, password []byte) (*Session, e
 		expected = sha256.Sum256(encoded)
 		return nil
 	}
-	return newSession(v, save, key.Close), nil
+	s := newSession(v, save, key.Close)
+	s.mu.Lock()
+	s.savedCipher = expected
+	s.saveDigest = func() [sha256.Size]byte { return expected }
+	s.mu.Unlock()
+	return s, nil
 }
 
 func newSession(state *Vault, save func(context.Context, []byte) error, release func()) *Session {

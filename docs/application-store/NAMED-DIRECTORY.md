@@ -102,6 +102,14 @@ encryption layers. At most one save is active and one latest snapshot is queued;
 obsolete queued snapshots are cleared rather than allowed to overwrite newer
 state. Plaintext snapshots remain in RAM and are cleared after use.
 
+A trusted owner coordinator may hand an already authenticated, unchanged Vault
+to StartSession rather than derive the database key a second time. The handoff
+checks both a private in-memory canonical-payload fingerprint and the encrypted
+file revision; it refuses edits or another writer's replacement before transfer.
+The private plaintext fingerprint is never serialized or returned. A saved
+ciphertext digest can identify a fully persisted file for a later durability
+check; that digest is metadata, not permission or a master-key getter.
+
 Status distinguishes the current revision, the last saved revision, pending
 work, and a save error. Persistence errors pause automatic saves without erasing
 the latest in-memory state. Retry is explicit and never bypasses revision checks

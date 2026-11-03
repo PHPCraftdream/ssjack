@@ -35,6 +35,9 @@ func (s *Session) run() {
 				s.saveErr = err
 			} else {
 				s.saved = job.revision
+				if s.saveDigest != nil {
+					s.savedCipher = s.saveDigest()
+				}
 			}
 			s.signal()
 			s.mu.Unlock()

@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -89,17 +90,37 @@ func TestVaultDirectoryMigrationFullProfile(t *testing.T) {
 func verifySessionFullProfile(t *testing.T, path string, password []byte, server string) {
 	t.Helper()
 	ctx := context.Background()
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	session, err := OpenSession(ctx, path, password)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Discard()
+	unchanged, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(unchanged, original) {
+		t.Fatal("opening the owner session rewrote the database")
+	}
+	digest, err := session.SavedCipherDigest()
+	if err != nil || digest != sha256.Sum256(original) {
+		t.Fatal("session handoff changed or misidentified the loaded ciphertext")
+	}
 	for _, name := range []string{"first-save", "second-save"} {
 		if err := session.Apply(func(v *Vault) error { return v.RenameServer(server, name) }); err != nil {
 			t.Fatal(err)
 		}
 		if err := session.Flush(ctx); err != nil {
 			t.Fatal(err)
+		}
+		encoded, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := session.SavedCipherDigest()
+		if err != nil || digest != sha256.Sum256(encoded) {
+			t.Fatal("saved session revision did not identify the actual ciphertext")
 		}
 	}
 	if err := session.Close(ctx); err != nil {

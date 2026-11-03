@@ -47,6 +47,14 @@ func Load(path string, password []byte) (*Vault, error) {
 		unlocked.Close()
 		return nil, err
 	}
+	canonical, err := marshal(v)
+	if err != nil {
+		unlocked.Close()
+		v.Close()
+		return nil, err
+	}
+	v.payloadHash = sha256.Sum256(canonical)
+	clear(canonical)
 	v.unlocked = unlocked
 	v.revision = sha256.Sum256(encoded)
 	v.format, err = keyfile.Format(encoded)
@@ -99,6 +107,7 @@ func CreateUnlocked(ctx context.Context, path string, v *Vault) error {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	return nil
 }
 
@@ -168,6 +177,7 @@ func SaveContext(ctx context.Context, path string, v *Vault, password []byte) er
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	v.unlocked.Close()
 	v.unlocked = unlocked
 	retained = true
@@ -198,6 +208,7 @@ func SaveUnlocked(ctx context.Context, path string, v *Vault) error {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	return nil
 }
 
