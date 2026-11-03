@@ -51,10 +51,10 @@ func NewReverseTextAdapter(ctx context.Context, installation *Installation, gran
 }
 
 func newTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner, expectedMode string) (*TextAdapter, error) {
-	if (expectedMode != "hydrate-v1" && expectedMode != "reverse-copy-v1") || ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
+	if !validTextAdapterMode(expectedMode) || ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
 		return nil, ErrDelivery
 	}
-	g, err := declarativeauthority.LoadTextAdapter(grantID, os.Geteuid(), time.Now())
+	g, err := loadTextAdapterGrant(expectedMode, grantID, os.Geteuid(), time.Now())
 	if err != nil || g.Mode != expectedMode || g.Profile != profile || g.CredentialSHA256 != credentialDigest || hex.EncodeToString(installation.encodedHash[:]) != g.InstallationSHA256 || installation.Header().StoreID() == ([16]byte{}) || len(g.References) == 0 {
 		return nil, ErrDelivery
 	}
@@ -124,7 +124,7 @@ func (c *TextAdapter) check(ctx context.Context) error {
 	if c == nil || ctx == nil || ctx.Err() != nil || c.isClosed() || c.installation == nil || c.installation.master == nil || c.installation.master.Closed() {
 		return ErrDelivery
 	}
-	g, err := declarativeauthority.LoadTextAdapter(c.grant.ID, os.Geteuid(), time.Now())
+	g, err := loadTextAdapterGrant(c.grant.Mode, c.grant.ID, os.Geteuid(), time.Now())
 	if err != nil || !reflect.DeepEqual(g, c.grant) || g.Profile == "" || g.Revoked {
 		return ErrDelivery
 	}
