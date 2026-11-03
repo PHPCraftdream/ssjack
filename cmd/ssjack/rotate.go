@@ -29,6 +29,9 @@ func runRotation(ctx context.Context, path, name string) (int, error) {
 	if !exists {
 		return 1, errors.New("credential record does not exist")
 	}
+	if len(target.Password) != 0 {
+		return 1, errors.New("key rotation requires a private-key account; password accounts are not contacted")
+	}
 	config, err := target.ClientConfig()
 	if err != nil {
 		return 1, err

@@ -20,7 +20,7 @@ func sshStageError(ctx context.Context, message string) error {
 }
 
 func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, func(), error) {
-	prepared, signed, err := sshauth.ForConnection(config)
+	prepared, used, err := sshauth.ForConnection(config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -37,11 +37,11 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 		conn.Close()
 		return nil, nil, sshStageError(ctx, "SSH authentication or host key verification failed")
 	}
-	if !signed() {
+	if !used() {
 		stop()
 		sshConn.Close()
 		conn.Close()
-		return nil, nil, errors.New("SSH authentication did not use the selected private key; refusing unverified identity")
+		return nil, nil, errors.New("SSH authentication did not use the selected private key or password; refusing unverified identity")
 	}
 	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, channels, requests)

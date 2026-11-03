@@ -135,6 +135,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 			return 1, err
 		}
 		clear(target.PrivateKey)
+		clear(target.Password)
 		v.Targets[name] = updated
 	case "remove":
 		confirmation, err := readSecret("Type the target name to confirm removal: ")
@@ -147,6 +148,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 			return 1, errors.New("removal cancelled")
 		}
 		clear(target.PrivateKey)
+		clear(target.Password)
 		delete(v.Targets, name)
 	}
 	if err := ctx.Err(); err != nil {
@@ -235,6 +237,7 @@ func editVaultTargetWithPrivate(target vault.Target, editing bool, generated []b
 	}
 	if imported != nil {
 		target.PrivateKey = imported
+		target.Password = nil
 	}
 	usage, err := readTerminalInput("Usage both/human/agent (Enter keeps current or defaults to both): ", true)
 	if err != nil {
@@ -248,5 +251,6 @@ func editVaultTargetWithPrivate(target vault.Target, editing bool, generated []b
 		return vault.Target{}, err
 	}
 	target.PrivateKey = append([]byte(nil), target.PrivateKey...)
+	target.Password = append([]byte(nil), target.Password...)
 	return target, nil
 }

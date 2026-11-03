@@ -173,7 +173,7 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 	}
 	var authentication ssh.AuthMethod
 	if len(t.Password) != 0 {
-		authentication = ssh.Password(string(t.Password))
+		authentication = sshauth.Password(t.Password)
 	} else {
 		signer, err := ssh.ParsePrivateKey(t.PrivateKey)
 		if err != nil {

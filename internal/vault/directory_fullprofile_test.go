@@ -113,4 +113,44 @@ func verifySessionFullProfile(t *testing.T, path string, password []byte, server
 	if loaded.Version != 2 || loaded.format != 2 || loaded.Servers[server].Name != "second-save" || len(loaded.Targets) != 2 {
 		t.Fatal("background encrypted saves lost the latest revision or credentials")
 	}
+	verifyPasswordBindingFullProfile(t, path, password, loaded, server)
+}
+
+func verifyPasswordBindingFullProfile(t *testing.T, path string, password []byte, v *Vault, server string) {
+	t.Helper()
+	target := v.Targets["production"]
+	target.PrivateKey, target.Password, target.User = nil, []byte("synthetic SSH password"), "password-user"
+	defer clear(target.Password)
+	if err := v.SetAccount(server, "password", target); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := v.AccountProfile(server, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := v.PasswordCredentialIdentity(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUnlocked(context.Background(), path, v); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	after, err := reopened.PasswordCredentialIdentity(profile)
+	if err != nil || before != after {
+		t.Fatal("password grant binding changed after encrypted reopen")
+	}
+	target.Password = []byte("changed synthetic SSH password")
+	defer clear(target.Password)
+	if err := reopened.SetAccount(server, "password", target); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := reopened.PasswordCredentialIdentity(profile)
+	if err != nil || changed == before {
+		t.Fatal("password change retained the old grant binding")
+	}
 }

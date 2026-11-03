@@ -117,12 +117,37 @@ selection where ambiguous; existing explicit legacy profile selection remains
 compatible. These flags are a UI integration requirement, not yet a claim that
 the editor command is available in this source slice.
 
+## Password authentication and grant binding
+
+Password authentication selects exactly one owned credential. Each SSH dial
+records fresh evidence that the SSH library actually offered that password;
+a successful connection without authentication is not proof of the selected
+account. Host-key verification happens before password authentication. Arbitrary
+untracked authentication methods and fallback mixtures remain refused.
+
+Key-based grant identity remains unchanged. A password-based text grant uses a
+domain-separated HMAC binding under the authenticated vault master, including
+length-delimited selected password and canonical public connection metadata.
+The derived binding key is not returned. The published opaque binding is not an
+unkeyed password hash or an independently usable offline guessing oracle. An
+attacker with the vault master already owns the database; host/runtime/owner
+trust boundaries are unchanged. Changing the selected password, connection
+identity or vault master requires a new grant binding. Ordinary saves retain
+the binding while using fresh encryption nonces. The legacy grant field name
+`credential_sha256` continues to carry a 64-character opaque identifier; it must
+not be interpreted as permission to hash plaintext passwords publicly.
+
+SSH library authentication objects own their credential independently of vault
+buffer cleanup. As with parsed private-key objects, Go/library memory cannot be
+promised to be perfectly wiped; no disk, log, argv or environment copy is added.
+Key-rotation commands reject password-only accounts before contacting a server.
+
 ## Implementation status
 
-The implemented source includes versioned directory serialization, owned-buffer
-account edits, explicit-scope reference lookup, password representation, and an
-explicit encrypted migration command. The interactive editor, export commands,
-and complete password-enabled keeper transport remain separate tasks. Source
-availability is not end-to-end sprint acceptance; CI receipts determine what
-has been verified. No real user database is migrated by implementing or testing
-this feature.
+The source includes directory serialization, account edits, explicit-scope
+reference lookup, encrypted migration, retained-master background sessions and
+selected-password authentication with private grant binding. The interactive
+editor, export commands and full named-account caller acceptance remain separate
+tasks. Source availability is not end-to-end sprint acceptance; CI receipts
+determine what has been verified. No real user database is migrated by
+implementing or testing this feature.

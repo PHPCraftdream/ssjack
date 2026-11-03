@@ -81,7 +81,12 @@ func readVaultTextCredential(path, profile string) (remote.StreamRunner, string,
 	if err != nil {
 		return nil, "", err
 	}
-	digest, err := credentialIdentity(selected, target)
+	var digest string
+	if len(target.Password) != 0 {
+		digest, err = v.PasswordCredentialIdentity(selected)
+	} else {
+		digest, err = credentialIdentity(selected, target)
+	}
 	if err != nil {
 		return nil, "", err
 	}
