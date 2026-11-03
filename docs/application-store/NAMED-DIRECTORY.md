@@ -1,0 +1,76 @@
+# Named server directory and migration contract
+
+This work extends the encrypted credential database. It does not introduce
+additional database owners, an enrollment service, restricted-runner expansion,
+SSH server hardening, synchronization, or native/OpenClaw adoption.
+
+## Ownership and SSH accounts
+
+The person unlocking the database is its administrator. Multiple users of one
+SSH server are modeled as multiple named accounts inside one named server, not
+multiple owners of the database. Each account selects exactly one username and
+one private key or password. Selecting an account is not permission to connect,
+read files, or deliver secrets.
+
+Payload version 1 contains the existing named `targets` credential records.
+Payload version 2 retains those records and adds closed `servers` and `secrets`
+directories. This payload version is independent of the encrypted container
+format. Container encryption and production key derivation remain unchanged.
+
+- Servers have stable random IDs, unique names, and named accounts referring to
+  credential record IDs. Every credential belongs to exactly one account.
+- Accounts of a server share its endpoint and verified host-key set. Different
+  logins can have different credentials, usage restrictions, and SSH policies.
+- Names use the existing case-sensitive 1–64 character ASCII name rules.
+- Renaming a server does not change its ID or the scope of its secrets.
+- The existing 64 KiB credential payload bound remains enforced. Large-file
+  streaming is a separate data path, not an unbounded credential database.
+
+## Named application secrets
+
+The directory contains exact canonical `ssjack-secret-ref-v1` metadata, never a
+second copy of application secret values. Values remain in the encrypted
+versioned application store with its existing authority and transaction rules.
+
+A binding has a stable ID, name, explicit scope, and exact reference. An empty
+server ID means global scope; a nonempty ID selects one existing server. Names
+are unique inside a scope. Global and server-local bindings may share a name,
+but callers must select the scope explicitly: there is no shadowing or implicit
+fallback. One server's local secrets cannot be selected through another server's
+scope. Server-local scope applies to the server, not just one of its SSH logins.
+Existing delivery grants remain necessary; name lookup is not authorization.
+
+Renaming preserves the binding ID and reference. Updating a value must create
+an application-store version before publishing its exact reference in the
+binding. A failed binding update must not erase an old reference. Historical
+placeholders keep their exact versions; they are never reinterpreted as latest.
+
+## Compatibility and migration
+
+Migration is an explicit owner operation, never a startup side effect.
+
+1. Unlock and validate the existing database, including all credential records.
+2. Preserve the source encrypted file. Create a new encrypted destination without
+   overwriting an existing file or weakening its container crypto profile.
+3. Map each legacy profile to a server with the same name and one account named
+   `main`. Preserve credential bytes, username, address, host keys, usage and SSH
+   policy exactly. Do not automatically merge profiles sharing an address.
+4. Reopen the destination and compare every migrated record and directory entry
+   before reporting success. Only then may the owner select the new database.
+5. Retain the old encrypted database for rollback. Old binaries cannot edit the
+   version 2 payload; rollback means using the original version 1 file, not
+   attempting to strip metadata from a newer database.
+
+An interrupted or cancelled migration must not modify the source. No decrypted
+backup, editor temporary file, command-line password, environment password, or
+secret-bearing diagnostic is permitted. Existing host-key verification stays
+in force even though SSH server hardening is outside this scope.
+
+## Implementation status
+
+The first implementation slice adds versioned directory serialization,
+in-memory migration, owned-buffer account edits, explicit-scope reference lookup,
+and password credential representation. It is not yet the interactive editor,
+a published migration command, or complete password-enabled keeper transport.
+Those caller paths and synthetic end-to-end CI acceptance are separate tasks.
+No real user database is migrated by implementing or testing this feature.
