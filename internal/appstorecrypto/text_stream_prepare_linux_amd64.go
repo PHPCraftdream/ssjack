@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"hash"
 	"io"
 	"time"
 
@@ -32,10 +33,9 @@ type textStreamTicket struct {
 	expires   time.Time
 }
 
-func streamTemplateBinding(ctx context.Context, binding *textBinding, base string, input io.Reader, references []appstoreref.Ref) ([sha256.Size]byte, uint64, error) {
-	var result [sha256.Size]byte
-	if ctx == nil || input == nil || binding == nil || !binding.initialized || !digestPattern.MatchString(base) {
-		return result, 0, ErrDelivery
+func newStreamTemplateMAC(binding *textBinding, base string) (hash.Hash, error) {
+	if binding == nil || !binding.initialized || !digestPattern.MatchString(base) {
+		return nil, ErrDelivery
 	}
 	mac := hmac.New(sha256.New, binding.key[:])
 	_, _ = mac.Write([]byte("ssjack/appstorecrypto/private-stream-template/v2\x00"))
@@ -43,14 +43,31 @@ func streamTemplateBinding(ctx context.Context, binding *textBinding, base strin
 	binary.BigEndian.PutUint64(size[:], uint64(len(base)))
 	_, _ = mac.Write(size[:])
 	_, _ = mac.Write([]byte(base))
-	count, err := appstoretextstream.ValidateTemplate(ctx, io.TeeReader(input, mac), references, appstoretextstream.MaxBytes)
-	if err != nil {
-		return result, 0, ErrDelivery
-	}
+	return mac, nil
+}
+
+func finishStreamTemplateMAC(mac hash.Hash, count uint64) [sha256.Size]byte {
+	var size [8]byte
 	binary.BigEndian.PutUint64(size[:], count)
 	_, _ = mac.Write(size[:])
+	var result [sha256.Size]byte
 	copy(result[:], mac.Sum(nil))
-	return result, count, nil
+	return result
+}
+
+func streamTemplateBinding(ctx context.Context, binding *textBinding, base string, input io.Reader, references []appstoreref.Ref) ([sha256.Size]byte, uint64, error) {
+	if ctx == nil || input == nil {
+		return [sha256.Size]byte{}, 0, ErrDelivery
+	}
+	mac, err := newStreamTemplateMAC(binding, base)
+	if err != nil {
+		return [sha256.Size]byte{}, 0, err
+	}
+	count, err := appstoretextstream.ValidateTemplate(ctx, io.TeeReader(input, mac), references, appstoretextstream.MaxBytes)
+	if err != nil {
+		return [sha256.Size]byte{}, 0, ErrDelivery
+	}
+	return finishStreamTemplateMAC(mac, count), count, nil
 }
 
 func (c *TextStreamAdapter) Prepare(ctx context.Context, operationID, file string, input io.Reader) (TextStreamPreparation, error) {

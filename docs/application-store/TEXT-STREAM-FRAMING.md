@@ -49,5 +49,19 @@ separate-domain per-capability HMAC covers the metadata binding, template bytes
 and final byte count. Only a random process-local ticket and count are returned;
 the MAC and template content are never returned. At most one ticket is retained,
 with finite expiry and best-effort MAC cleanup on Close. Preparation never calls
-SSH. Ticket consumption, comparison with the execution pass, HTTP framing and
-actual SSH execution still require integration and are not claimed by this API.
+SSH.
+
+`Execute` consumes a matching ticket once, revalidates authority and captures the
+exact signed/pinned snapshot mappings before runner dispatch. One bounded private
+pipe connects replacement to the fixed SSH runner. The execution input must be an
+owned ReadCloser whose Close interrupts Read; cancellation closes the input and
+pipe, and all pipeline workers are joined before returning. The runner must honor
+its context and consume the complete private input stream. A changed second-pass
+MAC, late authority/snapshot failure, nonzero exit or unconsumed input is unknown
+without a copied result or automatic retry. Only complete EOF, matching private
+MAC/counts, zero exit and final authority/snapshot rechecks can produce received.
+Received still does not assert application adoption or remote durability.
+
+These are internal producer APIs. HTTP framing, CLI registration/startup and the
+Clawwright streaming client are not connected yet. Private pipeline tests are not
+root-granted producer/client pair acceptance.
