@@ -79,4 +79,38 @@ func TestVaultDirectoryMigrationFullProfile(t *testing.T) {
 	if legacy.Version != 1 || !reflect.DeepEqual(v.Targets, legacy.Targets) {
 		t.Fatal("original database cannot be used for rollback")
 	}
+	server, err := migrated.ServerID("production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifySessionFullProfile(t, destination, password, server)
+}
+
+func verifySessionFullProfile(t *testing.T, path string, password []byte, server string) {
+	t.Helper()
+	ctx := context.Background()
+	session, err := OpenSession(ctx, path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Discard()
+	for _, name := range []string{"first-save", "second-save"} {
+		if err := session.Apply(func(v *Vault) error { return v.RenameServer(server, name) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if loaded.Version != 2 || loaded.format != 2 || loaded.Servers[server].Name != "second-save" || len(loaded.Targets) != 2 {
+		t.Fatal("background encrypted saves lost the latest revision or credentials")
+	}
 }

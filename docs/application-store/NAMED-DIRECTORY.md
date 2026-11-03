@@ -92,6 +92,31 @@ owner-unlock path; exporting reference metadata alone is not full secret export.
 The operator owns access control, backups and subsequent handling of an exported
 plaintext file. No real credentials are exported while implementing this work.
 
+## In-memory editing and background persistence
+
+The session backend unlocks the database once and retains its master only for
+that session. Apply validates an owned candidate before changing the in-memory
+state. Invalid or cancelled forms never queue a save. One background worker
+seals snapshots using the retained master, fresh nonces and the unchanged data
+encryption layers. At most one save is active and one latest snapshot is queued;
+obsolete queued snapshots are cleared rather than allowed to overwrite newer
+state. Plaintext snapshots remain in RAM and are cleared after use.
+
+Status distinguishes the current revision, the last saved revision, pending
+work, and a save error. Persistence errors pause automatic saves without erasing
+the latest in-memory state. Retry is explicit and never bypasses revision checks
+against another writer's changes. Close waits for the current revision, joins
+the worker and clears session state/key. A failed or cancelled close keeps the
+session available; abandoning unsaved state requires explicit owner-confirmed
+Discard. No decrypted snapshot is written to a temporary file.
+
+The planned terminal editor must start only with `--interactive`, optionally
+focused by `--server NAME`. Missing arguments, an omitted server and TTY detection
+alone must never open its menus. Normal commands need explicit server/account
+selection where ambiguous; existing explicit legacy profile selection remains
+compatible. These flags are a UI integration requirement, not yet a claim that
+the editor command is available in this source slice.
+
 ## Implementation status
 
 The implemented source includes versioned directory serialization, owned-buffer
