@@ -58,28 +58,32 @@ func credentialIdentity(profile string, target vault.Target) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func readVaultTextCredential(path, profile string) (remote.StreamRunner, string, error) {
+func readVaultTextCredential(path, profile string) (remote.StreamRunner, string, string, error) {
 	secret, err := readSecret("Vault secret: ")
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	v, err := vault.Load(path, secret)
 	clear(secret)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer v.Close()
+	return textCredentialFromVault(v, profile)
+}
+
+func textCredentialFromVault(v *vault.Vault, profile string) (remote.StreamRunner, string, string, error) {
 	selected, err := chooseCredential(v, profile)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	target := v.Targets[selected]
 	if err = target.RequireUsage("agent"); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	config, err := target.ClientConfig()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	var digest string
 	if len(target.Password) != 0 {
@@ -88,13 +92,13 @@ func readVaultTextCredential(path, profile string) (remote.StreamRunner, string,
 		digest, err = credentialIdentity(selected, target)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	runner, err := remote.NewCredentialStreamRunner(selected, target.Address, config)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return runner, digest, nil
+	return runner, selected, digest, nil
 }
 
 func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args []string) (int, error) {
@@ -118,7 +122,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		if len(args) != 1 || rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 			return 1, errors.New("text-adapter identity requires an unlocked vault in a non-root terminal")
 		}
-		_, digest, err := readVaultTextCredential(vaultPath, profile)
+		_, _, digest, err := readVaultTextCredential(vaultPath, profile)
 		if err != nil {
 			return 1, errors.New("cannot derive credential identity")
 		}
@@ -131,7 +135,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	if rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 		return 1, errors.New("text adapter requires a non-root terminal outside broker sessions")
 	}
-	runner, digest, err := readVaultTextCredential(vaultPath, profile)
+	runner, profile, digest, err := readVaultTextCredential(vaultPath, profile)
 	if err != nil {
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}
