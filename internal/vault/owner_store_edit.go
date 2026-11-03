@@ -108,6 +108,41 @@ func (v *Vault) CancelOwnerDraft(id string) error {
 	return nil
 }
 
+// ReopenOwnerDraft requires verified no-commit evidence from the owner runtime.
+// It preserves the input; it does not authorize resubmission by itself.
+func (v *Vault) ReopenOwnerDraft(id, transaction, snapshot string) error {
+	if err := v.validate(); err != nil {
+		return err
+	}
+	if v.OwnerStore == nil || v.OwnerStore.Pending == nil {
+		return errors.New("owner proposal is missing")
+	}
+	pending := *v.OwnerStore.Pending
+	if pending.Phase != "prepared" || pending.ID != id || pending.TransactionID != transaction || pending.SnapshotID != snapshot {
+		return errors.New("owner recovery does not match the prepared intent")
+	}
+	pending.Phase, pending.TransactionID, pending.SnapshotID, pending.PreviousStateHash = "draft", "", "", ""
+	pending.Versions = make(map[string]string)
+	pending.Change.ObjectID = ""
+	if pending.Change.Action != "add" {
+		reference, err := appstoreplaceholder.Parse([]byte(pending.Change.PreviousReference))
+		if err != nil {
+			return err
+		}
+		object := reference.ObjectID()
+		pending.Change.ObjectID = hex.EncodeToString(object[:])
+	}
+	link := *v.OwnerStore
+	link.Pending = &pending
+	candidate := *v
+	candidate.OwnerStore = &link
+	if err := candidate.validate(); err != nil {
+		return err
+	}
+	v.OwnerStore.Pending = &pending
+	return nil
+}
+
 // FinishOwnerChange checks correlation only. The caller must authenticate the
 // actual committed receipt before changing database reference metadata.
 func (v *Vault) FinishOwnerChange(id, transaction, snapshot string, references []appstoreref.Ref) error {

@@ -18,7 +18,27 @@ func (m *Manager) run() {
 			return
 		case id := <-m.jobs:
 			ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
-			err := m.process(ctx, id)
+			var err error
+			switch id {
+			case ":reconcile":
+				err = m.reconcile(ctx)
+			case ":cancel":
+				err = m.cancelDraft(ctx)
+			case ":resume":
+				if m.resources != nil && m.resources.editor != nil {
+					m.resources.editor.Close()
+					m.resources.editor = nil
+				}
+				m.mu.Lock()
+				pendingID := m.pending.ID
+				m.mu.Unlock()
+				err = m.db.Retry()
+				if err == nil {
+					err = m.process(ctx, pendingID)
+				}
+			default:
+				err = m.process(ctx, id)
+			}
 			cancel()
 			m.mu.Lock()
 			m.busy, m.err = false, err

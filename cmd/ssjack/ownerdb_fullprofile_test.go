@@ -126,4 +126,27 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	if err != nil || !bytes.Equal(loaded.Targets[profile].Password, second.Password) {
 		t.Fatal("owner coordination changed the second SSH account's password")
 	}
+	if _, err := loaded.StageOwnerChange(vault.OwnerChange{Action: "add", Name: "unsubmitted", MediaType: "text/plain", Value: []byte("retained restart draft")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.SaveUnlocked(ctx, path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := ownerdb.Open(ctx, path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Discard()
+	if status := restarted.Status(); !status.Pending || status.Busy {
+		t.Fatal("startup resumed a pending owner draft without an explicit action")
+	}
+	if err := restarted.CancelDraft(); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
 }

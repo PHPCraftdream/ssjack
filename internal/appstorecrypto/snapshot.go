@@ -958,6 +958,10 @@ func (s *snapshotWriterState) finishWrite(ctx context.Context, tx *appstorefile.
 	return out, nil
 }
 func (w *SnapshotWriter) Recover(ctx context.Context) (SnapshotCommit, error) {
+	return w.recover(ctx, nil)
+}
+
+func (w *SnapshotWriter) recover(ctx context.Context, expectedOwner *OwnerRecoveryExpectation) (SnapshotCommit, error) {
 	if w == nil || w.state == nil || ctx == nil {
 		return SnapshotCommit{}, ErrSnapshot
 	}
@@ -985,6 +989,11 @@ func (w *SnapshotWriter) Recover(ctx context.Context) (SnapshotCommit, error) {
 	anchor, err := writerRead(ctx, s.transport, s.directory.StoreID())
 	if err != nil {
 		return SnapshotCommit{}, err
+	}
+	if expectedOwner != nil {
+		if err := s.guardOwnerRecovery(ctx, tx, anchor, *expectedOwner); err != nil {
+			return SnapshotCommit{}, err
+		}
 	}
 	anchor, err = writerReconcileReservations(ctx, tx, s.transport, anchor)
 	if err != nil {

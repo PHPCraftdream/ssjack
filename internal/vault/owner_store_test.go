@@ -162,6 +162,26 @@ func TestOwnerStorePreparedRoundtripAndNewAlias(t *testing.T) {
 	}
 }
 
+func TestVerifiedNoCommitRecoveryPreservesTheDraftValue(t *testing.T) {
+	v, _ := ownerStoreFixture(t)
+	operation, err := v.StageOwnerChange(OwnerChange{Action: "add", Name: "token", MediaType: "text/plain", Value: []byte("retained pending value")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.PrepareOwnerChange(operation, ownerID(8), ownerID(7), strings.Repeat("a", 64), ownerID(2), map[string]string{ownerID(2): ownerID(5)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.ReopenOwnerDraft(operation, ownerID(99), ownerID(7)); err == nil || v.OwnerStore.Pending.Phase != "prepared" {
+		t.Fatal("uncorrelated recovery changed the prepared intent")
+	}
+	if err := v.ReopenOwnerDraft(operation, ownerID(8), ownerID(7)); err != nil {
+		t.Fatal(err)
+	}
+	if v.OwnerStore.Pending.Phase != "draft" || v.OwnerStore.Pending.TransactionID != "" || !bytes.Equal(v.OwnerStore.Pending.Change.Value, []byte("retained pending value")) || len(v.Secrets) != 0 {
+		t.Fatal("no-commit recovery lost private input or fabricated a committed alias")
+	}
+}
+
 func TestOwnerStoreRemovalFinalizesWithoutAnotherObject(t *testing.T) {
 	v, _ := ownerStoreFixture(t)
 	old := ownerReferenceText(t, ownerReference(t, 2, 3, 4))
