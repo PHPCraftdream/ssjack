@@ -50,6 +50,26 @@ func validTextAdapterMode(mode string) bool {
 	}
 }
 
+func (c *TextStreamAdapter) MatchScope(profile, file string, references []string) error {
+	if c == nil || c.adapter == nil || c.adapter.grant.Mode != "hydrate-stream-v2" || c.adapter.grant.Profile != profile || c.adapter.grant.File != file || len(references) != len(c.adapter.grant.References) || len(references) == 0 {
+		return ErrDelivery
+	}
+	selected := make(map[string]bool, len(references))
+	for _, ref := range c.adapter.grant.References {
+		selected[ref] = true
+	}
+	for _, ref := range references {
+		if !selected[ref] {
+			return ErrDelivery
+		}
+		delete(selected, ref)
+	}
+	if len(selected) != 0 {
+		return ErrDelivery
+	}
+	return nil
+}
+
 func (c *TextStreamAdapter) Close() error {
 	if c == nil || c.adapter == nil {
 		return nil

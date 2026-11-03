@@ -18,11 +18,6 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoretextstream"
 )
 
-type TextStreamPreparation struct {
-	Ticket string
-	Bytes  uint64
-}
-
 type textStreamTicket struct {
 	id        string
 	operation string
