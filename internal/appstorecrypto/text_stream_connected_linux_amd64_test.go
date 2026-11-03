@@ -76,7 +76,8 @@ func runStreamConnected(t *testing.T, mode string, runChild func(*testing.T)) {
 		}
 	}()
 	var grant declarativeauthority.TextAdapterGrant
-	if err := json.NewDecoder(grantR).Decode(&grant); err != nil {
+	control := json.NewDecoder(grantR)
+	if err := control.Decode(&grant); err != nil {
 		t.Fatal(err)
 	}
 	if grant.RecipientUID != 65534 || grant.Mode != mode {
@@ -96,6 +97,23 @@ func runStreamConnected(t *testing.T, mode string, runChild func(*testing.T)) {
 	}
 	if _, err := io.WriteString(ackW, "1"); err != nil {
 		t.Fatal(err)
+	}
+	for {
+		var command string
+		if err := control.Decode(&command); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if command != "revoke" {
+			t.Fatal("unexpected synthetic authority command")
+		}
+		if err := declarativeauthority.RevokeTextStream(grant.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(ackW, "1"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ackW.Close()
 	if err := child.Wait(); err != nil {

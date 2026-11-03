@@ -47,6 +47,7 @@ func connectedReverseStreamChild(t *testing.T) {
 		{"late-invalid-utf8", []byte{0xff}, false},
 		{"late-nul", []byte{0}, false},
 		{"late-raw-placeholder", []byte(placeholder), false},
+		{"revoked-before-dispatch", []byte(connectedSecret), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append([]byte(nil), prefix...), test.tail...)
@@ -102,6 +103,21 @@ func connectedReverseStreamChild(t *testing.T) {
 			forward.Body.Close()
 			if forward.StatusCode != http.StatusForbidden || target.accepted.Load() != accepted {
 				t.Fatal("reverse grant enabled forward delivery")
+			}
+			if test.name == "revoked-before-dispatch" {
+				if err := json.NewEncoder(grantPipe).Encode("revoke"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.ReadFull(ack, make([]byte, 1)); err != nil {
+					t.Fatal(err)
+				}
+				response := post(apptransport.TextStreamReversePath, header)
+				defer response.Body.Close()
+				var reply apptransport.TextStreamReply
+				if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&reply) != nil || reply.Status != "withheld" || target.accepted.Load() != accepted {
+					t.Fatal("revoked reverse grant dispatched SSH")
+				}
+				return
 			}
 			reads := target.reads.Load()
 			response := post(apptransport.TextStreamReversePath, header)
