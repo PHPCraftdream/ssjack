@@ -63,6 +63,47 @@ jobs:
           if after.get("charm.land/bubbletea/v2") != "v2.0.10":
               raise SystemExit("Bubble Tea pin mismatch")
           PY
+      - name: Collect exact added-module license sources for review
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def records(name):
+              text = (Path(os.environ["RUNNER_TEMP"]) / name).read_text()
+              decoder = json.JSONDecoder()
+              result = {}
+              while text.strip():
+                  text = text.lstrip()
+                  item, length = decoder.raw_decode(text)
+                  if not item.get("Main"):
+                      result[item["Path"]] = item
+                  text = text[length:]
+              return result
+
+          before = records("before-modules.json")
+          added = []
+          for name, item in sorted(records("after-modules.json").items()):
+              if name in before:
+                  continue
+              source = Path(item["Dir"]) / "LICENSE"
+              raw = source.read_bytes().decode("utf-8")
+              normalized = raw.replace("\r\n", "\n").strip()
+              additional = {}
+              for filename in ("PATENTS", "NOTICE", "COPYRIGHT"):
+                  extra = Path(item["Dir"]) / filename
+                  if extra.is_file():
+                      additional[filename] = extra.read_bytes().decode("utf-8")
+              added.append({"additional": additional, "path": name, "version": item["Version"],
+                            "license_file": "LICENSE", "text": raw,
+                            "source_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+                            "license_sha256": hashlib.sha256(normalized.encode()).hexdigest()})
+          output = Path(os.environ["RUNNER_TEMP"]) / "added-module-licenses.json"
+          output.write_text(json.dumps(added, indent=2) + "\n")
+          PY
       - name: Preserve reviewable manifests and dependency graph
         uses: actions/upload-artifact@v4
         with:
@@ -71,5 +112,6 @@ jobs:
             go.mod
             go.sum
             ${{ runner.temp }}/after-modules.json
+            ${{ runner.temp }}/added-module-licenses.json
           if-no-files-found: error
           retention-days: 7
