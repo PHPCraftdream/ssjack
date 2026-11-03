@@ -1,8 +1,9 @@
-# Private forward-stream HTTP transport APIs
+# Private text-stream HTTP transport APIs
 
-Status: internal forward transport wiring, not a delivered Clawwright feature.
-Explicit forward CLI registration/startup is wired. Actual root-granted route
-acceptance and the streaming client are still pending. Reverse streaming is not implemented by this route.
+Status: internal directional transport wiring, not a delivered Clawwright feature.
+Explicit directional CLI registration/startup is wired. Actual root-granted route
+acceptance and the streaming client are still pending. Forward and reverse
+listeners are opt-in and separate.
 V1 remains unchanged.
 
 ## Explicit CLI path
@@ -20,8 +21,12 @@ Named `--server`/`--account` selectors also resolve through the authenticated va
 load; the stable selected record ID is used for grant checks and server scope.
 The operator unlocks the credential database and bound application-store
 installation through hidden terminal input. The child receives only the usual
-private endpoint/token/pin bootstrap, not vault/master values. Broker sessions,
-wrong grants and reverse-v2 grants refuse; no fallback to v1 occurs.
+private endpoint/token/pin bootstrap, not vault/master values. Broker sessions
+and wrong grants refuse; no fallback to v1 occurs. For reverse streaming, root
+instead uses `register-reverse-stream` and confirms
+`APPROVE REVERSE STREAM TEXT COPY GRANT_ID`. The same `serve-stream` entry selects
+the reverse listener only for an authenticated `reverse-copy-stream-v2` grant;
+it never enables both directions. `revoke-stream` covers either v2 direction.
 
 `ListenWithTextStreamAdapter` explicitly enables two POST paths on the existing
 pinned loopback TLS listener: `/text-stream-v2/prepare` and
@@ -51,6 +56,35 @@ reply also has a random ticket and byte count (zero count may be omitted).
 Execute returns only withheld/unknown/received metadata, never hydrated text,
 SSH stdout/stderr, raw source or content hashes. Responses are not cacheable.
 No automatic retry or resume is defined.
+
+## Reverse streaming API
+
+`ListenWithReverseTextStreamAdapter` enables only
+`POST /text-stream-v2/reverse-copy` in addition to metadata-only `transport_info`.
+It advertises protocol 2 and only `text_reverse_copy_stream_v2`. Forward, legacy
+text and raw execution routes remain unavailable on this listener.
+
+The request is exactly the same closed header as Prepare, followed immediately
+by body EOF. Tickets, data frames and trailing bytes are refused before dispatch.
+The selected reverse-v2 grant must match the exact credential, source file and
+reference set; metadata matching does not grant authority.
+
+SSH stdout flows only through bounded private RAM pipes, reverse literal
+replacement and incremental text validation. Stderr is discarded. Output is a
+tentative reference-only copy, not a rewrite of the source. Both decoded raw
+input and transformed output are limited to 64 MiB; selected values retain the
+1 MiB aggregate bound. Late ambiguity, malformed text, nonzero SSH exit,
+cancellation or failed authority/snapshot rechecks produce unknown, not success.
+All pipeline workers are joined before the producer returns.
+
+Successful responses use `application/x-ndjson` and the bounded data/complete
+framing. The complete frame is withheld until the producer returns received
+after all final checks, even if its output pipe has already reached EOF. A
+failure after tentative data yields an incomplete stream, which the client must
+reject without publication. A failure before any data is written returns bounded
+JSON withheld/unknown metadata instead. Clients must require the expected content
+type, exact operation ID, complete counters and complete body EOF, then publish
+only the transformed copy. Missing completion never authorizes retry or resume.
 
 Transport tests use real TLS/bearer requests with synthetic adapter implementations
 to exercise multi-megabyte framing, missing completion, opt-in/authentication and

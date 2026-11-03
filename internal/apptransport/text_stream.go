@@ -52,7 +52,7 @@ func ListenWithTextStreamAdapter(parent context.Context, profile string, runner 
 	if adapter == nil {
 		return nil, errors.New("invalid streaming text adapter")
 	}
-	return listen(parent, profile, runner, nil, nil, adapter)
+	return listen(parent, profile, runner, nil, nil, adapter, nil)
 }
 
 func textStreamPath(path string) bool {

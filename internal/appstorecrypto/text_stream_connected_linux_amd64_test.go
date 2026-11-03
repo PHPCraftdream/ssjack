@@ -18,11 +18,20 @@ import (
 const streamConnectedChild = "SSJACK_TEXT_STREAM_CONNECTED_CHILD"
 
 func TestTextStreamConnected(t *testing.T) {
+	runStreamConnected(t, "hydrate-stream-v2", connectedStreamChild)
+}
+
+func TestTextReverseStreamConnected(t *testing.T) {
+	runStreamConnected(t, "reverse-copy-stream-v2", connectedReverseStreamChild)
+}
+
+func runStreamConnected(t *testing.T, mode string, runChild func(*testing.T)) {
+	t.Helper()
 	if os.Getenv(connectedGate) != "1" {
 		t.Skip("CI acceptance gate is disabled")
 	}
 	if os.Getenv(streamConnectedChild) == "1" {
-		connectedStreamChild(t)
+		runChild(t)
 		return
 	}
 	if os.Geteuid() != 0 {
@@ -42,7 +51,7 @@ func TestTextStreamConnected(t *testing.T) {
 	defer ackW.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	child := exec.CommandContext(ctx, os.Args[0], "-test.run", "^TestTextStreamConnected$")
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run", "^"+t.Name()+"$")
 	child.Dir = "/tmp"
 	child.ExtraFiles = []*os.File{grantW, ackR}
 	child.Env = append(os.Environ(), connectedGate+"=1", streamConnectedChild+"=1", "TMPDIR=/tmp")
@@ -70,7 +79,7 @@ func TestTextStreamConnected(t *testing.T) {
 	if err := json.NewDecoder(grantR).Decode(&grant); err != nil {
 		t.Fatal(err)
 	}
-	if grant.RecipientUID != 65534 || grant.Mode != "hydrate-stream-v2" {
+	if grant.RecipientUID != 65534 || grant.Mode != mode {
 		t.Fatal("stream child requested another scope")
 	}
 	if err := declarativeauthority.LoadSetup(); err != nil {

@@ -108,6 +108,9 @@ func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args 
 	if len(args) > 0 && args[0] == "register-stream" {
 		return registerTextAdapterMode(ctx, args[1:], "hydrate-stream-v2")
 	}
+	if len(args) > 0 && args[0] == "register-reverse-stream" {
+		return registerTextAdapterMode(ctx, args[1:], "reverse-copy-stream-v2")
+	}
 	if len(args) > 0 && args[0] == "revoke-stream" {
 		return revokeTextStreamAdapter(ctx, args[1:])
 	}
@@ -147,7 +150,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}
 	grant, err := loadCLITextGrant(args[1], streaming)
-	if err != nil || (streaming && grant.Mode != "hydrate-stream-v2") || grant.Profile != profile || grant.CredentialSHA256 != digest {
+	if err != nil || (streaming && grant.Mode != "hydrate-stream-v2" && grant.Mode != "reverse-copy-stream-v2") || grant.Profile != profile || grant.CredentialSHA256 != digest {
 		return 1, errors.New("no matching active text-adapter grant")
 	}
 	store, err := appstoreentry.Open(grant.StorePath)
@@ -187,7 +190,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	}
 	defer installation.Close()
 	if streaming {
-		return runForwardStreamHarness(ctx, installation, args[1], profile, digest, runner, args[2:])
+		return runTextStreamHarness(ctx, installation, grant.Mode, args[1], profile, digest, runner, args[2:])
 	}
 	var adapter *appstorecrypto.TextAdapter
 	if grant.Mode == "reverse-copy-v1" {
@@ -231,7 +234,7 @@ func registerReverseTextAdapter(ctx context.Context, args []string) (int, error)
 }
 
 func registerTextAdapterMode(_ context.Context, args []string, mode string) (int, error) {
-	if mode != "hydrate-v1" && mode != "reverse-copy-v1" && mode != "hydrate-stream-v2" {
+	if mode != "hydrate-v1" && mode != "reverse-copy-v1" && mode != "hydrate-stream-v2" && mode != "reverse-copy-stream-v2" {
 		return 1, errors.New("invalid text-adapter mode")
 	}
 	if os.Geteuid() != 0 {
@@ -315,7 +318,7 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 	grant.Mode = mode
 	validate := declarativeauthority.ValidateTextAdapterGrant
 	register := declarativeauthority.RegisterTextAdapter
-	if mode == "hydrate-stream-v2" {
+	if mode == "hydrate-stream-v2" || mode == "reverse-copy-stream-v2" {
 		validate, register = declarativeauthority.ValidateTextStreamGrant, declarativeauthority.RegisterTextStream
 	}
 	if err = validate(grant, time.Now()); err != nil {
@@ -334,6 +337,10 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 	if mode == "reverse-copy-v1" {
 		phrase = "APPROVE REVERSE TEXT COPY " + grant.ID
 		fmt.Fprintln(os.Stderr, "Approve only the exact source command and file for a reference-only selected copy; raw fallback and live-file rewrites are not authorized.")
+	}
+	if mode == "reverse-copy-stream-v2" {
+		phrase = "APPROVE REVERSE STREAM TEXT COPY " + grant.ID
+		fmt.Fprintln(os.Stderr, "Approve only the exact streamed source command/file and references, with finite 64 MiB bounds; no raw fallback, source rewrite or automatic retry is authorized.")
 	}
 	fmt.Fprintln(os.Stderr, "Independently confirm the credential digest, file, command, and references before repeating the approval phrase.")
 	if err = confirmVisibleValue("Type exact approval phrase", phrase); err != nil {

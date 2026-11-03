@@ -110,7 +110,7 @@ func namedCommandAllowed(command []string) bool {
 	}
 	if command[0] == "text-adapter" && len(command) > 1 {
 		switch command[1] {
-		case "register", "register-reverse", "revoke", "register-stream", "revoke-stream":
+		case "register", "register-reverse", "revoke", "register-stream", "register-reverse-stream", "revoke-stream":
 			return false
 		}
 	}

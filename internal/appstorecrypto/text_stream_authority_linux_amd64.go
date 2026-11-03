@@ -51,7 +51,15 @@ func validTextAdapterMode(mode string) bool {
 }
 
 func (c *TextStreamAdapter) MatchScope(profile, file string, references []string) error {
-	if c == nil || c.adapter == nil || c.adapter.grant.Mode != "hydrate-stream-v2" || c.adapter.grant.Profile != profile || c.adapter.grant.File != file || len(references) != len(c.adapter.grant.References) || len(references) == 0 {
+	return c.matchStreamScope("hydrate-stream-v2", profile, file, references)
+}
+
+func (c *TextStreamAdapter) MatchReverseScope(profile, file string, references []string) error {
+	return c.matchStreamScope("reverse-copy-stream-v2", profile, file, references)
+}
+
+func (c *TextStreamAdapter) matchStreamScope(mode, profile, file string, references []string) error {
+	if c == nil || c.adapter == nil || c.adapter.grant.Mode != mode || c.adapter.grant.Profile != profile || c.adapter.grant.File != file || len(references) != len(c.adapter.grant.References) || len(references) == 0 {
 		return ErrDelivery
 	}
 	selected := make(map[string]bool, len(references))

@@ -37,6 +37,23 @@ func TestStreamGrantCannotInvokeV1Delivery(t *testing.T) {
 	}
 }
 
+func TestStreamScopeDirectionsRemainSeparate(t *testing.T) {
+	for _, mode := range []string{"hydrate-stream-v2", "reverse-copy-stream-v2"} {
+		c := &TextStreamAdapter{adapter: &TextAdapter{grant: declarativeauthority.TextAdapterGrant{Mode: mode, Profile: "selected", File: "/approved/config", References: []string{"selected-ref"}}}}
+		forward := c.MatchScope("selected", "/approved/config", []string{"selected-ref"})
+		reverse := c.MatchReverseScope("selected", "/approved/config", []string{"selected-ref"})
+		if (forward == nil) != (mode == "hydrate-stream-v2") || (reverse == nil) != (mode == "reverse-copy-stream-v2") {
+			t.Fatal("stream scope crossed its granted direction")
+		}
+		if c.MatchReverseScope("selected", "/approved/config", []string{"selected-ref", "selected-ref"}) == nil || c.MatchReverseScope("selected", "/other/config", []string{"selected-ref"}) == nil {
+			t.Fatal("reverse scope accepted another file or duplicate references")
+		}
+		if c.adapter.used {
+			t.Fatal("metadata matching consumed execution authority")
+		}
+	}
+}
+
 func TestStreamConstructionRequiresAuthenticatedInstallationAndRunner(t *testing.T) {
 	if adapter, err := NewTextStreamAdapter(context.Background(), nil, "grant", "profile", "digest", nil); err == nil || adapter != nil {
 		t.Fatal("stream construction accepted missing authenticated state")

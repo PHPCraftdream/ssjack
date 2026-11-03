@@ -22,16 +22,27 @@ func loadCLITextGrant(id string, streaming bool) (declarativeauthority.TextAdapt
 	return declarativeauthority.LoadTextAdapter(id, os.Geteuid(), time.Now())
 }
 
-func runForwardStreamHarness(ctx context.Context, installation *appstorecrypto.Installation, grantID, profile, credential string, runner remote.StreamRunner, command []string) (int, error) {
+func runTextStreamHarness(ctx context.Context, installation *appstorecrypto.Installation, mode, grantID, profile, credential string, runner remote.StreamRunner, command []string) (int, error) {
 	if len(command) == 0 {
 		return 1, errors.New("streaming text adapter requires an explicit harness")
 	}
-	adapter, err := appstorecrypto.NewTextStreamAdapter(ctx, installation, grantID, profile, credential, runner)
+	construct := appstorecrypto.NewTextStreamAdapter
+	if mode == "reverse-copy-stream-v2" {
+		construct = appstorecrypto.NewReverseTextStreamAdapter
+	} else if mode != "hydrate-stream-v2" {
+		return 1, errors.New("invalid streaming text-adapter direction")
+	}
+	adapter, err := construct(ctx, installation, grantID, profile, credential, runner)
 	if err != nil {
 		return 1, errors.New("streaming text-adapter grant validation failed")
 	}
 	defer adapter.Close()
-	server, err := apptransport.ListenWithTextStreamAdapter(ctx, profile, runner, adapter)
+	var server *apptransport.Server
+	if mode == "reverse-copy-stream-v2" {
+		server, err = apptransport.ListenWithReverseTextStreamAdapter(ctx, profile, runner, adapter)
+	} else {
+		server, err = apptransport.ListenWithTextStreamAdapter(ctx, profile, runner, adapter)
+	}
 	if err != nil {
 		return 1, err
 	}

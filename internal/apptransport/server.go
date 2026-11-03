@@ -55,36 +55,37 @@ type TextReverseCopier interface {
 }
 
 type Server struct {
-	bootstrap   Bootstrap
-	textAdapter TextHydrator
-	reverse     TextReverseCopier
-	textStream  TextStreamHydrator
-	http        *http.Server
-	streams     *streams
-	cancel      context.CancelFunc
-	done        chan struct{}
-	once        sync.Once
+	bootstrap     Bootstrap
+	textAdapter   TextHydrator
+	reverse       TextReverseCopier
+	textStream    TextStreamHydrator
+	reverseStream TextStreamReverseCopier
+	http          *http.Server
+	streams       *streams
+	cancel        context.CancelFunc
+	done          chan struct{}
+	once          sync.Once
 }
 
 func Listen(parent context.Context, profile string, runner remote.StreamRunner) (*Server, error) {
-	return listen(parent, profile, runner, nil, nil, nil)
+	return listen(parent, profile, runner, nil, nil, nil, nil)
 }
 
 func ListenWithTextAdapter(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator) (*Server, error) {
 	if adapter == nil {
 		return nil, errors.New("invalid text adapter")
 	}
-	return listen(parent, profile, runner, adapter, nil, nil)
+	return listen(parent, profile, runner, adapter, nil, nil, nil)
 }
 
 func ListenWithReverseTextAdapter(parent context.Context, profile string, runner remote.StreamRunner, adapter TextReverseCopier) (*Server, error) {
 	if adapter == nil {
 		return nil, errors.New("invalid reverse text adapter")
 	}
-	return listen(parent, profile, runner, nil, adapter, nil)
+	return listen(parent, profile, runner, nil, adapter, nil, nil)
 }
 
-func listen(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator, reverse TextReverseCopier, textStream TextStreamHydrator) (*Server, error) {
+func listen(parent context.Context, profile string, runner remote.StreamRunner, adapter TextHydrator, reverse TextReverseCopier, textStream TextStreamHydrator, reverseStream TextStreamReverseCopier) (*Server, error) {
 	if parent.Err() != nil || profile == "" || len(profile) > 64 || runner == nil {
 		return nil, errors.New("invalid application transport scope")
 	}
@@ -101,7 +102,7 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{streams: newStreams(ctx, profile, runner), textAdapter: adapter, reverse: reverse, textStream: textStream, cancel: cancel, done: make(chan struct{})}
+	s := &Server{streams: newStreams(ctx, profile, runner), textAdapter: adapter, reverse: reverse, textStream: textStream, reverseStream: reverseStream, cancel: cancel, done: make(chan struct{})}
 	s.bootstrap = Bootstrap{Endpoint: "https://" + listener.Addr().String() + "/mcp", Token: token, Pin: pin}
 	api := s.mcpServer(profile)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return api }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
@@ -114,7 +115,7 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 		MaxHeaderBytes:    16 * 1024,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			actual := sha256.Sum256([]byte(r.Header.Get("Authorization")))
-			allowedPath := r.URL.Path == "/mcp" || (s.textStream != nil && textStreamPath(r.URL.Path) && r.URL.RawPath == "")
+			allowedPath := r.URL.Path == "/mcp" || (r.URL.RawPath == "" && ((s.textStream != nil && textStreamPath(r.URL.Path)) || (s.reverseStream != nil && r.URL.Path == TextStreamReversePath)))
 			if r.Host != host || !allowedPath || r.URL.RawQuery != "" || r.Header.Get("Origin") != "" ||
 				len(r.Header.Values("Authorization")) != 1 || subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 {
 				http.Error(w, "access denied", http.StatusForbidden)
@@ -126,6 +127,10 @@ func listen(parent context.Context, profile string, runner remote.StreamRunner, 
 			}
 			if ctx.Err() != nil {
 				http.Error(w, "application transport closed", http.StatusServiceUnavailable)
+				return
+			}
+			if r.URL.Path == TextStreamReversePath {
+				s.serveReverseTextStream(w, r, profile)
 				return
 			}
 			if r.URL.Path != "/mcp" {
@@ -179,7 +184,9 @@ func (s *Server) mcpServerForRequest(profile string, requestCtx context.Context)
 		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, InfoOutput, error) {
 			var capabilities []string
 			protocol, chunkSize := Protocol, ChunkSize
-			if s.textStream != nil {
+			if s.reverseStream != nil {
+				protocol, chunkSize, capabilities = 2, appstoretextstream.ChunkSize, []string{"text_reverse_copy_stream_v2"}
+			} else if s.textStream != nil {
 				protocol, chunkSize, capabilities = 2, appstoretextstream.ChunkSize, []string{"text_hydrate_stream_v2"}
 			} else if s.reverse != nil {
 				capabilities = []string{"text_reverse_copy"}
@@ -191,7 +198,7 @@ func (s *Server) mcpServerForRequest(profile string, requestCtx context.Context)
 			return nil, InfoOutput{Protocol: protocol, Profile: profile, Commit: buildinfo.Revision(), ChunkSize: chunkSize,
 				Capabilities: capabilities, Cancellation: "connection-only"}, nil
 		})
-	if s.textAdapter == nil && s.reverse == nil && s.textStream == nil {
+	if s.textAdapter == nil && s.reverse == nil && s.textStream == nil && s.reverseStream == nil {
 		mcp.AddTool(api, &mcp.Tool{Name: "transport_start", Description: "Start a command on the one delegated SSH profile."},
 			func(_ context.Context, _ *mcp.CallToolRequest, input StartInput) (*mcp.CallToolResult, StartOutput, error) {
 				out, err := s.streams.start(input)
