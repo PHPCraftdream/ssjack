@@ -219,10 +219,9 @@ func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
 	model := testModel(backend)
 	model.ctx = ctx
 	var output terminalBuffer
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
 	done := make(chan error, 1)
 	go func() { _, err := program.Run(); done <- err }()
-	program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	program.Send(tea.KeyPressMsg{Code: 13})
 	program.Send(tea.KeyPressMsg{Code: 13})
