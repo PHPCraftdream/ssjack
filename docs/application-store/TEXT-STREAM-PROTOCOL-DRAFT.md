@@ -17,6 +17,14 @@ It must not become a generic raw read, execution or secret retrieval endpoint.
 V1 clients refuse the new capability instead of silently changing validation.
 V2 clients never fall back to a secret-bearing legacy/raw operation.
 
+The v2 authority namespace is separate: `text-stream-grants-v2.json` with format
+`ssjack-text-stream-grants-v2` and explicit `hydrate-stream-v2` /
+`reverse-copy-stream-v2` modes. Existing v1 registry files, modes and readers are
+unchanged; v1 grants cannot authorize v2 operations, nor vice versa. Validation
+retains the same exact store/snapshot/refs, credential, UID, command/file, expiry,
+root ownership and revocation constraints. The registry APIs alone do not expose
+an endpoint or constitute completed producer/client integration.
+
 The initial profile should support at most 64 MiB of decoded input and output,
 with existing selected-secret/reference limits retained. This is bounded large
 text support, not arbitrary-size files. Grant expiry, caller cancellation and
