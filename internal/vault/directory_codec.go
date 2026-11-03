@@ -20,9 +20,14 @@ func directoryRecords(v *Vault) (map[string]any, map[string]any) {
 func validateDirectoryFields(root map[string]any) error {
 	for key := range root {
 		switch key {
-		case "version", "targets", "servers", "secrets":
+		case "version", "targets", "servers", "secrets", "owner_store":
 		default:
 			return errors.New("unknown vault field")
+		}
+	}
+	if value, exists := root["owner_store"]; exists {
+		if err := validateOwnerStoreFields(value); err != nil {
+			return err
 		}
 	}
 	if len(root) == 2 {

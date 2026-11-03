@@ -74,6 +74,25 @@ exact writer proposal/result, and publish alias references only after a
 verified commit. Loss of a reply or a later database save leaves a visible
 pending-reconciliation state, not an automatic replay or fabricated success.
 
+The optional version 2 `owner_store` record holds the linked store ID, directory
+and owner-unlock phrase only inside the encrypted credential payload. Its closed
+pending record distinguishes a pre-dispatch draft from an exact prepared
+proposal. The one pending input value is a temporary encrypted transaction copy,
+not a second permanent application-secret database. It is cleared from owned RAM
+after verified metadata finalization or cancellation of an undispatched draft.
+
+Old version 1 payloads and version 2 payloads without this optional record remain
+readable. Earlier feature binaries that do not know this field must refuse it,
+never silently discard it. Migration does not invent a store link or read real
+owner material. The existing 64 KiB credential payload bound still applies;
+capacity failure must occur before external mutation, not by dropping records.
+
+Draft cancellation is allowed only before a proposal may have been dispatched.
+Prepared records cannot be erased merely by a caller flag. Finalization must
+match the saved operation, transaction, snapshot and complete exact version set,
+including unrelated existing aliases. Secret-binding edits are frozen while an
+intent is pending, but unrelated server/account metadata remains editable.
+
 Object IDs, intended names/scopes, expected predecessor state and proposal
 identity must remain recoverable. A failure to persist names must not erase an
 already committed value or overwrite another owner's changes. Renaming aliases

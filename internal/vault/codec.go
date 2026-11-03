@@ -31,6 +31,9 @@ func marshal(v *Vault) ([]byte, error) {
 	if v.Version == 2 {
 		servers, secrets := directoryRecords(v)
 		root["servers"], root["secrets"] = servers, secrets
+		if v.OwnerStore != nil {
+			root["owner_store"] = ownerStoreRecord(v.OwnerStore)
+		}
 	}
 	body, err := pure.EmitCanonical(root)
 	if err != nil {
@@ -51,7 +54,7 @@ func unmarshal(data []byte) (*Vault, error) {
 		return nil, errors.New("invalid vault Ktav")
 	}
 	root, ok := value.(map[string]any)
-	if !ok || (len(root) != 2 && len(root) != 4) || root["version"] == nil {
+	if !ok || (len(root) != 2 && len(root) != 4 && len(root) != 5) || root["version"] == nil {
 		return nil, errors.New("invalid vault fields")
 	}
 	if err := validateDirectoryFields(root); err != nil {
@@ -86,7 +89,7 @@ func unmarshal(data []byte) (*Vault, error) {
 				}
 			}
 		}
-		if _, exists := target["password"]; exists && len(root) != 4 {
+		if _, exists := target["password"]; exists && len(root) == 2 {
 			return nil, errors.New("password field requires database version 2")
 		}
 		for _, field := range []string{"address", "user", "private_key", "host_keys"} {

@@ -9,7 +9,7 @@ func (v *Vault) directoryCopy() (*Vault, error) {
 	if v.Version != 2 {
 		return nil, errors.New("explicit directory migration is required")
 	}
-	copy := &Vault{Version: 2, Targets: make(map[string]Target), Servers: make(map[string]Server), Secrets: make(map[string]SecretBinding)}
+	copy := &Vault{Version: 2, Targets: make(map[string]Target), Servers: make(map[string]Server), Secrets: make(map[string]SecretBinding), OwnerStore: v.OwnerStore}
 	for name, target := range v.Targets {
 		copy.Targets[name] = target
 	}
@@ -125,6 +125,9 @@ func (v *Vault) RenameServer(id, name string) error {
 
 // BindSecret updates exact metadata only; value writes use the app-store lifecycle.
 func (v *Vault) BindSecret(id string, secret SecretBinding) (string, error) {
+	if v.OwnerStore != nil && v.OwnerStore.Pending != nil {
+		return "", errors.New("resolve the pending owner intent before changing secret bindings")
+	}
 	copy, err := v.directoryCopy()
 	if err != nil {
 		return "", err

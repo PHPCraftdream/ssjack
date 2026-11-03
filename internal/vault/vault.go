@@ -28,13 +28,14 @@ type Target struct {
 }
 
 type Vault struct {
-	Version  int                      `json:"version"`
-	Targets  map[string]Target        `json:"targets"`
-	Servers  map[string]Server        `json:"servers,omitempty"`
-	Secrets  map[string]SecretBinding `json:"secrets,omitempty"`
-	revision [sha256.Size]byte
-	format   int
-	unlocked *keyfile.Unlocked
+	Version    int                      `json:"version"`
+	Targets    map[string]Target        `json:"targets"`
+	Servers    map[string]Server        `json:"servers,omitempty"`
+	Secrets    map[string]SecretBinding `json:"secrets,omitempty"`
+	OwnerStore *OwnerStore              `json:"owner_store,omitempty"`
+	revision   [sha256.Size]byte
+	format     int
+	unlocked   *keyfile.Unlocked
 }
 
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -53,6 +54,8 @@ func (v *Vault) Close() {
 	}
 	clear(v.Servers)
 	clear(v.Secrets)
+	v.OwnerStore.clear()
+	v.OwnerStore = nil
 }
 
 func (v *Vault) ReplaceKey(name string, private []byte) error {
@@ -216,11 +219,14 @@ func (v *Vault) validate() error {
 	if (v.Version != 1 && v.Version != 2) || v.Targets == nil || len(v.Targets) > 64 {
 		return errors.New("unsupported vault version or target count")
 	}
-	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil) {
+	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil) {
 		return errors.New("version 1 cannot contain directory metadata")
 	}
 	if v.Version == 2 {
 		if err := v.validateDirectory(); err != nil {
+			return err
+		}
+		if err := v.validateOwnerStore(); err != nil {
 			return err
 		}
 	}
