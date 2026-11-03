@@ -42,6 +42,21 @@ It does not claim that nothing happened remotely. The owner must inspect and
 reconcile, then explicitly reopen the editor. Read-only inspection and no-change
 Commit do not generate new versions or mutate the anchor.
 
+## Durable-intent preparation boundary
+
+`CommitPrepared` / `WriteFromPrepared` provide the exact predecessor state,
+transaction ID, snapshot ID and immutable reference set to a trusted owner
+callback before local journal append or reservation dispatch. The callback must
+persist the encrypted database intent and honor its context. It must not reenter
+the same app-store transaction. The callback does not receive values or a master
+and is not a human approval mechanism.
+
+A failed callback or cancellation after it returns must leave journal and anchor
+unchanged. This prepared path refuses unresolved journal suffixes rather than
+automatically replaying another operation before the database intent exists.
+Legacy Write/WriteFirst behavior remains separate. The later verified commit
+must correlate with that exact proposal; metadata alone cannot certify success.
+
 ## Required database integration before UI/export publication
 
 The credential directory contains names/scopes and exact reference metadata;

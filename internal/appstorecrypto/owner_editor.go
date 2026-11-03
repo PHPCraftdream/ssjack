@@ -127,6 +127,17 @@ func (o *OwnerEditor) Remove(id [16]byte) error {
 // Commit returns metadata only. Errors block retries until explicit inspection
 // and a fresh owner session; they never imply that a mutation was withheld.
 func (o *OwnerEditor) Commit(ctx context.Context) (SnapshotCommit, error) {
+	return o.commit(ctx, nil)
+}
+
+func (o *OwnerEditor) CommitPrepared(ctx context.Context, prepare OwnerWritePrepare) (SnapshotCommit, error) {
+	if prepare == nil {
+		return SnapshotCommit{}, ErrSnapshot
+	}
+	return o.commit(ctx, prepare)
+}
+
+func (o *OwnerEditor) commit(ctx context.Context, prepare OwnerWritePrepare) (SnapshotCommit, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if ctx == nil || o.closed || o.blocked || o.writer == nil || !o.base.Valid() {
@@ -160,7 +171,13 @@ func (o *OwnerEditor) Commit(ctx context.Context) (SnapshotCommit, error) {
 		closeObjects = append(closeObjects, closeObject)
 	}
 	o.blocked = true
-	commit, err := o.writer.WriteFrom(opctx, o.base, objects)
+	var commit SnapshotCommit
+	var err error
+	if prepare == nil {
+		commit, err = o.writer.WriteFrom(opctx, o.base, objects)
+	} else {
+		commit, err = o.writer.WriteFromPrepared(opctx, o.base, objects, prepare)
+	}
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
@@ -206,5 +223,5 @@ func (o *OwnerEditor) Close() error {
 
 // WriteFrom adds optimistic concurrency, not authority, to an existing writer.
 func (w *SnapshotWriter) WriteFrom(ctx context.Context, expected appstoreanchorstate.State, objects []SnapshotObject) (SnapshotCommit, error) {
-	return w.write(ctx, objects, false, &expected)
+	return w.write(ctx, objects, false, &expected, nil)
 }
