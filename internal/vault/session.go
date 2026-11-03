@@ -6,6 +6,8 @@ import (
 	"errors"
 	"math"
 	"sync"
+
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 type SessionStatus struct {
@@ -39,6 +41,7 @@ type Session struct {
 	release     func()
 	saveDigest  func() [sha256.Size]byte
 	savedCipher [sha256.Size]byte
+	exportKey   *keyfile.Unlocked
 }
 
 // OpenSession unlocks once. Close or explicit Discard must join its worker.
@@ -89,6 +92,7 @@ func StartSession(ctx context.Context, path string, v *Vault) (*Session, error) 
 	s := newSession(v, save, key.Close)
 	s.mu.Lock()
 	s.savedCipher = expected
+	s.exportKey = key
 	s.saveDigest = func() [sha256.Size]byte { return expected }
 	s.mu.Unlock()
 	return s, nil

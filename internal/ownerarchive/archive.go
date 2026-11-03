@@ -2,8 +2,9 @@ package ownerarchive
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+
+	"github.com/ktav-lang/golang/pure"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
@@ -23,8 +24,12 @@ func New(database []byte) (*Archive, error) {
 	if len(database) == 0 || len(database) > keyfile.MaxPlaintext {
 		return nil, ErrArchive
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(database, &fields); err != nil {
+	value, err := pure.LoadsStrict(string(database))
+	if err != nil {
+		return nil, ErrArchive
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
 		return nil, ErrArchive
 	}
 	if _, exists := fields["owner_store"]; exists {
@@ -36,7 +41,7 @@ func New(database []byte) (*Archive, error) {
 			Ref string `json:"ref"`
 		} `json:"secrets"`
 	}
-	if err := json.Unmarshal(database, &directory); err != nil || directory.Version != 2 || len(directory.Secrets) > 128 {
+	if err := pure.LoadsInto(string(database), &directory); err != nil || directory.Version != 2 || len(directory.Secrets) > 128 {
 		return nil, ErrArchive
 	}
 	refs := make(map[string]string, len(directory.Secrets))

@@ -12,8 +12,10 @@ capability, with its existing encryption profile and fresh nonce. This is data
 encryption, not key wrapping. The ZIP file itself is not passed directly to the
 ordinary keyfile decoder; each `.ktav` entry is an existing keyfile container.
 
-- `database.json.ktav`: selected validated v2 directory records and settings.
-- `secrets/ALIAS_ID.bin.ktav`: exact selected value bytes, including empty values.
+- `database.ssjack.ktav`: selected validated v2 Ktav directory records and settings.
+- `secrets/ALIAS_ID.bin.ktav`: byte `0x01` followed by the exact selected value
+  bytes, including empty values. This versioned nonempty frame preserves the
+  existing keyfile sealer's rejection of zero-length payloads.
 - `manifest.json.ktav`: `ssjack-owner-export-v1`, the database record and one
   secret-file record per selected alias. Each record binds its exact ZIP name,
   encoded length and SHA-256 digest of the **ciphertext** entry bytes.
@@ -43,7 +45,7 @@ are not yet implemented by this core.
 
 The separate plaintext operation requires the exact local confirmation
 `EXPORT PLAINTEXT`. It uses the same final ZIP representation without `.ktav`
-suffixes; these are actual plaintext credential and value files inside the
+suffixes (the database entry is `database.ktav`); these are actual plaintext credential and value files inside the
 explicit final artifact. This is not the default operation. The eventual CLI must
 show selected scope and a disclosure warning before accepting that confirmation.
 It must never accept this approval through a model-facing call.
@@ -58,6 +60,14 @@ must inspect the destination after errors and must not report success. File sync
 is performed; directory crash durability is not claimed. Windows is refused
 before publication until a verified restrictive ACL path is implemented.
 
-The core is not yet connected to the owner coordinator, cached session sealing,
-exact private value collection, scope-selection UI or export commands. Plaintext
-archive unit tests do not prove the encrypted production path.
+The session API prepares an opaque export plan from explicit server/account IDs
+and an explicit global-secret selection. It returns reference metadata only;
+selected credential buffers and the cached sealing key have no getter. The plan
+refuses pending/unsaved database state and refuses publication after the captured
+revision changes or the session closes. Encrypted publication reuses the retained
+authenticated key; it does not run another unlock during export.
+
+Owner coordinator, exact private value collection, scope-selection UI and export
+commands are not yet connected. Plaintext archive unit tests do not prove the
+encrypted production path; a dedicated production-profile helper checks the actual
+sealed credential archive and wrong-password rejection in full CI.

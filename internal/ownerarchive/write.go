@@ -79,7 +79,11 @@ func (a *Archive) write(ctx context.Context, destination string, seal func([]byt
 		return fileRecord{Name: name, Length: len(body), SHA256: hex.EncodeToString(digest[:])}, nil
 	}
 	var err error
-	index.Database, err = add("database.json", a.database)
+	databaseName := "database.ktav"
+	if encrypted {
+		databaseName = "database.ssjack"
+	}
+	index.Database, err = add(databaseName, a.database)
 	if err != nil {
 		return err
 	}
@@ -89,7 +93,17 @@ func (a *Archive) write(ctx context.Context, destination string, seal func([]byt
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		record, err := add("secrets/"+id+".bin", a.values[id])
+		value := a.values[id]
+		if encrypted {
+			framed := make([]byte, len(value)+1)
+			framed[0] = 1
+			copy(framed[1:], value)
+			value = framed
+		}
+		record, err := add("secrets/"+id+".bin", value)
+		if encrypted {
+			clear(value)
+		}
 		if err != nil {
 			return err
 		}

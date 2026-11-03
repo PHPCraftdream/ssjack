@@ -123,6 +123,7 @@ func verifySessionFullProfile(t *testing.T, path string, password []byte, server
 			t.Fatal("saved session revision did not identify the actual ciphertext")
 		}
 	}
+	verifyOwnerExportFullProfile(t, session, password, server, path)
 	if err := session.Close(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/ktav-lang/golang/pure"
+
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 )
@@ -27,11 +29,11 @@ func fixture(t *testing.T) (*Archive, appstoreref.Ref) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, err := json.Marshal(map[string]any{"version": 2, "targets": map[string]any{}, "servers": map[string]any{}, "secrets": map[string]any{"01000000000000000000000000000000": map[string]string{"name": "token", "server_id": "", "ref": string(encoded)}}})
+	database, err := pure.EmitCanonical(map[string]any{"version": 2, "targets": map[string]any{}, "servers": map[string]any{}, "secrets": map[string]any{"01000000000000000000000000000000": map[string]string{"name": "token", "server_id": "", "ref": string(encoded)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := New(database)
+	archive, err := New([]byte(database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +107,7 @@ func TestPlaintextArchivePreservesBytesAndNeverOverwrites(t *testing.T) {
 		}
 		files[entry.Name] = body
 	}
-	if len(files) != 3 || !bytes.Equal(files["secrets/01000000000000000000000000000000.bin"], []byte{'a', 0, '\n', 255, 'z'}) || !bytes.Equal(files["database.json"], a.database) {
+	if len(files) != 3 || !bytes.Equal(files["secrets/01000000000000000000000000000000.bin"], []byte{'a', 0, '\n', 255, 'z'}) || !bytes.Equal(files["database.ktav"], a.database) {
 		t.Fatal("export lost selected metadata or exact value bytes")
 	}
 	var index manifest
@@ -152,8 +154,38 @@ func TestArchiveCancellationAndCleanup(t *testing.T) {
 	}
 }
 
+func TestEncryptedValueFramingPreservesEmptyValues(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("private-file runtime unavailable")
+	}
+	a, ref := fixture(t)
+	if err := a.Add("01000000000000000000000000000000", ref, nil); err != nil {
+		t.Fatal(err)
+	}
+	frames := 0
+	inspectFrame := func(payload []byte) ([]byte, error) {
+		if bytes.Equal(payload, []byte{1}) {
+			frames++
+		}
+		if len(payload) == 0 {
+			t.Fatal("empty value reached a sealer that requires a nonempty payload")
+		}
+		return append([]byte("structural-test-only:"), payload...), nil
+	}
+	if err := a.write(context.Background(), filepath.Join(t.TempDir(), "framing-only.zip"), inspectFrame, true); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 1 {
+		t.Fatal("empty selected value did not retain its versioned value frame")
+	}
+}
+
 func TestArchiveRejectsLinkedUnlockMaterial(t *testing.T) {
-	if _, err := New([]byte(`{"version":2,"targets":{},"servers":{},"secrets":{},"owner_store":{"master":"synthetic"}}`)); err == nil {
+	encoded, err := pure.EmitCanonical(map[string]any{"version": 2, "targets": map[string]any{}, "servers": map[string]any{}, "secrets": map[string]any{}, "owner_store": map[string]any{"master": "synthetic"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New([]byte(encoded)); err == nil {
 		t.Fatal("export accepted linked store unlock material")
 	}
 }
