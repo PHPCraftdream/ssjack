@@ -1,12 +1,15 @@
 package ownertui
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/crypto/ssh"
@@ -196,6 +199,53 @@ func TestPasteUsesMaskedBoundedFormInput(t *testing.T) {
 		t.Fatal("paste accepted terminal control input")
 	}
 	m.back()
+}
+
+type terminalBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *terminalBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	backend := &fakeBackend{}
+	model := testModel(backend)
+	model.ctx = ctx
+	var output terminalBuffer
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	done := make(chan error, 1)
+	go func() { _, err := program.Run(); done <- err }()
+	program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	program.Send(tea.KeyPressMsg{Code: 13})
+	program.Send(tea.KeyPressMsg{Code: 13})
+	program.Send(tea.PasteMsg{Content: "token"})
+	program.Send(tea.KeyPressMsg{Code: 9})
+	program.Send(tea.PasteMsg{Content: "synthetic-terminal-private"})
+	program.Send(tea.KeyPressMsg{Code: 27})
+	program.Send(tea.KeyPressMsg{Code: 27})
+	for range 4 {
+		program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	program.Send(tea.KeyPressMsg{Code: 13})
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if backend.closes != 1 || backend.edits != 0 || backend.submissions != 0 || model.form != nil {
+		t.Fatal("program did not cancel input and close without mutation")
+	}
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	if !strings.Contains(output.Buffer.String(), "owner database") || strings.Contains(output.Buffer.String(), "synthetic-terminal-private") {
+		t.Fatal("terminal renderer omitted the interface or exposed input")
+	}
 }
 
 func TestTeaRefreshHasOneScheduledSuccessor(t *testing.T) {
