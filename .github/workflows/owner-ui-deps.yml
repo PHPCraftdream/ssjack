@@ -1,0 +1,75 @@
+name: Resolve owner UI dependencies
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/named-server-directory]
+    paths: [.github/workflows/owner-ui-deps.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record existing dependency selections
+        run: |
+          cp go.mod "$RUNNER_TEMP/before.go.mod"
+          go list -mod=readonly -m -json all > "$RUNNER_TEMP/before-modules.json"
+      - name: Resolve the explicitly requested Bubble Tea framework
+        run: |
+          go get charm.land/bubbletea/v2@v2.0.10
+          go mod download all
+          go list -m -json all > "$RUNNER_TEMP/after-modules.json"
+      - name: Verify existing versions were not raised
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def modules(name):
+              text = (Path(os.environ["RUNNER_TEMP"]) / name).read_text()
+              decoder = json.JSONDecoder()
+              result = {}
+              while text.strip():
+                  text = text.lstrip()
+                  module, length = decoder.raw_decode(text)
+                  if not module.get("Main"):
+                      result[module["Path"]] = module["Version"]
+                  text = text[length:]
+              return result
+
+          before = modules("before-modules.json")
+          after = modules("after-modules.json")
+          changed = [name for name, version in before.items() if after.get(name) != version]
+          if changed:
+              raise SystemExit("Existing module selections changed: " + ", ".join(sorted(changed)))
+          original = (Path(os.environ["RUNNER_TEMP"]) / "before.go.mod").read_text()
+          current = Path("go.mod").read_text()
+          for directive in ("module ", "go ", "toolchain "):
+              old = [line for line in original.splitlines() if line.startswith(directive)]
+              new = [line for line in current.splitlines() if line.startswith(directive)]
+              if old != new:
+                  raise SystemExit("Unrequested module/toolchain directive change")
+          if after.get("charm.land/bubbletea/v2") != "v2.0.10":
+              raise SystemExit("Bubble Tea pin mismatch")
+          PY
+      - name: Preserve reviewable manifests and dependency graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-ui-dependencies
+          path: |
+            go.mod
+            go.sum
+            ${{ runner.temp }}/after-modules.json
+          if-no-files-found: error
+          retention-days: 7
