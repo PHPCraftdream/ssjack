@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -175,48 +174,50 @@ func (m *Manager) applyImport(ctx context.Context, staged *vault.OwnerImport, re
 	return nil
 }
 
-// importAliasOwned is pure: an existing alias is import-owned only with a
-// receipt for the exact same ref, or as the in-flight alias whose intent was
-// resolved; name and scope must always equal the plan.
-func importAliasOwned(secret vault.ImportSecret, binding vault.SecretBinding, receipts map[string]string, inflight string) bool {
-	if binding.Name != secret.Name || binding.ServerID != secret.ServerID {
-		return false
+// importPublished counts plan secrets whose alias still carries exactly the
+// receipted ref under the plan's name and scope.
+func importPublished(plan []vault.ImportSecret, receipts map[string]string, current map[string]vault.SecretBinding) int {
+	count := 0
+	for _, secret := range plan {
+		receipt, receipted := receipts[secret.AliasID]
+		binding, exists := current[secret.AliasID]
+		if receipted && exists && binding.Name == secret.Name && binding.ServerID == secret.ServerID && binding.Ref == receipt {
+			count++
+		}
 	}
-	if ref, receipted := receipts[secret.AliasID]; receipted {
-		return binding.Ref == ref
-	}
-	return inflight != "" && inflight == secret.AliasID
+	return count
 }
 
-// adoptImportAlias receipts an existing alias when it is provably ours. An
-// in-flight alias counts only once its owner intent is resolved (no pending).
+// importAliasOwned is pure: an existing alias is import-owned only when its
+// ref equals the receipt exactly (receipts advance solely via importCommitted)
+// and name and scope equal the plan.
+func importAliasOwned(secret vault.ImportSecret, binding vault.SecretBinding, receipts map[string]string) bool {
+	receipt, receipted := receipts[secret.AliasID]
+	return receipted && binding.Name == secret.Name && binding.ServerID == secret.ServerID && binding.Ref == receipt
+}
+
+// adoptImportAlias only checks ownership; it never writes a receipt.
 func (m *Manager) adoptImportAlias(secret vault.ImportSecret, binding vault.SecretBinding) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	inflight := m.imp.inflight
-	if m.pending != nil {
-		inflight = ""
-	}
-	if !importAliasOwned(secret, binding, m.imp.published, inflight) {
+	if !importAliasOwned(secret, binding, m.imp.published) {
 		return errImportEntries
 	}
-	m.imp.receipt(secret.AliasID, binding.Ref)
 	return nil
 }
 
-// recordImportReceipt stores the published ref as this import's receipt.
+// recordImportReceipt verifies that the commit hook already receipted the
+// published alias; metadata alone never creates or moves a receipt.
 func (m *Manager) recordImportReceipt(secret vault.ImportSecret) error {
 	metadata, err := m.db.Metadata()
 	if err != nil {
 		return err
 	}
-	binding, present := metadata.Secrets[secret.AliasID]
-	if _, err := appstoreplaceholder.Parse([]byte(binding.Ref)); !present || err != nil || binding.Name != secret.Name || binding.ServerID != secret.ServerID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !importAliasOwned(secret, metadata.Secrets[secret.AliasID], m.imp.published) {
 		return errImportEntries
 	}
-	m.mu.Lock()
-	m.imp.receipt(secret.AliasID, binding.Ref)
-	m.mu.Unlock()
 	return nil
 }
 

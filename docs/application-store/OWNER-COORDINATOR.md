@@ -87,15 +87,22 @@ re-evaluates them and refuses with `ErrImportConflict`.
    save sequence above. The value is published through the private owner editor
    to a **fresh** destination reference. Archived references are never trusted or
    reused, and `owner_store` is never imported.
-5. After each publication, read the destination metadata and record a **receipt**
-   for the alias: the exact destination reference, valid only while the alias
-   name and server scope still equal the plan. If that check fails the import
-   stops with the fixed error `imported entries changed`.
+5. Every dirty owner commit re-versions every object, and `FinishOwnerChange`
+   moves every alias to the commit's reference for its object ID. A **receipt** is
+   the exact reference the import last saw authenticated for an alias. It advances
+   only inside the worker step that validated the commit: normal publication, or
+   `ResumeDraft`/`Reconcile` recovery of the import's own durable intent. It is
+   taken from that commit's exact reference set, keyed by object ID, and only while
+   store, name and scope still match the plan. This happens right after the commit
+   is applied and before the following save, so a confirmed commit whose save
+   failed is still receipted. A commit that is not the import's own intent never
+   moves receipts. If a check fails the receipt stays stale and the import stops
+   with the fixed error `imported entries changed`.
 6. Complete only after every value is published. An alias that already exists is
-   never skipped or overwritten unless it is import-owned: it has a receipt with
-   the same reference, or it is the one in-flight alias (the owner intent this
-   import staged) whose pending intent was explicitly resolved. Any other
-   existing alias fails the import with `imported entries changed`.
+   never skipped or overwritten unless it is import-owned: its reference equals
+   its receipt exactly and name and scope equal the plan. There is no in-flight
+   metadata adoption. Any other existing alias fails the import with
+   `imported entries changed`.
 
 The job has a bounded timeout and `AbortImport` stops it before the next value.
 
@@ -106,11 +113,13 @@ between a failure and its resume. `RetryDatabase`, `Reconcile`, `ResumeDraft`,
 `Export` and `Close` are refused while a manager error or pending intent exists,
 as before.
 
-**Published.** `ImportStatus.Published` counts only receipts whose alias still
-exists with the same reference, name and scope. A colliding foreign alias is never
-counted: a staged plan, including one refused for conflicts, reports 0. Receipts
-are kept after completion so the count stays accurate, and are discarded on a
-new inspection, `AbortImport` or close.
+**Published.** `ImportStatus.Published` counts only aliases whose reference still
+equals their receipt exactly, with the plan's name and scope. Metadata that merely
+looks right, or a changed version without an authorizing commit, is never counted
+nor adopted by resume (it fails closed with `imported entries changed`), and a
+colliding foreign alias is never counted: a staged plan, including one refused
+for conflicts, reports 0. Receipts are kept after completion so the count stays
+accurate, and are discarded on a new inspection, `AbortImport` or close.
 
 **Failure and recovery.** A failure before any destination change leaves the plan
 staged and the manager usable. After the first change the import is `partial`

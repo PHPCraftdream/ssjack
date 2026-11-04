@@ -182,7 +182,8 @@ var (
 // by the worker (completion) or by operator calls while no import job runs.
 // published maps alias ID to the exact destination ref this import recorded as
 // its receipt; inflight is the alias whose owner intent was staged by this
-// import and not yet receipted. Only these prove an alias is import-owned.
+// import and not yet receipted. Only the commit hook (importCommitted) writes
+// receipts; an alias is import-owned only by an exact receipt.
 type importState struct {
 	phase     ImportPhase
 	staged    *vault.OwnerImport
@@ -210,17 +211,6 @@ func (s *importState) reset() {
 // directory merge and completion no other edit may touch imported entries.
 func (s *importState) owns() bool {
 	return s.phase == ImportApplying || s.phase == ImportPartial
-}
-
-// receipt records the exact ref published for an alias and ends its flight.
-func (s *importState) receipt(alias, ref string) {
-	if s.published == nil {
-		s.published = make(map[string]string)
-	}
-	s.published[alias] = ref
-	if s.inflight == alias {
-		s.inflight = ""
-	}
 }
 
 // InspectImport reads the archive on the owner worker; the destination is

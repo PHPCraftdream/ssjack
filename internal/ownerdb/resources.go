@@ -210,13 +210,7 @@ func (m *Manager) ImportStatus() ImportStatus {
 	// Only receipts count: a colliding foreign alias is never Published.
 	if m.db != nil && len(s.published) > 0 {
 		if metadata, err := m.db.Metadata(); err == nil {
-			for _, secret := range s.preview.Secrets {
-				ref, receipted := s.published[secret.AliasID]
-				binding, exists := metadata.Secrets[secret.AliasID]
-				if receipted && exists && binding.Ref == ref && binding.Name == secret.Name && binding.ServerID == secret.ServerID {
-					status.Published++
-				}
-			}
+			status.Published = importPublished(s.preview.Secrets, s.published, metadata.Secrets)
 		}
 	}
 	if s.phase == ImportStaged && s.staged != nil {

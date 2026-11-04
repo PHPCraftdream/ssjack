@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -21,11 +23,8 @@ func TestCopiedOwnerMaterialIsIndependentlyOwned(t *testing.T) {
 	owned := copyLink(original)
 	owned.Pending.Versions["object"] = "changed"
 	clearLink(owned)
-	if !bytes.Equal(original.Master, []byte("synthetic master")) || !bytes.Equal(original.Pending.Change.Value, []byte("synthetic pending value")) || original.Pending.Versions["object"] != "version" {
-		t.Fatal("coordinator copies borrowed private buffers or version metadata")
-	}
-	if !bytes.Equal(owned.Master, make([]byte, len(owned.Master))) || !bytes.Equal(owned.Pending.Change.Value, make([]byte, len(owned.Pending.Change.Value))) {
-		t.Fatal("coordinator cleanup did not clear owned private material")
+	if !bytes.Equal(original.Master, []byte("synthetic master")) || !bytes.Equal(original.Pending.Change.Value, []byte("synthetic pending value")) || original.Pending.Versions["object"] != "version" || !bytes.Equal(owned.Master, make([]byte, len(owned.Master))) || !bytes.Equal(owned.Pending.Change.Value, make([]byte, len(owned.Pending.Change.Value))) {
+		t.Fatal("coordinator copies borrowed private buffers or version metadata, or did not clear owned private material")
 	}
 	clearLink(original)
 }
@@ -48,11 +47,7 @@ func TestExportRequestOwnsItsSelectionAndRejectsConcurrentRequests(t *testing.T)
 		t.Fatal("concurrent export bypassed the single owner worker")
 	}
 	m = &Manager{jobs: make(chan string, 1), changed: make(chan struct{})}
-	for _, request := range []ExportRequest{
-		{},
-		{Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip", PlaintextConfirmation: "yes"},
-		{Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip"},
-	} {
+	for _, request := range []ExportRequest{{}, {Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip", PlaintextConfirmation: "yes"}, {Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip"}} {
 		if err := m.Export(request); err == nil || m.busy || len(m.jobs) != 0 {
 			t.Fatal("invalid or unauthenticated export queued work")
 		}
@@ -62,11 +57,9 @@ func TestExportRequestOwnsItsSelectionAndRejectsConcurrentRequests(t *testing.T)
 func TestCipherDigestChecksOnlyBoundedRegularCiphertext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "database")
 	encoded := []byte("synthetic ciphertext fixture")
-	if err := os.WriteFile(path, encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeErr := os.WriteFile(path, encoded, 0600)
 	digest, err := cipherDigest(path)
-	if err != nil || digest != sha256.Sum256(encoded) {
+	if writeErr != nil || err != nil || digest != sha256.Sum256(encoded) {
 		t.Fatal("ciphertext revision check changed or misidentified bytes")
 	}
 	_, dirErr := cipherDigest(filepath.Dir(path))
@@ -75,9 +68,22 @@ func TestCipherDigestChecksOnlyBoundedRegularCiphertext(t *testing.T) {
 		t.Fatal("ciphertext checker accepted a directory or a missing database")
 	}
 }
-
 func importManager() *Manager {
 	return &Manager{db: &vault.Session{}, jobs: make(chan string, 1), changed: make(chan struct{})}
+}
+func importRef(store, object, version, snapshot byte) appstoreref.Ref {
+	ref, err := appstoreref.New([16]byte{store}, [16]byte{object}, [16]byte{version}, [16]byte{snapshot})
+	if err != nil {
+		panic("invalid import ref fixture")
+	}
+	return ref
+}
+func refText(ref appstoreref.Ref) string {
+	raw, err := appstoreplaceholder.Encode(ref)
+	if err != nil {
+		panic("invalid import ref fixture")
+	}
+	return string(raw)
 }
 
 func TestInspectImportValidatesAndGatesBeforeQueueing(t *testing.T) {
@@ -90,18 +96,8 @@ func TestInspectImportValidatesAndGatesBeforeQueueing(t *testing.T) {
 	if m := importManager(); m.InspectImport("archive.zip", make([]byte, 16385)) == nil || len(m.jobs) != 0 {
 		t.Fatal("oversized import password queued work")
 	}
-	gates := map[string]func(*Manager){
-		"closed":    func(m *Manager) { m.closed = true },
-		"closing":   func(m *Manager) { m.closing = true },
-		"busy":      func(m *Manager) { m.busy = true },
-		"pending":   func(m *Manager) { m.pending = &vault.OwnerIntent{} },
-		"error":     func(m *Manager) { m.err = errors.New("fixture") },
-		"inspect":   func(m *Manager) { m.imp.phase = ImportInspecting },
-		"staged":    func(m *Manager) { m.imp.phase = ImportStaged },
-		"applying":  func(m *Manager) { m.imp.phase = ImportApplying },
-		"partial":   func(m *Manager) { m.imp.phase = ImportPartial },
-		"no-worker": func(m *Manager) { m.jobs = nil },
-	}
+	phase := func(p ImportPhase) func(*Manager) { return func(m *Manager) { m.imp.phase = p } }
+	gates := map[string]func(*Manager){"closed": func(m *Manager) { m.closed = true }, "closing": func(m *Manager) { m.closing = true }, "busy": func(m *Manager) { m.busy = true }, "pending": func(m *Manager) { m.pending = &vault.OwnerIntent{} }, "error": func(m *Manager) { m.err = errors.New("fixture") }, "inspect": phase(ImportInspecting), "staged": phase(ImportStaged), "applying": phase(ImportApplying), "partial": phase(ImportPartial), "no-worker": func(m *Manager) { m.jobs = nil }}
 	for name, gate := range gates {
 		m := importManager()
 		gate(m)
@@ -115,48 +111,37 @@ func TestInspectImportOwnsPasswordAndReplacesCompleteImport(t *testing.T) {
 	m := importManager()
 	m.imp.phase, m.imp.staged, m.imp.effects = ImportComplete, new(vault.OwnerImport), true
 	password := []byte("synthetic password")
-	if err := m.InspectImport("archive.zip", password); err != nil {
-		t.Fatal(err)
-	}
+	err := m.InspectImport("archive.zip", password)
 	clear(password)
-	if !bytes.Equal(m.imp.password, []byte("synthetic password")) || !m.busy || m.imp.phase != ImportInspecting || m.imp.staged != nil || m.imp.effects || <-m.jobs != ":import-inspect" {
-		t.Fatal("inspection did not take a private copy or reset the previous import")
-	}
-	if err := m.InspectImport("other.zip", nil); !errors.Is(err, ErrPending) {
-		t.Fatal("second inspection bypassed the busy worker")
+	if err != nil || !bytes.Equal(m.imp.password, []byte("synthetic password")) || !m.busy || m.imp.phase != ImportInspecting || m.imp.staged != nil || m.imp.effects || <-m.jobs != ":import-inspect" || !errors.Is(m.InspectImport("other.zip", nil), ErrPending) {
+		t.Fatal("inspection did not take a private copy, reset the previous import or hold the busy worker")
 	}
 	m = importManager()
 	m.imp.phase, m.imp.aborted, m.imp.password = ImportInspecting, true, []byte("synthetic password")
 	held := m.imp.password
-	if err := m.inspectImport(context.Background()); err != nil {
-		t.Fatal("inspect outcome must never become the manager error")
-	}
-	if m.imp.phase != ImportIdle || !errors.Is(m.imp.err, ErrImportAborted) || m.imp.password != nil || !bytes.Equal(held, make([]byte, len(held))) {
-		t.Fatal("failed inspection left state or password material behind")
+	err = m.inspectImport(context.Background())
+	if err != nil || m.imp.phase != ImportIdle || !errors.Is(m.imp.err, ErrImportAborted) || m.imp.password != nil || !bytes.Equal(held, make([]byte, len(held))) {
+		t.Fatal("failed inspection left state, password material or a manager error behind")
 	}
 }
 
 func TestImportPhaseGatingForConfirmResumeAbort(t *testing.T) {
-	for _, phase := range []ImportPhase{ImportIdle, ImportInspecting, ImportApplying, ImportPartial, ImportComplete} {
-		m := importManager()
-		m.imp.phase, m.imp.staged = phase, new(vault.OwnerImport)
-		if err := m.ConfirmImport(); !errors.Is(err, ErrPending) || m.busy || len(m.jobs) != 0 {
-			t.Fatalf("confirm ran in phase %q", phase)
+	refuse := func(name string, run func(*Manager) error, phases ...ImportPhase) {
+		for _, phase := range phases {
+			m := importManager()
+			m.imp.phase, m.imp.staged = phase, new(vault.OwnerImport)
+			if err := run(m); !errors.Is(err, ErrPending) || m.busy || len(m.jobs) != 0 {
+				t.Fatalf("%s ran in phase %q", name, phase)
+			}
 		}
 	}
-	for _, phase := range []ImportPhase{ImportIdle, ImportInspecting, ImportStaged, ImportApplying, ImportComplete} {
-		m := importManager()
-		m.imp.phase, m.imp.staged = phase, new(vault.OwnerImport)
-		if err := m.ResumeImport(); !errors.Is(err, ErrPending) || m.busy || len(m.jobs) != 0 {
-			t.Fatalf("resume ran in phase %q", phase)
-		}
-	}
+	refuse("confirm", (*Manager).ConfirmImport, ImportIdle, ImportInspecting, ImportApplying, ImportPartial, ImportComplete)
+	refuse("resume", (*Manager).ResumeImport, ImportIdle, ImportInspecting, ImportStaged, ImportApplying, ImportComplete)
 	m := importManager()
 	m.imp.phase, m.imp.staged, m.pending = ImportPartial, new(vault.OwnerImport), &vault.OwnerIntent{}
 	if err := m.ResumeImport(); !errors.Is(err, ErrPending) || len(m.jobs) != 0 {
 		t.Fatal("resume ignored an unresolved owner intent")
 	}
-	// An unevaluable destination must refuse confirmation, never queue.
 	m = importManager()
 	m.imp.phase, m.imp.staged = ImportStaged, new(vault.OwnerImport)
 	if err := m.ConfirmImport(); err == nil || m.busy || len(m.jobs) != 0 || m.imp.phase != ImportStaged {
@@ -174,9 +159,7 @@ func TestImportPhaseGatingForConfirmResumeAbort(t *testing.T) {
 }
 
 func TestAbortImportSemanticsPerPhase(t *testing.T) {
-	if err := importManager().AbortImport(); err != nil {
-		t.Fatal(err)
-	}
+	idle := importManager().AbortImport()
 	for _, phase := range []ImportPhase{ImportStaged, ImportComplete, ImportPartial} {
 		m := importManager()
 		m.imp.phase, m.imp.staged, m.imp.password, m.imp.effects = phase, new(vault.OwnerImport), []byte("pw"), true
@@ -191,13 +174,11 @@ func TestAbortImportSemanticsPerPhase(t *testing.T) {
 	m := importManager()
 	m.imp.phase, m.imp.staged, m.imp.errOwned, m.err = ImportPartial, new(vault.OwnerImport), true, errors.New("fixture")
 	m.AbortImport()
-	if m.err != nil {
-		t.Fatal("aborting a partial import kept its own manager error")
-	}
+	cleared := m.err == nil
 	m.imp.phase, m.imp.errOwned, m.err, m.pending = ImportPartial, true, errors.New("fixture"), &vault.OwnerIntent{}
 	m.AbortImport()
-	if m.err == nil {
-		t.Fatal("abort hid an unresolved owner intent")
+	if idle != nil || !cleared || m.err == nil {
+		t.Fatal("abort failed when idle, kept its own manager error or hid an unresolved owner intent")
 	}
 	for _, phase := range []ImportPhase{ImportInspecting, ImportApplying} {
 		cancelled := false
@@ -223,14 +204,7 @@ func TestStopDiscardsStagedImportAndHelpersAreSafe(t *testing.T) {
 	if m.imp.phase != ImportIdle || m.imp.staged != nil || m.imp.password != nil {
 		t.Fatal("closing kept staged import material")
 	}
-	for err, want := range map[error]error{
-		ownerarchive.ErrAuthentication: ownerarchive.ErrAuthentication,
-		vault.ErrImportInvalid:         ownerarchive.ErrArchive,
-		context.DeadlineExceeded:       errImportInterrupted,
-		errors.New("secret-bearing"):   errImportFailed,
-		vault.ErrImportChanged:         vault.ErrImportChanged,
-		errImportEntries:               errImportEntries,
-	} {
+	for err, want := range map[error]error{ownerarchive.ErrAuthentication: ownerarchive.ErrAuthentication, vault.ErrImportInvalid: ownerarchive.ErrArchive, context.DeadlineExceeded: errImportInterrupted, errors.New("secret-bearing"): errImportFailed, vault.ErrImportChanged: vault.ErrImportChanged, errImportEntries: errImportEntries} {
 		if got := safeImportError(err); got != want {
 			t.Fatal("import error was not mapped to fixed text")
 		}
@@ -245,30 +219,12 @@ func TestStopDiscardsStagedImportAndHelpersAreSafe(t *testing.T) {
 
 func TestImportAliasOwnership(t *testing.T) {
 	secret := vault.ImportSecret{AliasID: "a", Name: "token", ServerID: "s"}
-	bind := func(name, scope, ref string) vault.SecretBinding {
-		return vault.SecretBinding{Name: name, ServerID: scope, Ref: ref}
+	owned := func(name, scope, ref string, receipts map[string]string) bool {
+		return importAliasOwned(secret, vault.SecretBinding{Name: name, ServerID: scope, Ref: ref}, receipts)
 	}
-	cases := []struct {
-		name, receipt, inflight string
-		binding                 vault.SecretBinding
-		want                    bool
-	}{
-		{"no receipt", "", "", bind("token", "s", "r1"), false},
-		{"receipt", "r1", "", bind("token", "s", "r1"), true},
-		{"ref changed", "r1", "", bind("token", "s", "r2"), false},
-		{"renamed", "r1", "", bind("other", "s", "r1"), false},
-		{"rescoped", "r1", "", bind("token", "", "r1"), false},
-		{"inflight renamed", "", "a", bind("other", "s", "r1"), false},
-		{"inflight", "", "a", bind("token", "s", "r1"), true},
-	}
-	for _, tc := range cases {
-		receipts := map[string]string{}
-		if tc.receipt != "" {
-			receipts["a"] = tc.receipt
-		}
-		if got := importAliasOwned(secret, tc.binding, receipts, tc.inflight); got != tc.want {
-			t.Fatalf("%s: ownership %v", tc.name, got)
-		}
+	r1 := map[string]string{"a": "r1"}
+	if owned("token", "s", "r1", nil) || !owned("token", "s", "r1", r1) || owned("token", "s", "r2", r1) || owned("other", "s", "r1", r1) || owned("token", "", "r1", r1) {
+		t.Fatal("alias ownership needs the exact receipt under the plan's name and scope")
 	}
 }
 
@@ -286,15 +242,59 @@ func TestImportOwnsDestinationGatesEditSubmitAndStatus(t *testing.T) {
 	m := importManager()
 	m.db, m.imp.phase, m.imp.staged = nil, ImportStaged, new(vault.OwnerImport)
 	m.imp.preview = vault.ImportPreview{Secrets: []vault.ImportSecret{{AliasID: "a", Name: "token"}}}
-	if status := m.ImportStatus(); status.Published != 0 || status.Total != 1 {
-		t.Fatal("staged plan reported published aliases")
-	}
+	staged := m.ImportStatus()
 	m.imp.published, m.imp.inflight = map[string]string{"a": "r1"}, "b"
-	if status := m.ImportStatus(); status.Published != 0 {
-		t.Fatal("status counted without a readable destination")
+	if status := m.ImportStatus(); staged.Published != 0 || staged.Total != 1 || status.Published != 0 {
+		t.Fatal("staged plan reported published aliases or status counted without a readable destination")
 	}
 	m.imp.reset()
 	if m.imp.published != nil || m.imp.inflight != "" {
 		t.Fatal("reset kept import receipts")
 	}
+}
+
+func TestImportReceiptsFollowOnlyAuthenticatedCommits(t *testing.T) {
+	plan := []vault.ImportSecret{{AliasID: "a", Name: "n1"}, {AliasID: "b", Name: "n2", ServerID: "s"}}
+	a1, a2, b2 := importRef(1, 1, 1, 1), importRef(1, 1, 9, 2), importRef(1, 2, 8, 2)
+	bind := func(name, scope string, ref appstoreref.Ref) vault.SecretBinding {
+		return vault.SecretBinding{Name: name, ServerID: scope, Ref: refText(ref)}
+	}
+	chA, chB := vault.OwnerChange{AliasID: "a", Name: "n1", ObjectID: "01" + strings.Repeat("0", 30)}, vault.OwnerChange{AliasID: "b", Name: "n2", ServerID: "s", ObjectID: "02" + strings.Repeat("0", 30)}
+	refs2, good, old := []appstoreref.Ref{a2, b2}, map[string]vault.SecretBinding{"a": bind("n1", "", a2), "b": bind("n2", "s", b2)}, refText(a1)
+	with := func(a vault.SecretBinding) map[string]vault.SecretBinding {
+		return map[string]vault.SecretBinding{"a": a, "b": good["b"]}
+	}
+	run := func(phase ImportPhase, receipts map[string]string, inflight string, change vault.OwnerChange, refs []appstoreref.Ref, meta map[string]vault.SecretBinding) *Manager {
+		m := importManager()
+		m.imp.phase, m.imp.preview.Secrets, m.imp.published, m.imp.inflight = phase, plan, receipts, inflight
+		m.importCommittedWith(change, refs, meta)
+		return m
+	}
+	for _, phase := range []ImportPhase{ImportApplying, ImportPartial} {
+		m := run(ImportApplying, nil, "a", chA, []appstoreref.Ref{a1}, map[string]vault.SecretBinding{"a": bind("n1", "", a1)})
+		first := m.imp.published["a"] == old && m.imp.inflight == ""
+		m.imp.phase, m.imp.inflight = phase, "b"
+		before := importPublished(plan, m.imp.published, good) == 0 && !importAliasOwned(plan[0], good["a"], m.imp.published)
+		m.importCommittedWith(chB, refs2, good)
+		p := m.imp.published
+		if !first || !before || p["a"] != refText(a2) || p["b"] != refText(b2) || m.imp.inflight != "" || importPublished(plan, p, good) != 2 || !importAliasOwned(plan[0], good["a"], p) || !importAliasOwned(plan[1], good["b"], p) {
+			t.Fatalf("commit hook did not follow the authenticated refs in phase %q", phase)
+		}
+	}
+	check := func(name string, phase ImportPhase, change vault.OwnerChange, refs []appstoreref.Ref, meta map[string]vault.SecretBinding, wantA string, wantB bool) {
+		m := run(phase, map[string]string{"a": old}, "b", change, refs, meta)
+		_, gotB := m.imp.published["b"]
+		if m.imp.published["a"] != wantA || gotB != wantB || (m.imp.inflight == "") != wantB {
+			t.Fatalf("%s: receipts moved without an authenticating commit", name)
+		}
+	}
+	check("version not in commit", ImportApplying, chB, refs2, with(bind("n1", "", importRef(1, 1, 7, 2))), old, true)
+	check("foreign store", ImportApplying, chB, []appstoreref.Ref{importRef(5, 1, 9, 2), b2}, good, old, true)
+	check("renamed", ImportApplying, chB, refs2, with(bind("x", "", a2)), old, true)
+	check("rescoped", ImportApplying, chB, refs2, with(bind("n1", "s", a2)), old, true)
+	check("missing", ImportApplying, chB, refs2, map[string]vault.SecretBinding{"b": good["b"]}, old, true)
+	check("own binding differs", ImportApplying, chB, refs2, map[string]vault.SecretBinding{"a": good["a"], "b": bind("n2", "s", importRef(1, 2, 7, 2))}, refText(a2), false)
+	check("not the import's intent", ImportApplying, chA, refs2, good, old, false)
+	check("staged", ImportStaged, chB, refs2, good, old, false)
+	check("complete", ImportComplete, chB, refs2, good, old, false)
 }

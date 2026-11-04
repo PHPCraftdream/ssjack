@@ -6,6 +6,8 @@ import (
 	"errors"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -149,6 +151,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	m.importCommitted(pending.Change, commit.Refs)
 	if err := syncDatabase(ctx, m.path, m.db); err != nil {
 		return err
 	}
@@ -193,4 +196,92 @@ func (m *Manager) cancelDraft(ctx context.Context) error {
 	}
 	m.clearPending()
 	return nil
+}
+
+// followImportCommit returns receipts advanced by one authenticated owner
+// commit and whether the committed intent's own alias was receipted. Every
+// dirty commit re-versions all objects and FinishOwnerChange moves every alias
+// to the commit's ref for the same object ID, so earlier receipts may only
+// follow the exact commit refs; unmatched receipts stay stale and later exact
+// checks fail closed. A commit that is not the in-flight import intent never
+// moves anything.
+func followImportCommit(plan []vault.ImportSecret, receipts map[string]string, inflight string, current map[string]vault.SecretBinding, change vault.OwnerChange, refs []appstoreref.Ref) (map[string]string, bool) {
+	next := make(map[string]string, len(receipts)+1)
+	for alias, ref := range receipts {
+		next[alias] = ref
+	}
+	if inflight == "" || inflight != change.AliasID {
+		return next, false
+	}
+	byObject := make(map[[16]byte]appstoreref.Ref, len(refs))
+	for _, ref := range refs {
+		object := ref.ObjectID()
+		if _, duplicate := byObject[object]; duplicate {
+			return next, false
+		}
+		byObject[object] = ref
+	}
+	// exact encodes the commit ref when the alias's metadata equals it byte for byte.
+	exact := func(binding vault.SecretBinding, ref appstoreref.Ref) (string, bool) {
+		encoded, err := appstoreplaceholder.Encode(ref)
+		return string(encoded), err == nil && binding.Ref == string(encoded)
+	}
+	own := false
+	for _, secret := range plan {
+		if secret.AliasID == change.AliasID {
+			own = true
+		}
+		receipt, receipted := receipts[secret.AliasID]
+		if !receipted {
+			continue
+		}
+		old, err := appstoreplaceholder.Parse([]byte(receipt))
+		if err != nil {
+			continue
+		}
+		ref, found := byObject[old.ObjectID()]
+		binding, exists := current[secret.AliasID]
+		if !found || !exists || ref.StoreID() != old.StoreID() || binding.Name != secret.Name || binding.ServerID != secret.ServerID {
+			continue
+		}
+		if encoded, same := exact(binding, ref); same {
+			next[secret.AliasID] = encoded
+		}
+	}
+	object, err := decodeOwnerID(change.ObjectID)
+	ref, found := byObject[object]
+	binding, exists := current[change.AliasID]
+	if !own || err != nil || !found || !exists || binding.Name != change.Name || binding.ServerID != change.ServerID {
+		return next, false
+	}
+	encoded, same := exact(binding, ref)
+	if same {
+		next[change.AliasID] = encoded
+	}
+	return next, same
+}
+
+// importCommitted receipts an authenticated owner commit for the import; the
+// metadata is read before m.mu is taken.
+func (m *Manager) importCommitted(change vault.OwnerChange, refs []appstoreref.Ref) {
+	metadata, err := m.db.Metadata()
+	if err != nil {
+		return
+	}
+	m.importCommittedWith(change, refs, metadata.Secrets)
+}
+
+func (m *Manager) importCommittedWith(change vault.OwnerChange, refs []appstoreref.Ref, secrets map[string]vault.SecretBinding) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.imp.owns() {
+		return
+	}
+	next, ok := followImportCommit(m.imp.preview.Secrets, m.imp.published, m.imp.inflight, secrets, change, refs)
+	if len(next) > 0 || ok {
+		m.imp.published = next
+	}
+	if ok {
+		m.imp.inflight = ""
+	}
 }

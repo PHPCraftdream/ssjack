@@ -236,6 +236,7 @@ func (m *Manager) process(ctx context.Context, id string) error {
 	}); err != nil {
 		return err
 	}
+	m.importCommitted(prepared.Change, commit.Refs)
 	if err := syncDatabase(ctx, m.path, m.db); err != nil {
 		return err
 	}

@@ -66,10 +66,10 @@ func recoveryPartial(t *testing.T, manager *ownerdb.Manager, published int) {
 	t.Helper()
 	status := manager.ImportStatus()
 	if status.Phase != ownerdb.ImportPartial || !status.DirectoryApplied || status.Total != 2 || status.Err == nil {
-		t.Fatal("failed owner import was not reported as partial")
+		t.Fatalf("failed owner import was not reported as partial: phase=%q published=%d total=%d directory=%v failed=%v", status.Phase, status.Published, status.Total, status.DirectoryApplied, status.Err != nil)
 	}
 	if published >= 0 && status.Published != published {
-		t.Fatal("partial owner import reported an unexpected published count")
+		t.Fatalf("partial owner import reported an unexpected published count: published=%d expected=%d total=%d", status.Published, published, status.Total)
 	}
 }
 

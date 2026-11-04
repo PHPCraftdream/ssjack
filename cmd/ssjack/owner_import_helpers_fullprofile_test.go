@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -100,21 +101,26 @@ func requireUntouched(t *testing.T, manager *ownerdb.Manager, database string, b
 func waitImportComplete(t *testing.T, ctx context.Context, manager *ownerdb.Manager, total int) {
 	t.Helper()
 	for attempt := 0; attempt < 5; attempt++ {
-		if err := manager.Flush(ctx); err != nil {
-			t.Fatal("owner import stopped before every value was published")
-		}
+		flushErr := manager.Flush(ctx)
 		status := manager.ImportStatus()
+		// Only phase, counts and booleans are printed: never error text or values.
+		diagnostic := fmt.Sprintf("attempt=%d phase=%q published=%d total=%d expected=%d directory=%v failed=%v flush-failed=%v", attempt, status.Phase, status.Published, status.Total, total, status.DirectoryApplied, status.Err != nil, flushErr != nil)
+		if flushErr != nil {
+			t.Fatalf("owner import stopped before every value was published: %s", diagnostic)
+		}
 		switch status.Phase {
 		case ownerdb.ImportComplete:
 			if status.Published != total || status.Total != total || status.Err != nil || !status.DirectoryApplied {
-				t.Fatal("owner import completed with unexpected counts")
+				t.Fatalf("owner import completed with unexpected counts: %s", diagnostic)
 			}
 			return
 		case ownerdb.ImportPartial:
-			t.Fatal("owner import finished partially")
+			t.Fatalf("owner import finished partially: %s", diagnostic)
+		}
+		if attempt == 4 {
+			t.Fatalf("owner import did not complete: %s", diagnostic)
 		}
 	}
-	t.Fatal("owner import did not complete")
 }
 
 // verifyImportedValues reads the destination's values back through a private
