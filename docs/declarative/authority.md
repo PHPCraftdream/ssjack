@@ -2,7 +2,7 @@
 
 ## Status
 
-The source contains an isolated Linux/amd64 synthetic-metadata slice and a privileged CLI path. **It is not production-ready and has not been executed or acceptance-tested.** Public CI acceptance code is authored, but no passing CI run is claimed. Static fixture drivers are test-only; no production driver artifact or installation mechanism is supplied here.
+The source contains an isolated Linux/amd64 synthetic-metadata slice and privileged CLI registration. Required root acceptance passed in [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948) on source `0576409`. This is not production enrollment, a generic driver, independent security audit or application adoption. Static fixture drivers remain test-only; no production driver artifact or installation mechanism is supplied here.
 
 ## Fixed authority
 
@@ -22,8 +22,8 @@ The fixture's metadata file has a lock and atomic replacement, but it is writabl
 
 ## Secret and trust non-goals
 
-Placeholder bytes are metadata references only. There is no resolver, secret hydration, credential release, Nix/OpenClaw/Clawwright integration, native configuration update, argv/environment injection, or proof that consuming applications receive a secret. Secret release remains unimplemented and must not be inferred from a successful metadata operation. Human verification of driver provenance and intended resource behavior must occur outside any model-controlled session.
+Placeholder bytes are metadata references only. There is no resolver, secret hydration, credential release, Nix/OpenClaw/Clawwright integration, native configuration update, argv/environment injection, or proof that consuming applications receive a secret. This metadata surface releases no secrets, and a successful metadata operation grants no delivery authority. The separately registered fixed synthetic delivery and text-adapter paths have their own contracts; see [store entry](../application-store/ENTRY.md). Human verification of driver provenance and intended resource behavior must occur outside any model-controlled session.
 
 ## Authored public acceptance
 
-The scoped Linux CI job uses a disposable root container to compile static synthetic fixtures, install only the fixed test path, perform setup/register/revoke through the interactive CLI, and run the broker/MCP tests as a non-root recipient. Authored cases cover the two-tool descriptor, planning without mutation, apply/replay/stale revision behavior, denied full operations, separate-session plan rejection, malformed input refusal, output-schema rejection, expiry/revocation/executable-digest rechecks, and a delayed lost-reply reconciliation fixture. These are intended checks only: they have not been run in this work session, and no CI result is claimed. Test fixtures are not supported production drivers.
+The scoped Linux CI job uses a disposable root container to compile static synthetic fixtures, install only the fixed test path, perform setup/register/revoke through the interactive CLI, and run the broker/MCP tests as a non-root recipient. Authored cases cover the two-tool descriptor, planning without mutation, apply/replay/stale revision behavior, denied full operations, separate-session plan rejection, malformed input refusal, output-schema rejection, expiry/revocation/executable-digest rechecks, and a delayed lost-reply reconciliation fixture. The required root CI runner and exact-source receipt above cover this synthetic acceptance path; writing a test alone is still not execution evidence. Test fixtures are not supported production drivers.

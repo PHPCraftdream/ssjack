@@ -1,6 +1,6 @@
 # ssjack
 
-A cross-platform Go SSH client, encrypted credential manager, key utility, and MCP server. Agent access uses two roles in the same executable:
+A cross-platform Go SSH client, encrypted server/account directory, Bubble Tea owner console, key utility and MCP keeper. The current operator entry points and platform boundaries are indexed in [the capability map](docs/README.md). Agent access uses two roles in the same executable:
 
 - `ssjack run <harness> [arguments...]` prompts for a passphrase, keeps decrypted SSH keys in memory, and runs the selected harness.
 - `ssjack mcp` is the stdio bridge started by that harness. Starting another bridge does not grant access by itself.
@@ -14,7 +14,7 @@ Options belonging to ssjack precede the harness name. The remaining arguments be
 
 ## Install and launch
 
-Use the globally installed executable or the explicit path to a verified CI artifact. Source checkout wrappers and local-build updater scripts are no longer provided. Install or update with the official [installers](docs/INSTALL.md); they handle release downloads and verified local candidates without stopping running processes.
+Use the globally installed executable or a verified CI artifact. For a reviewed source checkout, root `build.sh` (Linux/macOS) and `build.ps1` (Windows) compile the native CLI and install it through the official verified installer, with commit identity and a SHA-256 check. They never self-elevate or stop processes. The same [installers](docs/INSTALL.md) handle release downloads/local candidates directly; there is no second replacement algorithm.
 
 ```text
 ssjack run claude -c
@@ -27,28 +27,36 @@ Use an interactive terminal for the passphrase. On Windows, mintty may not provi
 
 Keep the launcher in the foreground. A harness that detaches into an angel (background process) and immediately exits its initial process is not supported: the keeper closes when that process exits.
 
-## Named credentials and legacy configuration: Ktav 0.8.1, pure Go
+## Named credentials and stored formats
 
 ssjack uses `github.com/ktav-lang/golang/pure` pinned to `v0.8.1`. It does not import the Rust ABI-backed root package. The pure package works with `CGO_ENABLED=0` and requires no Rust shared library.
 
 The following ssjack-owned formats use Ktav:
 
-- SSH configuration: `.ssh/ssjack.ktav`;
-- protected key containers and the encrypted interactive credentials vault;
-- framed request/response bodies on the internal TLS connection.
+- The encrypted credential database and its directory payload; default `.ssh/credentials.ssjack.ktav`.
+- Protected key containers and encrypted installation metadata.
+- Framed request/response bodies on the primary internal TLS connection.
 
-JSON remains only at required external interfaces: MCP JSON-RPC, `.mcp.json`, Claude Code settings, and hook event input/output. Existing `json` struct tags are also used by the Ktav library to map Go field names; they do not make the stored documents JSON.
+`.ssh/ssjack.ktav` is a legacy plaintext metadata input, never a normal startup configuration. JSON is used at MCP/configuration boundaries, archive manifests and separately versioned private HTTP text protocols (NDJSON for streaming). The application store has its own authenticated binary format. Existing `json` struct tags are also used by Ktav for field mapping; they do not make database payloads JSON.
 
 Normal startup reads only the encrypted profile database. Select a profile with `-p NAME` / `--profile NAME`; absence means `main`, not a guessed single record. Use `ssjack ssh`, `ssjack run claude -c`, and `ssjack edit` for the selected profile.
 
 An old plaintext target file is an explicit migration input only: `ssjack [-p NAME] vault migrate LEGACY_FILE`. The CLI authenticates interactively, imports actual key bytes and verified server pins into the encrypted database, preserves originals, and never enables plaintext startup fallback. See [profile migration](docs/VAULT.md).
 
+## Owner session and named directory
+
+`ssjack --interactive` unlocks once and runs the Bubble Tea connection picker and owner editor. Connection points are named server/account pairs; even a singleton requires Enter. Selectors can focus a server/account page without connecting. Server/account forms accept key-file or hidden-password authentication, shared verified host pins and per-account usage. Global and server-local secret values use the linked private app-store path; bindings carry exact refs and explicit stable-server-ID scopes, not a fallback hierarchy.
+
+The owner coordinator retains authenticated RAM state, serializes encrypted saves and exposes explicit pending-intent recovery. Export scopes all/server/account/global include actual values; encrypted by default, exact `EXPORT PLAINTEXT` for the deliberate alternative. Import inspects existing ZIP archives in RAM, previews metadata and requires `IMPORT`; conflicts refuse without overwrite, and values receive fresh authenticated destination refs. Per-secret intents are durable; the remainder of a partial import plan is RAM-only, with no full-plan restart resume. These owner capabilities are not MCP getters or remote enrollment.
+
+`vault migrate-directory NEW_FILE` explicitly converts the payload schema while preserving the original ciphertext and credentials. The operator must select the result or activate it at the old path; installation never switches files. `vault upgrade` is a different outer-container operation. See [the credential/migration guide](docs/VAULT.md) and [owner menu](docs/application-store/OWNER-TUI.md).
+
 ## Keys and host verification
 
-1. Generate a dedicated encrypted key with `ssjack --generate-key <new-file>`; see [protected keys](docs/KEYS.md). Legacy encrypted OpenSSH keys remain supported; see `SSH.md` for the separate manual workflow.
-2. Install only its public key into the intended server account's `authorized_keys` through an existing trusted connection.
-3. Verify server host keys through that trusted connection and populate `known_hosts` in advance. Unknown or changed host keys are never accepted automatically.
-4. Configure the target address, SSH user, key reference, and `known_hosts` file.
+1. Generate a key inside the database with `vault init --generate-key` / `add --generate-key`, select an existing key file, or choose password authentication in the owner menu. Standalone containers use `--generate-key FILE` / `--protect-key FILE`; see [keys](docs/KEYS.md).
+2. For key authentication, install only the public key into the intended existing server account through a trusted connection.
+3. Independently verify server public keys and enter/import the pins into the encrypted record. Unknown or changed keys are never accepted automatically.
+4. Store endpoint, SSH login, exactly one key/password credential, pins and optional usage/policy in the database. A legacy `known_hosts` file is only an explicit metadata-migration input.
 
 The example account is `mcp-agent`, not the host administrator. This tool does not establish a sandbox or grant Incus privileges. Do not expose an administrative Incus socket to a service agent.
 
@@ -58,7 +66,7 @@ The passphrase buffer is cleared after unlocking, but Go and the OS cannot guara
 
 ## Interactive shell and encrypted credentials
 
-`ssjack [-p NAME] ssh` opens an interactive SSH session using the same encrypted database as `ssjack [-p NAME] run <harness> [arguments...]`. Every invocation asks for the vault secret. The vault stores the target address, user, private key, and pinned server public keys inside the encrypted payload. `ssjack vault init|passwd|backup|restore|check` manages it without a plaintext editor. The SSH client is built into ssjack and never starts an external `ssh` executable.
+`ssjack [-p NAME] ssh` opens a PTY using the same encrypted database as `run HARNESS [ARGS...]`; named-directory callers can instead use `--server NAME --account NAME`. Separate CLI invocations unlock individually, while the owner menu reuses one session. The vault stores address, user, key or password, verified server pins and settings. `vault init|passwd|backup|restore|check|upgrade|migrate-directory` manages storage without plaintext staging. Native SSH never starts an external `ssh` executable. Input is owned and joined before returning to the menu; Windows VT consoles can fail closed and require a restart rather than unsafe reader reuse.
 
 This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 
@@ -135,7 +143,19 @@ The installer stages and verifies the candidate, renames the previous executable
 
 Running processes continue their old code until explicitly restarted. After an incompatible bootstrap change, restart the launcher and bridge together. Installers do not migrate the encrypted database or alter SSH credentials.
 
+## Application secrets and separate text adapters
+
+Application-secret values use a separate encrypted versioned store. The owner directory stores names/scopes/refs and its encrypted store link, not a second ordinary value database. `appstore setup|put|inspect|unlock` covers the explicit installation/first-entry/inspection/fixed-delivery path; owner CRUD and archive import/export extend that path without a public value getter. Setup does not enroll a service. See [store entry](docs/application-store/ENTRY.md) and [owner coordination](docs/application-store/OWNER-COORDINATOR.md).
+
+The Linux/amd64 `text-adapter` CLI is separate from general `app_*` transport and synthetic delivery. Root registers/revokes exact finite grants; a non-root operator unlocks the selected account and installation and launches a direction-specific listener through `serve` (v1) or `serve-stream` (v2). Forward hydration never grants reverse reads. A v2 grant has its own namespace and no v1/raw fallback. Clawwright explicitly uses `--stream-references PATH` for large-text deploy/backup; the file is canonical reference metadata, not approval or values.
+
+Private hydration and reverse-copy pipelines keep selected values out of model/tool responses. Reverse output is a validated reference-only copy, not a rewrite of the source. V2 uses bounded framing and up to 64 MiB decoded input/output, with status-only delivery outcomes. `received` does not establish adoption; uncertain effects must not be retried automatically. Literal replacement does not escape structured formats or discover unknown secrets. See [text adapter](docs/application-store/TEXT-ADAPTER.md), [stream HTTP](docs/application-store/TEXT-STREAM-HTTP.md) and [paired acceptance](docs/application-store/CLAWWRIGHT-TEXT-PAIR.md).
+
+The separate `declarative setup|register|revoke|run` path implements only a synthetic Linux/amd64 metadata slice; general enrollment, restricted-driver execution and lifecycle specifications remain proposals. `--mode declarative` metadata descriptors do not enable that general runtime. See [declarative scope](docs/declarative/README.md).
+
 ## Tests
+
+Run these only in the authorized GitHub CI environment, not as an implicit local startup step:
 
 ```text
 go test -mod=readonly -count=1 -timeout 120s ./cmd/ssjack ./internal/...

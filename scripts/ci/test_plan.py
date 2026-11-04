@@ -109,6 +109,22 @@ class SelectionTests(unittest.TestCase):
             self.assertTrue(plan.select(self.graph, [path])["installers"])
         self.assertFalse(plan.select(self.graph, ["internal/core/core.go"])["installers"])
 
+    def test_source_builders_select_installer_smoke_and_cli_regressions(self):
+        graph = self.graph + [{"directory": "cmd/ssjack", "import": "example.test/ssjack",
+                               "dependencies": []}]
+        for path in ("build.sh", "build.ps1"):
+            with self.subTest(path=path):
+                result = plan.select(graph, [path])
+                self.assertTrue(result["installers"])
+                self.assertEqual(result["packages"], ["./cmd/ssjack"])
+                self.assertFalse(result["reasons"])
+        root = Path(__file__).resolve().parents[2]
+        for name in ("feature.yml", "ci.yml"):
+            source = (root / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            self.assertIn("sh ./build.sh --install-dir", source)
+            self.assertIn(".\\build.ps1 -InstallDir", source)
+            self.assertIn("-NoPathUpdate", source)
+
     def test_cycles_terminate(self):
         self.graph[1]["dependencies"] = ["example.test/app/internal/consumer"]
         self.assertEqual(self.selected("internal/core/core.go"),

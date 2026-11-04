@@ -6,159 +6,264 @@
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](docs/INSTALL.md)
 [![Status](https://img.shields.io/badge/status-experimental-orange)](#security-boundaries)
 
-**Native SSH for humans and coding agents, with encrypted profiles and explicit trust boundaries.**
+**Native SSH, an encrypted server/secret directory, and explicitly scoped access for coding agents.**
 
-ssjack is a cross-platform Go SSH client, encrypted credential manager, key utility, and scoped MCP bridge. SSH runs inside the keeper; private keys and vault secrets are not exported to an external SSH executable, agent, harness, or MCP bridge.
+ssjack is a Go SSH client, credential manager, Bubble Tea terminal interface,
+key utility, and MCP keeper. SSH runs inside ssjack: a harness receives neither
+SSH private keys/passwords nor the database master. Application-secret delivery
+has separate, finite authorization; unrestricted SSH output is **not** secret-safe.
 
-> **Experimental, security-sensitive software.** The custom encrypted container is not independently cryptographically audited. A green CI badge is regression evidence, not a security certification or a promise of production readiness.
+> **Experimental, security-sensitive software.** The custom encryption composition
+> is not independently audited. Passing CI is regression evidence, not security
+> certification, a published release, or proof that an application adopted a config.
 
-## Features
+[Install](docs/INSTALL.md) · [All capabilities and documentation](docs/README.md) ·
+[Credential guide](docs/VAULT.md) · [Security](SECURITY.md)
 
-- One encrypted profile database for native interactive SSH and coding-agent sessions.
-- Memory-only bootstrap with a single-use capability over pinned loopback TLS; no runtime credential files.
-- Local Ed25519 generation directly into a profile, plus public-key installation instructions with PTY enabled.
-- Verified backups, explicit restore/rotation, server pins, and human/agent usage guards.
-- Command/result cards for compatible Claude Code builds, with ordinary MCP support for other harnesses.
-- Windows, Linux, and macOS installers that replace running images without stopping processes.
+## Capabilities
 
-[Installation](docs/INSTALL.md) · [CLI guide](docs/VAULT.md) · [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+| Area | Available behavior |
+| --- | --- |
+| Encrypted directory | Named servers with stable IDs; multiple named SSH accounts per server; key **or** login/password authentication; verified host-key pins and per-account usage/policy. |
+| Interactive terminal | Explicit `--interactive` Bubble Tea connection picker, manual credential entry, server/account edits, global/server-local secrets, exports, imports, pending-change recovery. One database unlock per owner session. |
+| Connection choice | No automatic connection, even for one point. Enter selects human SSH; management stays reachable in an empty database. Named startup selectors are also available. |
+| Persistence | Validated RAM edits, ordered encrypted background saves, visible save/error state, explicit retry/recovery, fresh nonces and unchanged data-encryption layers. |
+| Migration and recovery | Credential-preserving directory migration, independent container upgrade, encrypted backups, verified restore, password changes, and recovery copies. |
+| Keys and trust | Derived Ed25519 generation, key import/encrypted OpenSSH export, public-key output/install instructions, explicit server-pin replacement, SSH policy and two-phase key rotation. |
+| Native SSH | Human PTY shell with terminal resize; no external SSH client or forwarded SSH agent. `check` verifies pins/authentication without a remote command. |
+| Coding-agent access | One selected credential, pinned loopback TLS, single-use bootstrap, bounded `remote_*` jobs, read/cancel, compatible project-local command/result cards. |
+| Application operations | Opt-in Clawwright registration and finite `app_*` jobs; optional fixed Incus route. This remains trusted shell-capable application code, not a sandbox. |
+| Application secrets | Separate encrypted versioned store, exact placeholder refs, private owner CRUD, global/server-local bindings and controlled value export/import. |
+| Text deploy/backup | Separately granted hydration and reference-only reverse copy; v1 bounded text or opt-in v2 streaming up to 64 MiB. Real paired Clawwright CLI/keeper/SSH acceptance. |
+| Declarative slice | Separate Linux/amd64 root-granted synthetic metadata and delivery paths. The general declarative driver/enrollment contract remains a proposal. |
+| Distribution | Windows/Linux/macOS installers, verified release/local candidates, embedded build identity and third-party license notices. |
 
-## Quick start
+The database-password holder owns its contents. Multiple SSH accounts do **not**
+create a multi-owner RBAC system. Credentials remain in the encrypted database;
+named application-secret bindings point to values in the separate store.
 
-Using an executable built from the current source, from your application directory:
+## Start with the terminal menu
 
-```text
-ssjack --version
-ssjack vault init --generate-key
-ssjack -p home add --generate-key
-ssjack -p home check
-ssjack -p home ssh
-ssjack -p home run claude -c
-```
+Run from the application working directory. The default database is
+`.ssh/credentials.ssjack.ktav` **relative to that directory**, not automatically
+relative to your home or the executable. `--vault FILE` selects another file.
 
-Create the database's parent directory first. The wizard needs an existing remote account and an independently verified server public-key file; it does not automatically create a remote user or trust a scanned key. Generated private keys stay in the database. After save, copy the printed public-key installation command to the intended remote account through an already trusted connection. Omit `--generate-key` to import an existing key instead.
-
-The same named record is used for human and agent sessions. Every credential-management invocation asks for its secret again. A coding-agent launcher unlocks once for that session and exposes only its selected record through a pinned loopback connection with a single-use environment capability without bootstrap files. Human SSH behaves like a normal PTY session after login.
-
-Help is deliberately detailed:
-
-```text
-ssjack help
-ssjack help key export
-ssjack vault restore --help
-```
-
-Each command explains its arguments, trust boundaries, and examples. Global flags precede the command. Everything after the harness name belongs to the harness, including `--help`.
-
-## Records, keys, and diagnosis
-
-```text
-ssjack list
-ssjack -p home show
-ssjack -p home edit
-ssjack -p home remove
-ssjack -p home key public
-ssjack -p home key import existing-key.pem
-ssjack -p home key export home.openssh
-ssjack doctor
-ssjack -p home check
-```
-
-Records contain encrypted addresses, users, private keys, server pins, and optional `both`/`human`/`agent` usage. Usage gates prevent selecting the wrong record accidentally; real readonly/admin privileges require separate server accounts and isolation, not string filtering of shell commands.
-
-`doctor` is read-only and checks local readiness after vault authorization. `check` verifies server trust and SSH authentication without running a remote command or opening a PTY. OpenSSH private exports are encrypted, exclusive new files and require a passphrase different from the vault secret. Source keys are never overwritten or deleted by import.
-
-## Recovery and rotation
-
-```text
-ssjack vault backup backups/home.ssjack.ktav
-ssjack vault check backups/home.ssjack.ktav
-ssjack vault restore backups/home.ssjack.ktav
-ssjack -p home hostkey show
-ssjack -p home hostkey replace verified-server-key.pub
-ssjack -p home rotate
-```
-
-Create backup parent directories yourself. Backups stay encrypted; restore validates before confirmation, retains the previous encrypted copy, and refuses revision conflicts. Server pin replacement requires independent verification and exact fingerprint confirmation, never automatic acceptance of a mismatch.
-
-Rotation preserves recovery files, explicitly confirms remote addition, retains the old authorized key, verifies the new login, and only then switches the vault record. Option-bearing keys and nonstandard authorized-key locations require manual handling rather than silently losing restrictions. Old remote keys are never removed automatically.
-
-## Protected key generation
-
-```text
-ssjack --generate-key .ssh/derived.ssjack.ktav
-ssjack --protect-key existing-key --key-output .ssh/protected.ssjack.ktav
-```
-
-Stored data uses four sequential Argon2id operations at 1 GiB each and **1000 nested AES-256-GCM data encryptions**. Derived Ed25519 bytes depend on the typed secret and fresh public parameters; retain the encrypted container/database because the secret alone does not recover lost parameters.
-
-This custom composition is **not independently audited**. The outermost GCM tag is a candidate-secret oracle, so 1000 layers do not imply 1000-fold password resistance. Strong secret entropy remains essential. See [the audit review package](docs/AUDIT.md).
-
-## Installation and compatibility
-
-[Global installers](docs/INSTALL.md) accept a real published GitHub Release or a verified local CI artifact with an explicit SHA-256. Writing a workflow does not publish a release, and source changes alone do not update an installed executable. See the [release contract](docs/RELEASES.md) for asset naming and publisher trust.
-
-The canonical Go module is `github.com/PHPCraftdream/ssjack`; `go.mod` declares the minimum Go version and CI selects that declared toolchain. No stable binary release is implied by this development snapshot.
-
-If you explicitly prefer source installation, the following compiles locally using the declared Go toolchain:
+For a new installation, create the parent directory, initialize a first legacy
+profile with verified server pins, then explicitly migrate to the directory schema:
 
 ```sh
-go install github.com/PHPCraftdream/ssjack/cmd/ssjack@latest
+ssjack vault init --generate-key
+ssjack vault migrate-directory .ssh/directory.ssjack.ktav
+ssjack --vault .ssh/directory.ssjack.ktav --interactive
 ```
 
-`@latest` currently selects a development snapshot, not a stability promise; use a reviewed commit when you need a fixed source revision. CI artifacts embed the exact checkout SHA. Builds without those linker flags can identify themselves as `dev`/`unknown`.
+`vault init` prompts for an existing remote login and independently verified server
+public-key file. It does not create users, grant sudo or discover trust. Omit
+`--generate-key` to import an existing key. Generated private bytes stay encrypted;
+only the public key and installation instructions are printed after save.
 
-CI builds the CLI with the Go version in `go.mod` and embeds build identity. Run the globally installed `ssjack` from the desired application working directory; source checkout launchers and local-build update wrappers are no longer needed. The launcher installs its embedded project-local UI plugin for compatible Claude Code builds and preserves unrelated settings/hooks/plugins.
+In the menu:
 
-The default database is `.ssh/credentials.ssjack.ktav`; `--vault FILE` selects another. Normal startup never reads plaintext target metadata; explicit `vault migrate FILE` is the only legacy import path. Older OpenSSH wrappers are removed. Existing keys/configuration are not silently migrated.
+- Press **Enter** on a connection point to connect; showing or focusing one never connects.
+- Open **Servers** to add/edit a server or add/edit its SSH accounts.
+- For password authentication, enter the password in the hidden credential field.
+  For key authentication, select an existing private-key file; direct multiline
+  private-key paste is not implemented.
+- Use **Global secrets** or a server's **Server secrets** for explicit scopes.
+  Value operations require a linked, already provisioned application store.
+- Use **Export all credentials and values** or scoped export from server/account/global pages.
+- Use **Import credentials and values** for archive inspection, preview and exact `IMPORT` confirmation.
+- Use arrows, Tab/Shift+Tab, Escape and the Apply/Cancel buttons. Exit waits for saves;
+  unresolved persistence errors are not silently discarded.
+
+Only `--interactive` opens the menu. Missing commands and terminal detection do not.
+After a supported SSH handoff the menu resumes without another database unlock.
+If terminal input cannot be released, ssjack closes safely rather than starting a
+competing reader; Windows VT consoles may require restarting ssjack after SSH.
+
+See [the menu guide](docs/application-store/OWNER-TUI.md) for exact fields and limits.
+
+## Migrate an existing database and keep its usual path
+
+Stop all processes that could write the database. Migration first creates a
+**different** verified encrypted file; it never replaces the source automatically:
+
+```sh
+ssjack --vault .ssh/credentials.ssjack.ktav vault migrate-directory .ssh/directory-new.ssjack.ktav
+```
+
+Enter the existing database password and confirm `MIGRATE DIRECTORY`. Each old
+profile becomes a separate server with one `main` account, even if addresses match.
+The source ciphertext and credentials are preserved, and the password is unchanged.
+
+To let existing launch commands find the result automatically, put the verified
+replacement at the **old path**, keeping the old file as a rollback copy. Follow
+[the guarded PowerShell/POSIX switching instructions](docs/VAULT.md#activate-the-new-database-at-the-old-path).
+There is no automatic path switch or background migration. Old binaries must use
+the original database; downgrading the new payload is not a rollback strategy.
+
+`vault migrate LEGACY_FILE` imports old plaintext SSH metadata instead.
+`vault upgrade` changes the encrypted **container** format. These are three
+separate operations; installing a binary performs none of them.
+
+## Select a connection without the menu
+
+```sh
+ssjack --server production --account operator ssh
+ssjack --server production --account automation run claude -c
+ssjack --server production --account operator check
+ssjack --interactive --server production --account operator
+```
+
+Names are exact and case-sensitive. A server without `--account` is accepted by
+non-menu connection commands only when it has exactly one account; ambiguity and
+unknown names refuse. Menu selectors only focus a page, never connect automatically.
+`-p NAME` / `--profile NAME` selects a credential-record ID and defaults to `main`;
+it cannot be combined with `--server`. Use the menu for directory edits.
+
+Global flags precede the command. After `run HARNESS`, all arguments belong to the
+harness, including `--help`. A normal SSH or harness invocation unlocks its selected
+credentials once; the separate owner menu retains one RAM session across edits.
+
+## Export, import, backups and maintenance
+
+Owner export is a ZIP containing the **selected credentials, settings and actual
+secret values**, not just refs. It is encrypted by default. Plaintext export
+requires exact `EXPORT PLAINTEXT`, uses exclusive protected output, and is an
+intentional final artifact. Import accepts both formats, uses RAM-only inspection,
+shows metadata/conflicts and requires exact `IMPORT`. No silent overwrite or
+merge by endpoint/name occurs. Linked installation unlock material is not exported.
+
+A partial import is not success. Resolve its pending owner intent, then explicitly
+resume or abort. Abort keeps already applied entries. Remaining plan values are
+RAM-only and cannot be resumed after process restart; individual queued owner
+intents remain encrypted and recoverable. Linked-value operations are Linux-only.
+
+For whole-database recovery and key maintenance:
+
+```sh
+ssjack vault backup backups/before-maintenance.ssjack.ktav
+ssjack vault check backups/before-maintenance.ssjack.ktav
+ssjack vault restore backups/before-maintenance.ssjack.ktav
+ssjack vault passwd
+ssjack -p main key public
+ssjack -p main key import existing-key.pem
+ssjack -p main key export new-encrypted.openssh
+ssjack -p main hostkey show
+ssjack -p main hostkey replace independently-verified-server.pub
+ssjack -p main policy show
+ssjack -p main policy edit
+ssjack -p main rotate
+ssjack doctor
+```
+
+Create destination directories first. Private-key OpenSSH exports need a distinct
+passphrase and are not equivalent to the custom encrypted database backup.
+Rotation is key-only, retains old remote keys and requires explicit approval before
+remote addition. `doctor` is local/read-only; host-key replacement is never TOFU.
+See [the full credential guide](docs/VAULT.md).
+
+## Application secrets and selected-text delivery
+
+The [application-store guide](docs/application-store/ENTRY.md) covers provisioning,
+`appstore setup|put|inspect|unlock`, private owner changes and exact references.
+Setup does not enroll a service; `put` is first-entry only. Owner editing links an
+existing authenticated installation, not an automatically created backend.
+
+The [text adapter](docs/application-store/TEXT-ADAPTER.md) has its own root-approved
+grants. `text-adapter serve` serves v1; `serve-stream` serves separate forward or
+reverse v2 grants. Metadata, CLI flags and a parsed reference are **not approval**.
+
+For v2, Clawwright uses the single valued `--stream-references PATH` option on
+`deploy-text` / `backup-text`; the file contains exact canonical refs, never values.
+There is no v1 fallback. Streaming uses bounded 32 KiB frames with 64 MiB decoded
+input/output caps, at most 16 refs and 1 MiB selected values. Backup publishes only
+a validated reference-only copy, never modifies the remote source and never
+replaces an existing local output. Restore reuses captured exact refs.
+
+Hydration is literal, single-pass, leftmost-longest and nonrecursive; it is not a
+JSON/YAML escaping engine or a secret-discovery service. The operator owns mapping
+completeness, file selection, representation and consumer compatibility. Explicitly
+approved consumer plaintext configuration is permitted. `withheld` means pre-run
+refusal, `received` is delivery evidence, and `unknown` may follow effects: no blind
+retry, adoption claim or crash-durability guarantee follows from a receipt.
+
+[Streaming and HTTP](docs/application-store/TEXT-STREAM-HTTP.md) ·
+[Clawwright paired acceptance](docs/application-store/CLAWWRIGHT-TEXT-PAIR.md) ·
+[General application transport](docs/APP-TRANSPORT.md)
 
 ## Security boundaries
 
-This is not isolation from a targeted process running as the same OS user. Administrators, debuggers, memory dumps, swap, and internal Go copies remain relevant. Accessible buffers are cleared best-effort; unlocked signers remain in keeper memory for the session. A process stealing the full child bootstrap environment before attachment can race the bridge; bootstrap now uses one environment capability, not separate environment/file channels.
+Stored credentials retain **four sequential Argon2id operations, each 1 GiB,
+followed by 1000 nested AES-256-GCM data encryptions**. Retained session keys avoid
+repeating the KDF on every edit, not the 1000 encryption layers. Fresh nonces are
+used on saves. This composition is not independently audited; 1000 layers do not
+imply 1000-fold password resistance because the outer GCM tag is a candidate-secret
+oracle. Keep strong passwords and encrypted recovery copies.
 
-IPC is restricted to canonical `127.0.0.1`/`tcp4`, with numeric-port and loopback-peer checks before authentication, pinned TLS 1.3, and atomic single-use capabilities. SSH outbound is performed only by the keeper for the selected approved credentials. These controls are not an OS firewall.
+Root, the same OS user, trusted application code, debuggers, swap and dumps are
+not isolated by ssjack. Memory clearing is best-effort within Go and the OS.
+The primary bridge uses numeric loopback, pinned TLS 1.3 and a single-use child
+bootstrap capability; it is not an OS firewall. Full `remote_*` and registered
+`app_*` operations can execute broad commands and expose remote values in output.
+`human`/`agent` usage is accident prevention, not server-side privilege enforcement.
+Only separate server accounts, permissions and isolation establish least privilege.
 
-The current full MCP `remote_*` tools execute commands with the configured remote SSH principal's authority. A name such as `mcp-agent` does not establish that principal as non-admin: the operator controls server-side sudo rules, groups, socket access and backend memberships, which may permit host-root or equivalent access. For optional Incus routing, the selected host principal must be authorized for the fixed `sudo -n incus exec` operation, and the configured guest user has its guest privileges. Application registration fixes program selection against model substitution in tool arguments, but the admitted Clawwright entry/package and host-side paths remain trusted mutable code, not a sandbox. Admitted `app_exec` commands, including secret-reporting commands, may perform general operations or expose values. Output capture masks only exact child bootstrap-token occurrences; it is not general secret redaction. Safe SSH-key custody and captured output are no guarantee of secret nondisclosure.
+Application-store and root-granted text/declarative runtimes have additional
+Linux/amd64 constraints. General driver enrollment, universal restricted execution,
+OpenClaw/provider adoption, automatic server hardening and secret discovery are
+not implemented by these narrow paths. See [SECURITY.md](SECURITY.md),
+[the audit scope](docs/AUDIT.md) and [the capability map](docs/README.md).
 
-A Docker/Incus administrator socket or sudo rule, or an alternate SSH channel available to trusted code, may bypass a future restricted API. A future declarative MCP would be a separate authorization and dispatch surface; it is not a relabeling or restriction of `app_*` or current `remote_*`. Until then, enforce least privilege in the operator-controlled host, guest and backend configuration. Closing SSH does not necessarily terminate detached processes; output and metadata can contain sensitive information. See [scoped application transport](docs/APP-TRANSPORT.md).
+## Installation, verification and support
 
-## Trusted application text handoff
+The repository root includes build-and-install entry points for all supported OSes:
 
-CLI syntax: `ssjack appstore unlock [--text-mode hydrate|reverse --text-fd FD] HARNESS [ARGS...]`. In text mode, a trusted caller passes one inherited descriptor; EOF ends the read, which may block until the writer closes it. An arbitrary `io.Reader` cannot be interrupted by cancellation. The nonempty selection is 1 byte–32 KiB and identifies one exact reference and owner, not 128 mappings. Secret and output are each limited to 1 MiB. The inherited trusted pipe carries plaintext; command arguments, environment, model context, and tool requests/results carry metadata only, never plaintext. On a selected copy, `hydrate` replaces the exact reference with its value; `reverse` replaces the matching value with its placeholder. This does not rewrite live text. Existing finite authorization and fixed approved sink remain required; raw unlock is unchanged.
+```sh
+sh ./build.sh                         # Linux/macOS; default /usr/local/bin
+```
 
+```powershell
+.\build.ps1                          # Windows; current-user global PATH installation
+```
 
+They build this checkout with the local Go toolchain required by `go.mod`, embed
+its commit, hash the native candidate and delegate publication to the verified
+installer. No automatic elevation, process termination or database migration.
+Use `--install-dir` / `-InstallDir` for an explicit destination and see
+[installation permissions and source trust](docs/INSTALL.md#build-this-checkout-and-install-globally).
 
-## Verification and documentation
+The installers also accept published release assets or an explicit local CI
+artifact plus SHA-256. Source/CI acceptance alone does not update binaries or
+create a release. Running processes retain their old code. Use a reviewed source
+revision; `@latest` is not a stability promise.
 
-Project validation builds and tests run in GitHub CI, not automatically on a contributor's machine. Local work normally needs only formatting; source installation is an explicit operator choice, not permission for an assistant to run local builds without approval. The matrix covers Linux/macOS/Windows, Linux race detection, native CLI/installer fixtures, a dedicated production-1-GiB encrypted-vault integration path, command/help regression tests, and synthetic SSH servers. Writing tests is not evidence of a passing run. UI tests require a compatible authoring environment and are not replaced by fake checks.
+Tests, builds and application acceptance run in public GitHub CI; local formatting
+alone does not prove behavior. The matrix includes Linux/macOS/Windows, race tests,
+real production-KDF fixtures, real Bubble Tea terminals and synthetic SSH peers.
+[Full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+accepted source `0576409` with all nine jobs, including owner import/recovery and
+the paired Clawwright v1/v2 paths. This is a source-specific receipt, not a promise
+that every installed or future revision behaves identically.
 
-- [Credential commands, recovery, and rotation](docs/VAULT.md)
-- [Key format and derivation details](docs/KEYS.md)
-- [Cryptographic audit scope and known limitations](docs/AUDIT.md)
-- [Architecture, MCP bootstrap, and updates](SSJACK.md)
-- [Proposed universal declarative contract](docs/declarative/README.md)
-- [SSH interoperability and server trust](SSH.md)
-- [Release assets and installers](docs/RELEASES.md)
-- [UI plugin development](plugins/ssjack-ui/README.md)
+```sh
+ssjack help
+ssjack help --interactive
+ssjack help text-adapter
+ssjack help vault migrate-directory
+ssjack --version
+ssjack --licenses
+```
 
-## Legacy metadata migration boundary
+[Architecture](SSJACK.md) · [SSH interoperability](SSH.md) · [Release contract](docs/RELEASES.md) ·
+[Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [UI plugin](plugins/ssjack-ui/README.md)
 
-Normal startup accepts profiles only from the encrypted database. `--config` is not a supported startup option. An old plaintext metadata file can be consumed only by explicit `ssjack [-p PROFILE] vault migrate LEGACY_FILE`, defaulting to destination profile `main`.
-
-Migration asks for database authorization (or a confirmed new database secret), source key authorization when needed, and explicit destination-profile confirmation. It imports address/user/private key bytes and only raw server keys already trusted for the exact legacy address/port, including supported hashed known_hosts entries; revoked, unrelated, CA-only, or missing trust is not accepted. No network scan or connection supplies migration trust. Existing destination profiles are never overwritten. Existing databases receive encrypted recovery snapshots before the new profile is committed.
-
-Source metadata, source private-key files, and old copies are never silently deleted. They can still expose metadata until the user separately retires them after verifying the encrypted profile. The assistant cannot perform real migration without the user's terminal-only secrets and does not read real private keys through tools.
-
-## Community and support
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening an issue or pull request. Use the issue templates for redacted synthetic reproductions and focused proposals. Report vulnerabilities privately through [SECURITY.md](SECURITY.md); never attach real vaults, private keys, tokens, or private host details to a public issue.
+Never attach real vaults, passwords, private keys or tokens to issues. Report
+vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## License
 
-Project-owned code and documentation are dual-licensed under **MIT OR Apache-2.0**, at your option. See [LICENSE](LICENSE), [LICENSE-MIT](LICENSE-MIT), and [LICENSE-APACHE](LICENSE-APACHE).
-
-Dependencies retain their own terms in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The notices are embedded in distributed executables and can be printed without unlocking credentials:
-
-```text
-ssjack --licenses
-```
+Project-owned code and documentation: **MIT OR Apache-2.0**. See [LICENSE](LICENSE),
+[LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE).
+Dependencies retain their own terms in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md);
+`ssjack --licenses` prints embedded notices without unlocking the database.

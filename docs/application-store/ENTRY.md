@@ -1,26 +1,96 @@
-# Application-store CLI
+# Application-store CLI and owner entry points
 
-Linux-only commands:
+These installation/delivery commands are Linux-only; root-granted synthetic and
+text-adapter runtimes additionally require Linux/amd64. Core SSH and the credential
+menu have separate cross-platform support.
 
 ```text
 ssjack appstore setup DIR
 ssjack appstore put DIR
+ssjack appstore inspect DIR
+ssjack appstore unlock HARNESS [ARGS...]
 ```
 
-`DIR` must be an existing absolute, private (`0700`) directory. `setup` is a local trusted-install ceremony: the operator independently verifies the existing store ID, endpoint, root CA, service signing key, and preprovisioned TLS writer certificate/key using a source outside this model, then enters and reconfirms the values at hidden prompts. It records a locally encrypted installation binding; it does not provision a production service role or perform service enrollment. The store and writer role/genesis must already exist. The ceremony cannot prove the external source or the human's identity.
+## Existing installation, not automatic enrollment
 
-No private key is read from a file; secrets and configuration are not accepted through files, environment variables, or argv. Setup runs outside a model session; independent human verification is required. There is no MCP exposure. The encrypted binding is separate from encrypted snapshots. Its directory device/inode identity is checked on use: copying to another inode invalidates it; renaming the same directory does not by itself change that identity. Go-owned RAM is cleared on a best-effort basis, but host swap, runtime, or root compromise is outside the protection claim.
+`DIR` is an existing absolute private (`0700`) directory. `setup` records a locally
+encrypted installation binding after the operator independently verifies and
+reconfirms the store ID, HTTPS endpoint, CA, service signing key and preprovisioned
+TLS writer certificate/key. Private DER material is entered through hidden prompts,
+not a key file, argv, environment or model tooling. Store/writer role/genesis must
+already exist. Setup does not provision a service role, enroll a backend, contact
+the service or authenticate the identity of the person doing the ceremony.
 
-`put` authenticates installation and committed snapshot state before prompting for one secret (maximum 16 KiB). It is a first-entry workflow only: it refuses any store with an existing committed snapshot. It does not support multi-object updates or merging. Success reports the exact reference, sequence, and status. If output is uncertain, do not blindly replay. It does not hydrate, grant, or deliver credentials. Production crypto profile is unchanged: four independent sequential 1-GiB Argon2id operations and 1000 data-encryption layers.
+The binding is separate from snapshots and bound to the directory device/inode.
+Copying it to another directory identity invalidates it; renaming the same
+directory alone need not. Trusted OS/runtime/same-UID boundaries still apply.
 
-`inspect DIR` is a non-root trusted-terminal operation that requests the hidden installation master secret and reports anchor state; it does not deliver a secret. `unlock HARNESS [ARGS...]` is likewise non-root and requires an independently confirmed canonical reference plus a separate active, finite, root-installed delivery grant. It requests the master secret without echo and checks the independently registered store/installation binding before launching only the fixed synthetic consumer. The older declarative metadata grant cannot release secrets. `register-delivery` and `revoke-delivery` are root-installed separately with independent human confirmation; the grant binds reference, store identity and digests, fixed driver/consumer, recipient UID, and expiry.
+`put` authenticates the installation and authoritative empty state before prompting
+for one hidden secret (at most 16 KiB), then rechecks before publication. It is
+**first-entry only**, not general CRUD or merging. Success emits an exact reference,
+sequence and revision. Uncertain output is not permission to replay the write.
 
-Delivery is synthetic only: the consumer is fixed, and model tools expose no arbitrary executable, path, or network. A receipt is not application adoption; adoption is unknown, and an uncertain receipt has no safe retry. These task232 changes are authored, not CI execution evidence or a readiness claim.
+`inspect DIR` is a non-root terminal operation: hidden installation unlock, trusted
+anchor metadata only, no secret delivery.
 
-The scoped shared-helper CLI tests use a private CI Go source overlay generated in a temporary directory. It changes only `argonDerive` via the existing private seam; it adds no production runtime KDF selector or exported weak API. AES processing remains the actual 1000 layers. Feature CI runs `python3 scripts/ci/appstore_scoped.py`. The explicit CLI full-profile test regex selects `TestAppstoreFullProfileCLI`, which uses real KDF; feature CI does not run that full gate. To run the CLI full-profile test explicitly:
+## Fixed synthetic delivery
+
+`unlock HARNESS [ARGS...]` requires a non-root terminal, canonical reference and
+separate active finite root-installed delivery grant. Root independently manages
+these through `declarative register-delivery` / `revoke-delivery`; a metadata grant
+is not a release grant. Store identity/digests, reference, fixed driver/consumer,
+recipient UID and expiry are bound before the hidden master unlock launches the
+fixed synthetic consumer. Model tools expose no arbitrary sink or secret getter.
+
+Optional `--text-mode hydrate|reverse --text-fd FD` on `appstore unlock` reads a
+bounded selection from an explicitly inherited trusted descriptor. This is the
+single-selection fixed-sink handoff, **not** the multi-reference text-adapter or
+large-text protocol. EOF may block on an uncooperative writer. Plaintext stays in
+the trusted pipe boundary, not argv/environment/tool requests or replies.
+
+A delivery receipt is not application adoption or crash durability. Adoption can
+be unknown; do not automatically retry a possibly dispatched operation. See
+[delivery runtime](DELIVERY-RUNTIME.md).
+
+## Owner administration and selected text
+
+Use `ssjack --interactive` for the one-unlock owner console. **Link secret store**
+connects an existing authenticated installation; it does not create one. Global
+and server-local secrets have names and exact immutable references, with private
+value CRUD through the [owner coordinator](OWNER-COORDINATOR.md). The current
+owner editor supports at most 128 objects and 16 KiB per value.
+
+The owner menu also exports selected credentials/settings/actual values and
+imports encrypted or deliberate plaintext owner ZIPs. Inspection/preview stays
+in RAM, import requires `IMPORT`, and collisions refuse without overwrite.
+Partial import uses explicit recovery/abort; remaining plan values are lost on
+exit, while per-secret queued intents remain encrypted. See [menu](OWNER-TUI.md)
+and [archive format](OWNER-EXPORT-FORMAT.md).
+
+For general selected-text deploy/reference-only backup, use the separately
+registered [text-adapter](TEXT-ADAPTER.md). Forward/reverse and v1/v2 grants are
+separate. [V2 streaming](TEXT-STREAM-HTTP.md) supports bounded larger text without
+raising v1 limits. These are not raw unlock getters or universal secret discovery.
+
+## Verification and cryptographic profile
+
+Four independent sequential 1-GiB Argon2id derivations and 1000 AES-256-GCM data
+layers remain unchanged. Production and cached-key paths do not replace those
+layers with key wrapping or weaker encryption. The custom design is unaudited.
+
+Ordinary scoped CLI CI uses a private source overlay at the existing KDF test seam;
+AES still uses 1000 real layers and no weak runtime selector is added to the binary.
+Full CI requires explicit production-profile PASS, including
+`TestAppstoreFullProfileCLI` and the owner terminal/import/recovery composition.
+[Full run 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+passed on source `0576409`; that receipt does not authorize live user operations.
+Tests/builds/KDF run in GitHub CI, never implicitly on a contributor's workstation.
+
+For an explicitly authorized CI-only focused production run:
 
 ```sh
 SSJACK_TEST_FULL_KDF=1 go test -mod=readonly -p 1 -run '^TestAppstoreFullProfileCLI$' -count=1 -timeout 1200s ./cmd/ssjack
 ```
 
-Acceptance tests cover named writer-error classifications, cancellation before mutation, a lost commit acknowledgement with unavailable reconciliation, and successful read-first reconciliation without blind mutation replay. These are authored assertions, not execution evidence. The crypto package retains its seven-file layout. No tests or CI scripts were run locally; public scoped CI and the final explicit real-KDF gate remain pending.
+[Capability map](../README.md) · [format/design baseline](FORMAT.md) ·
+[crypto runtime](CRYPTO-RUNTIME.md) · [failure boundaries](FAILURES.md)

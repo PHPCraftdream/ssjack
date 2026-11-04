@@ -1,6 +1,6 @@
 # Declarative MCP specification
 
-**Status: proposed design plus partial runtime integration.** This directory describes a broader proposed v1 contract than the implemented narrow source slice. The Linux/amd64 synthetic metadata path is not production-ready and has no executed acceptance result. See [authority boundary](authority.md) for actual source scope and limitations.
+**Status: broader proposed design plus a narrow implemented runtime.** This directory describes more than the Linux/amd64 synthetic metadata/delivery slice. Required root acceptance passed as part of [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948) on ssjack `0576409`; that is not production enrollment, a general v1 driver, independent security audit or application adoption. See [authority boundary](authority.md) for actual runtime scope.
 
 ## Pages
 
@@ -13,7 +13,7 @@
 
 ## Current source-slice status
 
-The separate `ssjack declarative setup|register|revoke|run` path implements only the Linux/amd64 fixed synthetic-metadata slice described in [authority](authority.md). It has two MCP tools and is not the proposed general declarative v1. No production fixture installation, enrollment distribution, secret resolver, application hydration, sandbox, or restart-durable operation journal is supplied. Public CI acceptance is authored but has not been executed in this source-edit session; no passing result is claimed. The broader enrollment/driver/policy/lifecycle text below remains proposed design, not evidence that those requirements exist.
+The separate `ssjack declarative setup|register|revoke|run` path implements only the Linux/amd64 fixed synthetic-metadata slice described in [authority](authority.md). It has two MCP tools and is not the proposed general declarative v1. Separate `register-delivery|revoke-delivery` grants support the fixed synthetic confidential-delivery route through `appstore unlock`; they do not authorize general driver execution or the separately granted text adapters. No production enrollment distribution, generic secret resolver, sandbox or restart-durable general operation journal is supplied. The source-specific CI receipt above establishes the narrow regression path only. The broader enrollment/driver/policy/lifecycle text below remains proposed design, not implemented requirements.
 
 
 There is no generic production v1 driver runner or general-purpose launch path. The narrow synthetic metadata route does use immutable artifact binding and a Linux/amd64 process exchange; it does not supply the broader v1 execution contract. A disconnected `internal/driverframe` transport-framing prerequisite also exists. It is not the generic v1 runtime and does not implement that contract's full schema, sandbox, enrollment, or lifecycle obligations. `internal/driverexec` is absent. Do not infer an empty child environment or any other environment guarantee on Windows.

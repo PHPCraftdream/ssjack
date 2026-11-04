@@ -1,6 +1,69 @@
 # Named credentials and recovery
 
-ssjack uses one encrypted database for human SSH sessions and coding-agent sessions. Addresses, users, private keys, server pins, record names, and intended usage are inside the encrypted payload. The default file is `.ssh/credentials.ssjack.ktav`, relative to the working directory. Its parent directory must exist.
+ssjack uses one encrypted database for human SSH and coding-agent sessions. Addresses, users, private keys or SSH passwords, server pins, record names, usage and SSH policy are encrypted. The default file is `.ssh/credentials.ssjack.ktav`, relative to the working directory, not automatically your home. Its parent directory must exist. The database-password holder owns all its contents; named SSH accounts are not separate database owners.
+
+## Connection picker and owner administration
+
+`ssjack --interactive` unlocks once and opens the Bubble Tea connection picker. Even one point requires explicit Enter; `--server NAME --account NAME` only focuses a page in menu mode. No missing-command or TTY autodetection starts the menu. Use `ssjack help --interactive` for the entry contract.
+
+Servers → Add server accepts name, `host:port`, named account, SSH login, `key` or `password`, credential, usage and independently verified server public keys. Passwords are hidden; a key credential is a file path, not multiline private-key paste. Add SSH account and Edit SSH account handle additional logins; accounts share their server's endpoint/pins. Renaming a server keeps its stable ID and secret scopes.
+
+Global secrets and Server secrets edit explicitly scoped values in a linked, already provisioned application store. There is no global/local fallback. Root/server/account/global export scopes include actual selected values; default encrypted ZIP, exact `EXPORT PLAINTEXT` for deliberate plaintext output. Import accepts either export format, shows metadata/conflicts and requires exact `IMPORT`. It never silently merges or overwrites. Destination secret values get fresh exact refs; archived installation unlock material is excluded. Linked private value operations are Linux-only.
+
+Validated edits remain in RAM with ordered encrypted autosave and visible persistence status. Exit waits for saves. Pending change offers explicit database retry, draft/reconciliation and import resume/abort; nothing replays at startup. A partial import is not success. Abort keeps already applied entries; remaining plan values are RAM-only and cannot be resumed after restart, although individual encrypted owner intents remain recoverable.
+
+After SSH the picker resumes without another database unlock when stdin is safely released. Windows VT-input cancellation can instead force a safe database close and restart. See [menu and import](application-store/OWNER-TUI.md), [directory](application-store/NAMED-DIRECTORY.md), [coordinator](application-store/OWNER-COORDINATOR.md) and [archive format](application-store/OWNER-EXPORT-FORMAT.md).
+
+## Named-directory migration
+
+Payload schema and encrypted container version are separate. `vault init` creates an initial profile database; use this explicit migration before opening the directory editor:
+
+```sh
+ssjack --vault .ssh/credentials.ssjack.ktav vault migrate-directory .ssh/directory-new.ssjack.ktav
+```
+
+Enter the existing password and exact `MIGRATE DIRECTORY`. The new file must not exist. Every legacy profile becomes its own server with the same name and one `main` account; equal endpoints are not merged. Credential bytes/settings and the original ciphertext are preserved, the password is unchanged, and no SSH connection occurs. Installing/updating a binary never runs this operation.
+
+### Activate the new database at the old path
+
+Stop every process that could write the database. Run from the usual application directory. These guarded sequences create the verified replacement, retain the original for rollback and put the replacement at the previous default path. If using another path, change `db` and continue using that same `--vault` path in your launch commands.
+
+PowerShell (two moves; keep ssjack stopped during the switch):
+
+```powershell
+$ErrorActionPreference = "Stop"
+$db = ".ssh/credentials.ssjack.ktav"
+$new = "$db.directory-new"
+$backup = "$db.before-directory"
+if (!(Test-Path -LiteralPath $db -PathType Leaf)) { throw "Original database not found" }
+if ((Test-Path -LiteralPath $new) -or (Test-Path -LiteralPath $backup)) { throw "Destination or backup already exists" }
+ssjack --vault $db vault migrate-directory $new
+if ($LASTEXITCODE -ne 0) { throw "Migration failed; original remains unchanged" }
+Move-Item -LiteralPath $db -Destination $backup
+try { Move-Item -LiteralPath $new -Destination $db }
+catch { Move-Item -LiteralPath $backup -Destination $db; throw }
+ssjack --interactive
+```
+
+POSIX shell (exclusive hard-link backup before replacing the old path):
+
+```sh
+set -eu
+db=.ssh/credentials.ssjack.ktav
+new="$db.directory-new"
+backup="$db.before-directory"
+test -f "$db" && test ! -L "$db"
+test ! -e "$new" && test ! -L "$new"
+test ! -e "$backup" && test ! -L "$backup"
+ssjack --vault "$db" vault migrate-directory "$new"
+ln "$db" "$backup"
+mv "$new" "$db"
+ssjack --interactive
+```
+
+Keep the backup until the new database is checked. Old binaries must use that original file explicitly; rollback is not a schema downgrade. This manual switch is not a power-loss durability guarantee. A cancelled migration does not publish the new file; failed activation requires inspecting the retained files, not deleting them to retry.
+
+For non-menu connections use `--server production --account operator ssh`, `check`, `rotate` or full-mode `run HARNESS`. An omitted account is inferred only for an explicitly selected server with one account; multiple accounts refuse. `--server` conflicts with `-p`, and `--account` requires `--server`. See [named startup](application-store/NAMED-STARTUP.md).
 
 ## Discover commands
 
@@ -31,7 +94,7 @@ ssjack -p home remove
 ssjack vault passwd
 ```
 
-Each invocation that accesses credentials requests the secret interactively. No secret is accepted from arguments, environment variables, stdin pipes, or a persistent password cache. Initialization and secret changes require confirmation. Invalid syntax, help, and build-version output do not unlock the database.
+Separate credential CLI invocations request the secret interactively; the owner menu retains one authenticated RAM session instead of prompting on every edit or connection. No database password is accepted from arguments, environment variables or stdin pipes. Initialization and password changes require confirmation. Invalid syntax, help and build-version output do not unlock the database.
 
 `add` prompts without echo for SSH address (`host:port`, numeric port 1–65535), user, private-key source, verified server public-key file, and intended usage. Standard OpenSSH/PEM private keys and ssjack containers can be imported. Encrypted sources require their own passphrase. Plaintext sources are accepted only as explicitly selected inputs; the source remains plaintext until separately retired. The database copy is encrypted, never written through a plaintext editor or staging file.
 
@@ -161,9 +224,9 @@ Keeper IPC listens only on `127.0.0.1`/`tcp4`; the bridge rejects DNS names, ali
 
 Unit tests, synthetic SSH servers, transaction failure fixtures, POSIX script tests, installer tests, race checks, and the dedicated real-1-GiB profile run belong in GitHub CI. Defining or writing a test is not a passed result. See [AUDIT.md](AUDIT.md) for the external-review boundary.
 
-## Separate application-secret store design
+## Separate application-secret store
 
-Application secrets and large objects are not SSH records and must not be placed in this vault. The separate application-store design proposal and source compatibility map are indexed in [application-store design](application-store/FORMAT.md). It is unimplemented and unaudited; SSH compatibility is unchanged.
+Application-secret values live in the encrypted versioned application store, not as ordinary SSH credential fields. The directory holds names, explicit scopes and exact refs. A linked owner database additionally retains its store unlock material and durable pending intent under database encryption; portable owner exports exclude that unlock material. Setup, first-entry write, inspection, fixed delivery, owner CRUD/export/import and separately granted selected-text v1/v2 paths are implemented. Provisioning an installation is not service enrollment or application adoption. Start with [store entry](application-store/ENTRY.md) and [the capability map](README.md); [the format contract](application-store/FORMAT.md) and wider proposals do not replace the runtime's explicit boundaries.
 
 ## Default profile selection
 

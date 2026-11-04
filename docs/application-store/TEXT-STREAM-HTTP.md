@@ -1,9 +1,11 @@
 # Private text-stream HTTP transport APIs
 
 Status: directional producer/transport and Clawwright streaming CLI/API have
-functional paired CI acceptance. Forward and reverse listeners remain separate
-and opt-in; v1 defaults and limits are unchanged. Full-sprint verification and
-release remain separate gates.
+paired and full-sprint CI acceptance on ssjack `0576409` with Clawwright
+`053655da09086986a23f66efe42dd5e8a2907f70` in
+[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948).
+Forward and reverse listeners remain separate and opt-in; v1 defaults and limits
+are unchanged. Release, production enrollment and adoption remain separate.
 
 The verified pair is ssjack `9ce209e45c8a8d6c2345f960c3708a3f58ebcea5` and
 Clawwright `b0babb132d74532746501b3aeda92e088d343d17` in

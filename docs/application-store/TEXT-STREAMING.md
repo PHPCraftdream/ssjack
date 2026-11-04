@@ -1,9 +1,11 @@
 # Large-text streaming: core contract
 
-`internal/appstoretext.ReplaceStream` is a private replacement primitive, not a
-new wire capability or public secret API. Existing v1 selected-text transport
-limits and grants remain unchanged until a separately versioned producer/client
-path is implemented and accepted.
+`internal/appstoretext.ReplaceStream` is the private replacement primitive used
+by the separate v2 producer/client path. It is not a public secret getter.
+V1 limits/grants remain unchanged. The current [v2 HTTP/CLI path](TEXT-STREAM-HTTP.md)
+and actual Clawwright pair passed in
+[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+on ssjack `0576409`; the engine alone is not evidence of that complete path.
 
 ## Engine behavior
 
@@ -47,6 +49,8 @@ late raw-input ambiguity, explicit byte quotas, short writes, stalled readers
 and cancellation during final publication to the tentative writer. These are
 synthetic correctness tests, not local load tests or live-server execution.
 
-Producer/wire integration, a complete authenticated response and Clawwright's
-exclusive validated publication remain separate acceptance units. A green core
-engine test does not mean large files are already supported by the CLI.
+Producer/wire integration, final authenticated completion and Clawwright's
+exclusive validated publication have their own connected acceptance, in addition
+to engine tests. See [HTTP/CLI contract](TEXT-STREAM-HTTP.md) and
+[paired evidence](CLAWWRIGHT-TEXT-PAIR.md). The accepted v2 CLI supports bounded
+large text, not unlimited files, arbitrary binary backups or application adoption.

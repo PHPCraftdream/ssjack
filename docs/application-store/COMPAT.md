@@ -1,6 +1,6 @@
 # Source compatibility map
 
-Source inspection only; no code executed. App-store remains a separate proposal, unimplemented and unaudited. Existing SSH interfaces remain unchanged; filesystem observations do not certify durability.
+Historical source-inspection compatibility map for the separate format design. Runtime implementation and accepted source receipts are tracked in [CLI entry](ENTRY.md), [crypto runtime](CRYPTO-RUNTIME.md) and [the capability map](../README.md); this old inspection is not their execution evidence. Independent cryptographic audit and platform durability certification are not supplied. Filesystem observations alone do not certify durability.
 
 | Source | Observed contract | Design consequence |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Application store design (proposed)
 
-**Proposal; unimplemented and unaudited; not approved for production.** Dedicated human app-store master is chosen; SSH master is not reused. No secrets accessed. Human enrollment, authorization, recovery-anchor service and platform durability require review. Passphrase must be entered only through trusted human terminal input and never sent to tools, argv, environment, pipes, files, logs or network. The concrete anchor state machine and byte encodings are specified in [IO](IO.md), as a proposal, not a claim about an existing service.
+**Design baseline; unaudited, not production approval.** This page retains the broader format proposal; it is not the current runtime inventory. Implemented encryption, installation, owner CRUD/export/import and finite delivery/text paths are documented in [CLI entry](ENTRY.md), [crypto runtime](CRYPTO-RUNTIME.md) and [the capability map](../README.md), with exact-source CI receipts. Human enrollment, an actual recovery-anchor service and platform durability remain separately controlled boundaries. The design chooses a dedicated app-store master rather than reusing the SSH master; the owner session can retain a linked installation unlock under database encryption. Master input stays in trusted hidden terminal/owner-session boundaries, never model tools, argv, logs or network. [IO](IO.md) specifies the anchor state machine; specifying it does not provision a service.
 
 - [Wire format, catalog and identities](WIRE.md)
 - [KDF, layers and uniqueness](CRYPTO.md)

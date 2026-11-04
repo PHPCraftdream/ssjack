@@ -53,7 +53,7 @@ jobs:
           suffix=''
           if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/ssjack-install-fixture$suffix" ./tests/fixtures/installbinary
-          bash -n install.sh tests/installers.sh tests/installers-local.sh
+          bash -n install.sh build.sh tests/installers.sh tests/installers-local.sh
       - name: Test changed Unix installer
         if: steps.scope.outputs.installers == 'true' && runner.os != 'Windows'
         shell: bash
@@ -66,6 +66,30 @@ jobs:
         if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
+      - name: Build and install changed source on Linux or macOS
+        if: steps.scope.outputs.installers == 'true' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh ./build.sh --install-dir "$RUNNER_TEMP/native source install"
+          identity="$("$RUNNER_TEMP/native source install/ssjack" --version)"
+          printf '%s\n' "$identity"
+          case "$identity" in *"$(git rev-parse HEAD)"*) ;; *) exit 1 ;; esac
+      - name: Build and install changed source with Windows PowerShell
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install classic'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
+      - name: Build and install changed source with PowerShell Core
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install core'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
       - name: Retain selection evidence
         if: always()
         uses: actions/upload-artifact@v4

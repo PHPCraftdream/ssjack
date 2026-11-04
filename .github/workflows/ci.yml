@@ -69,6 +69,30 @@ jobs:
         run: go test -mod=readonly -count=1 -timeout 180s . ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
+      - name: Build and install source on Linux or macOS
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh ./build.sh --install-dir "$RUNNER_TEMP/native source install"
+          identity="$("$RUNNER_TEMP/native source install/ssjack" --version)"
+          printf '%s\n' "$identity"
+          case "$identity" in *"$(git rev-parse HEAD)"*) ;; *) exit 1 ;; esac
+      - name: Build and install source with Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install classic'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
+      - name: Build and install source with PowerShell Core
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install core'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
       - name: Build installer fixture
         shell: bash
         run: |
@@ -89,7 +113,7 @@ jobs:
         run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
       - name: Check Bash syntax
         shell: bash
-        run: bash -n install.sh tests/installers.sh tests/installers-local.sh
+        run: bash -n install.sh build.sh tests/installers.sh tests/installers-local.sh
       - name: Retain verified native CLI
         uses: actions/upload-artifact@v4
         with:

@@ -82,15 +82,20 @@ replacing the source. Publication does not claim directory crash durability.
 
 ## Owner-controlled export
 
-Possession of the database password gives its holder ownership of all its
-contents. A future explicit export path must support encrypted export by default
-and deliberate plaintext export to an owner-selected file after warning and
-confirmation. Plaintext output is an authorized final artifact, not permission
-for incidental decrypted staging, MCP disclosure, logs, or model-visible output.
-Actual application-secret export must resolve exact values through the trusted
-owner-unlock path; exporting reference metadata alone is not full secret export.
-The operator owns access control, backups and subsequent handling of an exported
-plaintext file. No real credentials are exported while implementing this work.
+The owner menu exports all or selected server/account/global scopes, including
+actual selected values resolved through the private owner-unlock path. ZIP export
+is encrypted by default; deliberate plaintext requires exact `EXPORT PLAINTEXT`.
+Output publication is exclusive and protected (Unix permissions or Windows owner
+DACL). Installation unlock material is excluded. Plaintext is an authorized final
+artifact, not permission for incidental staging, MCP disclosure or logs.
+
+Import reads these encrypted/plaintext archives in RAM, shows metadata and
+conflicts, then requires exact `IMPORT`. It preserves credential bytes/settings
+and scopes, refuses collisions without merge/overwrite and publishes values to
+fresh destination refs. Linked-value operations are Linux-only. The full remaining
+import plan is RAM-only; a partial application requires explicit recovery/abort,
+not automatic replay or a claim of rollback. See [menu](OWNER-TUI.md),
+[archive](OWNER-EXPORT-FORMAT.md) and [coordinator](OWNER-COORDINATOR.md).
 
 ## In-memory editing and background persistence
 
@@ -118,12 +123,14 @@ the worker and clears session state/key. A failed or cancelled close keeps the
 session available; abandoning unsaved state requires explicit owner-confirmed
 Discard. No decrypted snapshot is written to a temporary file.
 
-The planned terminal editor must start only with `--interactive`, optionally
-focused by `--server NAME`. Missing arguments, an omitted server and TTY detection
-alone must never open its menus. Normal commands need explicit server/account
-selection where ambiguous; existing explicit legacy profile selection remains
-compatible. These flags are a UI integration requirement, not yet a claim that
-the editor command is available in this source slice.
+The Bubble Tea terminal starts only with `--interactive`, optionally focused by
+`--server NAME --account NAME`. Missing arguments and TTY detection never open
+its menus. It lists human-permitted connection points before management actions;
+even a single point requires explicit Enter. Named CLI commands refuse ambiguous
+accounts; explicit legacy profile selection remains compatible. Manual password
+input and key-file selection are available, not multiline private-key paste.
+SSH handoff reuses the unlocked session; inability to release input fails closed
+instead of starting a competing reader. Windows VT consoles may require restart.
 
 ## Password authentication and grant binding
 
@@ -152,10 +159,11 @@ Key-rotation commands reject password-only accounts before contacting a server.
 
 ## Implementation status
 
-The source includes directory serialization, account edits, explicit-scope
-reference lookup, encrypted migration, retained-master background sessions and
-selected-password authentication with private grant binding. The interactive
-editor, export commands and full named-account caller acceptance remain separate
-tasks. Source availability is not end-to-end sprint acceptance; CI receipts
-determine what has been verified. No real user database is migrated by
-implementing or testing this feature.
+The implemented path includes the directory codec, key/password accounts,
+explicit scopes, migration, one-unlock background sessions, Bubble Tea picker and
+manual administration, owner exports/imports and authenticated value coordination.
+[Full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+passed on source `0576409`, including real terminal selection/import, empty
+and seeded destination round trips, partial recovery and unchanged legacy/stream
+acceptance. This is regression evidence for that source, not independent audit,
+release publication, live migration or application/provider adoption.
