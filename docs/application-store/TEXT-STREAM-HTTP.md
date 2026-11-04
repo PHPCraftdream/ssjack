@@ -1,10 +1,19 @@
 # Private text-stream HTTP transport APIs
 
-Status: internal directional transport wiring, not a delivered Clawwright feature.
-Explicit directional CLI registration/startup is wired. Actual root-granted route
-acceptance and the streaming client are still pending. Forward and reverse
-listeners are opt-in and separate.
-V1 remains unchanged.
+Status: directional producer/transport and Clawwright streaming CLI/API have
+functional paired CI acceptance. Forward and reverse listeners remain separate
+and opt-in; v1 defaults and limits are unchanged. Full-sprint verification and
+release remain separate gates.
+
+The verified pair is ssjack `9ce209e45c8a8d6c2345f960c3708a3f58ebcea5` and
+Clawwright `b0babb132d74532746501b3aeda92e088d343d17` in
+[CI 41755082293](https://github.com/PHPCraftdream/ssjack/actions/runs/41755082293).
+Both mandatory legacy and streaming pairs reported PASS without SKIP. The v2 case
+uses the actual Clawwright CLI entry, root finite grants, UID 65534, pinned HTTPS
+and authenticated/pinned SSH for greater-than-1-MiB deploy/backup/exact restore,
+source preservation, existing-output refusal and exact-version refusal before
+SSH. It does not establish production enrollment, interactive approval/unlock
+prompts, crash durability or OpenClaw adoption.
 
 ## Explicit CLI path
 
@@ -27,6 +36,14 @@ instead uses `register-reverse-stream` and confirms
 `APPROVE REVERSE STREAM TEXT COPY GRANT_ID`. The same `serve-stream` entry selects
 the reverse listener only for an authenticated `reverse-copy-stream-v2` grant;
 it never enables both directions. `revoke-stream` covers either v2 direction.
+
+The Clawwright child selects v2 with `--stream-references grant-refs.json` on
+`deploy-text` or `backup-text`. The file is a bounded UTF-8 JSON array of the exact
+canonical placeholder strings from the grant, not secret values or approval.
+The existing `SSJACK_TEXT_LAUNCH=1` and expected `SSJACK_TEXT_PROFILE` child mapping
+converts only the temporary endpoint/token/pin bootstrap. Use `serve-stream`, not
+the legacy serving entry; there is no protocol fallback. Restore uses a separate
+forward context and the unchanged captured reference-only file.
 
 `ListenWithTextStreamAdapter` explicitly enables two POST paths on the existing
 pinned loopback TLS listener: `/text-stream-v2/prepare` and

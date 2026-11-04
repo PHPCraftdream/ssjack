@@ -195,7 +195,12 @@ jobs:
         env:
           CGO_ENABLED: '0'
           SSJACK_TEST_FULL_KDF: '1'
-        run: go test -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./cmd/ssjack
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestDirectoryMigrationCLIFullProfile)$' -count=1 -timeout 600s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
+          for name in TestVaultDirectoryMigrationFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI TestDirectoryMigrationCLIFullProfile; do
+            grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
+          done
 
   text-pair:
     uses: ./.github/workflows/text-pair.yml
