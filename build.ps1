@@ -32,8 +32,8 @@ if (!(Test-Path -LiteralPath (Join-Path $root 'go.mod') -PathType Leaf) -or
     !(Test-Path -LiteralPath $installer -PathType Leaf)) {
     throw 'Run the script from a complete ssjack source checkout.'
 }
-$git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
-$go = (Get-Command go -CommandType Application -ErrorAction Stop).Source
+$git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$go = (Get-Command go -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $revision = (& $git -C $root rev-parse --verify HEAD) -join ''
 if ($LASTEXITCODE -ne 0 -or $revision -cnotmatch '^[0-9a-f]{40}$') {
     throw 'Cannot identify the checkout commit.'
