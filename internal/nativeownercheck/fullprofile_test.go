@@ -105,6 +105,7 @@ func TestNativeOwnerFullProfile(t *testing.T) {
 		t.Fatal("native first commit metadata changed")
 	}
 	verifySnapshot(t, ctx, installation, directory, first, value)
+	verifyPinnedCopy(t, ctx, installation, directory, first)
 	must(t, owner.Close())
 	owner, err = appstorecrypto.NewOwnerEditor(ctx, installation, directory)
 	must(t, err)
