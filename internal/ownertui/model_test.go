@@ -8,6 +8,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
 	"strings"
 	"sync"
 	"testing"
@@ -192,21 +193,7 @@ func TestNavigationKeepsServerSecretScopesSeparateAndNamedStartupStaysScoped(t *
 	check(t, m.Select("production", "") != nil || m.at.screen != serverScreen || b.edits != 0 || b.submissions != 0 || b.closes != 0, "interactive server selection did not expose its explicit account list, or startup selection performed a mutation")
 }
 
-type terminalBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
-}
-
-func (b *terminalBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Buffer.Write(p)
-}
-func (b *terminalBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Buffer.String()
-}
+type terminalBuffer = terminalmodel.Output
 
 func waitOutput(t *testing.T, out *terminalBuffer, text string) {
 	t.Helper()
@@ -221,10 +208,10 @@ func startProgram(t *testing.T, b *fakeBackend) (*Model, *tea.Program, *terminal
 	model := testModel(b)
 	model.ctx = ctx
 	output := &terminalBuffer{}
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	program := tea.NewProgram(terminalmodel.Capture(model, output), tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
 	done := make(chan error, 1)
 	go func() { _, err := program.Run(); done <- err }()
-	return model, program, output, func() string { must(t, <-done); return output.String() }
+	return model, program, output, func() string { must(t, <-done); return output.Raw() }
 }
 func send(p *tea.Program, msgs ...tea.Msg) {
 	for _, msg := range msgs {
@@ -269,6 +256,17 @@ func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, fu
 	downTo(program, b, "import")
 	send(program, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "synthetic-archive.zip"}, tea.KeyPressMsg{Code: 9}, tea.PasteMsg{Content: archivePassword}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
 	return program, out, wait
+}
+
+func TestCompletedImportRejectsAnOlderRefreshSnapshot(t *testing.T) {
+	b := stagedBackend()
+	m := testModel(b)
+	stale := m.refresh()()
+	b.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
+	m.Update(operationMsg{action: "import-confirm"})
+	_, next := m.Update(stale)
+	check(t, m.imp.Phase != ownerdb.ImportComplete || m.at.screen != databaseScreen || next == nil,
+		"old refresh rolled back the completed import or stopped its single refresh chain")
 }
 
 func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {

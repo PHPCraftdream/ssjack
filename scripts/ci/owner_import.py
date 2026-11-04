@@ -242,14 +242,19 @@ def main():
         expect("> Exit")
         keys("Enter")
         try:
-            subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, env=environment, check=True,
-                           timeout=min(remaining(), 75))
+            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+                subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, env=environment, check=True,
+                               timeout=min(remaining(), 75))
         except subprocess.TimeoutExpired:
-            content = screen()
-            raise RuntimeError("synthetic terminal exit stalled: working=%s exit-stopped=%s selected-exit=%s list-changed=%s" % (
-                b"Working; please wait" in content, b"Exit stopped:" in content,
-                has_line(content, b"> Exit"), b"The list changed;" in content)) from None
+            # The process state is authoritative even if a hook notification was lost.
+            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+                content = screen()
+                raise RuntimeError("synthetic terminal exit stalled: working=%s exit-stopped=%s selected-exit=%s list-changed=%s root=%s ssh-failed=%s preview=%s" % (
+                    b"Working; please wait" in content, b"Exit stopped:" in content,
+                    has_line(content, b"> Exit"), b"The list changed;" in content,
+                    b"Database / Global scope" in content, b"SSH connection failed" in content,
+                    b"Import preview" in content)) from None
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic terminal child failed")

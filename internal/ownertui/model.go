@@ -32,6 +32,7 @@ type backend interface {
 }
 
 type refreshMsg struct {
+	epoch    uint64
 	metadata vault.DirectoryMetadata
 	status   ownerdb.Status
 	imports  ownerdb.ImportStatus
@@ -59,6 +60,7 @@ type Model struct {
 	quitting bool
 	height   int
 	ready    bool
+	epoch    uint64
 	imp      ownerdb.ImportStatus // latest import status; metadata only
 	// reselect blocks activation after a refresh changed the focused item.
 	reselect bool
@@ -78,9 +80,10 @@ func nextTick() tea.Cmd {
 }
 
 func (m *Model) refresh() tea.Cmd {
+	epoch := m.epoch
 	return func() tea.Msg {
 		metadata, err := m.backend.Metadata()
-		return refreshMsg{metadata: metadata, status: m.backend.Status(), imports: m.backend.ImportStatus(), err: err}
+		return refreshMsg{epoch: epoch, metadata: metadata, status: m.backend.Status(), imports: m.backend.ImportStatus(), err: err}
 	}
 }
 
@@ -92,6 +95,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, m.refresh()
 	case refreshMsg:
+		if msg.epoch != m.epoch {
+			return m, nextTick()
+		}
 		if msg.err == nil {
 			m.applyMetadata(msg.metadata, msg.imports)
 			m.status, m.ready = msg.status, true
@@ -100,6 +106,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nextTick()
 	case operationMsg:
+		m.epoch++
 		m.working = false
 		if strings.HasPrefix(msg.action, "import") {
 			m.importDone(msg.action, msg.err)
@@ -134,27 +141,6 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 	return m, nil
-}
-
-func (m *Model) push(target location) {
-	m.stack = append(m.stack, m.at)
-	m.at, m.cursor, m.message, m.reselect = target, 0, "", false
-}
-
-func (m *Model) back() {
-	if m.at.screen == importScreen {
-		m.abortImport() // leaving the preview always drops the staged material
-	}
-	if m.form != nil {
-		m.form.clear()
-		m.form = nil
-	}
-	if len(m.stack) != 0 {
-		m.at = m.stack[len(m.stack)-1]
-		m.stack = m.stack[:len(m.stack)-1]
-		m.cursor = 0
-	}
-	m.reselect = false
 }
 
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

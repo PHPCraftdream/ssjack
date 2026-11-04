@@ -171,6 +171,7 @@ func accountFields() []field {
 }
 
 func (m *Model) applyForm() tea.Cmd {
+	m.epoch++
 	f := m.form
 	m.form = nil
 	m.back()

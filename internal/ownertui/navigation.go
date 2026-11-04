@@ -142,3 +142,24 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	}
 	return nil
 }
+
+func (m *Model) push(target location) {
+	m.stack = append(m.stack, m.at)
+	m.at, m.cursor, m.message, m.reselect = target, 0, "", false
+}
+
+func (m *Model) back() {
+	if m.at.screen == importScreen {
+		m.abortImport() // leaving the preview always drops the staged material
+	}
+	if m.form != nil {
+		m.form.clear()
+		m.form = nil
+	}
+	if len(m.stack) != 0 {
+		m.at = m.stack[len(m.stack)-1]
+		m.stack = m.stack[:len(m.stack)-1]
+		m.cursor = 0
+	}
+	m.reselect = false
+}
