@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"sync"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -110,6 +112,17 @@ func (m *Manager) signal() {
 }
 
 func (m *Manager) Metadata() (vault.DirectoryMetadata, error) { return m.db.Metadata() }
+
+// HumanSSH is the only credential path out of the manager: a host-pin verified
+// client configuration for one human-permitted account, never raw bytes.
+func (m *Manager) HumanSSH(serverID, account string) (*ssh.ClientConfig, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing {
+		return nil, "", ErrPending
+	}
+	return m.db.HumanSSH(serverID, account)
+}
 
 // Edit is a trusted owner form callback, not a public model-facing getter.
 func (m *Manager) Edit(edit func(*vault.Vault) error) error {

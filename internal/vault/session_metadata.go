@@ -81,3 +81,31 @@ func (s *Session) Metadata() (DirectoryMetadata, error) {
 	}
 	return result, nil
 }
+
+// HumanSSH is the single narrow credential path for an owner-selected
+// interactive connection: it yields a host-pin verified client configuration,
+// never raw credential bytes, and only for human-permitted accounts.
+func (s *Session) HumanSSH(serverID, account string) (*ssh.ClientConfig, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, "", errors.New("database session is closed")
+	}
+	profile, err := s.state.AccountProfile(serverID, account)
+	if err != nil {
+		return nil, "", err
+	}
+	// The copy keeps later Apply or close zeroization away from the config, and
+	// is itself cleared once the config holds its own derived material.
+	target := ownTarget(s.state.Targets[profile])
+	defer clear(target.PrivateKey)
+	defer clear(target.Password)
+	if err := target.RequireUsage("human"); err != nil {
+		return nil, "", err
+	}
+	config, err := target.ClientConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	return config, target.Address, nil
+}

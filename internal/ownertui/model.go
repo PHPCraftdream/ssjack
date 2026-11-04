@@ -53,6 +53,11 @@ type Model struct {
 	quitting bool
 	height   int
 	ready    bool
+	// reselect blocks activation after a refresh changed the focused item.
+	reselect bool
+
+	// connection is an owner-selected SSH request awaiting TakeConnection.
+	connection *Connection
 }
 
 func New(ctx context.Context, manager *ownerdb.Manager) *Model {
@@ -60,13 +65,6 @@ func New(ctx context.Context, manager *ownerdb.Manager) *Model {
 }
 
 func (m *Model) Init() tea.Cmd { return m.refresh() }
-
-func (m *Model) ClearInput() {
-	if m.form != nil {
-		m.form.clear()
-		m.form = nil
-	}
-}
 
 func nextTick() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(at time.Time) tea.Msg { return tickMsg(at) })
@@ -88,7 +86,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refresh()
 	case refreshMsg:
 		if msg.err == nil {
-			m.metadata, m.status, m.ready = msg.metadata, msg.status, true
+			m.applyMetadata(msg.metadata)
+			m.status, m.ready = msg.status, true
 		} else {
 			m.message = "Cannot refresh database metadata."
 		}
@@ -128,7 +127,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) push(target location) {
 	m.stack = append(m.stack, m.at)
-	m.at, m.cursor, m.message = target, 0, ""
+	m.at, m.cursor, m.message, m.reselect = target, 0, "", false
 }
 
 func (m *Model) back() {
@@ -141,6 +140,7 @@ func (m *Model) back() {
 		m.stack = m.stack[:len(m.stack)-1]
 		m.cursor = 0
 	}
+	m.reselect = false
 }
 
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -184,6 +184,15 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	} else if m.cursor >= len(items) {
 		m.cursor = len(items) - 1
 	}
+	if m.reselect {
+		switch name {
+		case "up", "down", "left", "esc", "escape":
+			m.clearReselect()
+		case "enter", "right":
+			m.message = reselectMessage
+			return m, nil
+		}
+	}
 	switch name {
 	case "esc", "escape", "left":
 		m.back()
@@ -197,15 +206,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter", "right":
 		if len(items) != 0 {
-			selected := items[m.cursor]
-			if selected.action == "exit" {
-				return m, m.requestClose()
-			}
-			if selected.action == "" {
-				m.push(selected.target)
-			} else {
-				m.openForm(selected.action)
-			}
+			return m, m.activate(items[m.cursor], name == "enter")
 		}
 	}
 	return m, nil
@@ -279,13 +280,4 @@ func (m *Model) View() tea.View {
 	view := tea.NewView(out.String())
 	view.AltScreen = true
 	return view
-}
-
-func (m *Model) requestClose() tea.Cmd {
-	m.working, m.quitting = true, true
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
-		defer cancel()
-		return closeMsg{err: m.backend.Close(ctx)}
-	}
 }

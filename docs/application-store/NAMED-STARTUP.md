@@ -24,7 +24,7 @@ its existing explicit legacy selectors; use the owner editor for directory edits
 Declarative enrollment and key-container creation are not named-server operations.
 
 No missing command, missing selector or detected terminal starts a menu. Only
-`--interactive` opens the owner editor; there the selected server/account is opened
+`--interactive` opens the connection picker and owner editor (it never connects on its own); there the selected server/account is opened
 directly, or the tree supplies explicit navigation when no server was selected.
 Back navigation preserves the server/account hierarchy.
 

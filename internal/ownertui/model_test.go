@@ -230,6 +230,8 @@ func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
 	done := make(chan error, 1)
 	go func() { _, err := program.Run(); done <- err }()
+	// Empty root: placeholder, Servers, then Global secrets.
+	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	program.Send(tea.KeyPressMsg{Code: 13})
 	program.Send(tea.KeyPressMsg{Code: 13})
@@ -255,6 +257,29 @@ func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
 	defer output.mu.Unlock()
 	if !strings.Contains(output.Buffer.String(), "owner database") || strings.Contains(output.Buffer.String(), "synthetic-terminal-private") {
 		t.Fatal("terminal renderer omitted the interface or exposed input")
+	}
+}
+
+func TestBubbleTeaProgramKeepsSingleConnectionUntilExplicitExit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	backend := &fakeBackend{metadata: points("only")}
+	model := testModel(backend)
+	model.ctx = ctx
+	var output terminalBuffer
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	done := make(chan error, 1)
+	go func() { _, err := program.Run(); done <- err }()
+	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyUp})
+	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	if _, ok := model.TakeConnection(); ok || backend.closes != 1 || !strings.Contains(output.Buffer.String(), escaped("only")) {
+		t.Fatal("a single connection point was activated, or exit did not close once")
 	}
 }
 

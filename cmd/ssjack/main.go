@@ -91,7 +91,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
-	interactive := flags.Bool("interactive", false, "Open the trusted-terminal owner database editor")
+	interactive := flags.Bool("interactive", false, "Open the trusted-terminal connection picker and owner database editor")
 	server := flags.String("server", "", "Select a named server from the directory database")
 	account := flags.String("account", "", "Select a named SSH account on --server")
 	version := flags.Bool("version", false, "Print version, commit, and platform")

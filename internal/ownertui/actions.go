@@ -1,7 +1,10 @@
 package ownertui
 
 import (
+	"context"
 	"errors"
+	"strconv"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -192,4 +195,94 @@ func (m *Model) perform(f *form) error {
 		return m.submitSecret(f)
 	}
 	return errForm
+}
+
+// Connection names one owner-selected SSH account; it carries no credentials.
+type Connection struct{ ServerID, Account string }
+
+// TakeConnection returns and clears the request recorded by selecting a
+// connection point. The caller obtains credentials through the manager only.
+func (m *Model) TakeConnection() (Connection, bool) {
+	if m.connection == nil {
+		return Connection{}, false
+	}
+	taken := *m.connection
+	m.connection = nil
+	return taken, true
+}
+
+// Connected reports the finished handoff with a fixed message, never raw error
+// text. Navigation location and cursor are kept so a new Program resumes there.
+func (m *Model) Connected(code int, err error) {
+	m.working, m.quitting, m.connection = false, false, nil
+	if err != nil {
+		m.message = "SSH connection failed or ended with an error; no database change was made."
+		return
+	}
+	m.message = "SSH session ended (exit code " + strconv.Itoa(code) + ")."
+}
+
+// applyMetadata keeps focus on the same item across a refresh. If that exact
+// item (label included) is gone, the cursor resets and Enter is blocked until
+// the owner moves deliberately. Nothing is flagged before the first list was
+// shown or while a form is open.
+func (m *Model) applyMetadata(next vault.DirectoryMetadata) {
+	old := navigation(m.at, m.metadata)
+	focused, tracked := item{}, m.form == nil && m.ready && m.cursor >= 0 && m.cursor < len(old)
+	if tracked {
+		focused = old[m.cursor]
+	}
+	m.metadata = next
+	if !tracked {
+		return
+	}
+	for i, candidate := range navigation(m.at, next) {
+		if candidate == focused {
+			m.cursor = i
+			return
+		}
+	}
+	m.cursor, m.reselect, m.message = 0, true, reselectMessage
+}
+
+// activate runs the selected item; only an explicit Enter may start a connection.
+func (m *Model) activate(selected item, enter bool) tea.Cmd {
+	switch selected.action {
+	case "exit":
+		return m.requestClose()
+	case "connect":
+		if !enter {
+			return nil
+		}
+		if !m.connectable(selected.target) {
+			m.message = "That connection is no longer available."
+			return nil
+		}
+		// The manager stays open: the caller needs it for the credential path.
+		m.connection = &Connection{ServerID: selected.target.server, Account: selected.target.account}
+		return tea.Quit
+	case "none":
+		m.message = "No SSH connection is available; add a server account that permits human use."
+	case "":
+		m.push(selected.target)
+	default:
+		m.openForm(selected.action)
+	}
+	return nil
+}
+
+func (m *Model) ClearInput() {
+	if m.form != nil {
+		m.form.clear()
+		m.form = nil
+	}
+}
+
+func (m *Model) requestClose() tea.Cmd {
+	m.working, m.quitting = true, true
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
+		defer cancel()
+		return closeMsg{err: m.backend.Close(ctx)}
+	}
 }

@@ -3,6 +3,7 @@ package ownerdb
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -72,5 +73,13 @@ func TestCipherDigestChecksOnlyBoundedRegularCiphertext(t *testing.T) {
 	}
 	if _, err := cipherDigest(path + "-missing"); err == nil {
 		t.Fatal("ciphertext checker accepted a missing database")
+	}
+}
+
+func TestHumanSSHRefusedWhileClosedOrClosing(t *testing.T) {
+	for _, m := range []*Manager{{closed: true}, {closing: true}} {
+		if config, address, err := m.HumanSSH("server", "account"); !errors.Is(err, ErrPending) || config != nil || address != "" {
+			t.Fatal("closed manager handed out an SSH configuration")
+		}
 	}
 }

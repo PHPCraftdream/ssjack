@@ -3,8 +3,11 @@ package ownertui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -108,8 +111,7 @@ func TestPreCancelledExportDoesNotQueueAnArtifact(t *testing.T) {
 }
 
 func TestDisplayEscapesTerminalControlSequences(t *testing.T) {
-	value := "user\x1b[31m\nnext"
-	got := escaped(value)
+	got := escaped("user\x1b[31m\nnext")
 	if strings.ContainsAny(got, "\x1b\n") || !strings.Contains(got, "\\x1b") {
 		t.Fatal("owner metadata could inject terminal control sequences")
 	}
@@ -159,12 +161,140 @@ func TestFieldBoundsUnicodeBackspaceAndButtonFocus(t *testing.T) {
 		t.Fatal("focused action button modified input fields")
 	}
 	f.move(1)
-	if f.focus != 2 {
-		t.Fatal("cancel button was not reachable")
-	}
+	cancel := f.focus
 	f.move(1)
-	if f.focus != 0 {
-		t.Fatal("focus did not wrap back to the first field")
+	if cancel != 2 || f.focus != 0 {
+		t.Fatal("cancel button was unreachable or focus did not wrap to the first field")
 	}
 	f.clear()
+}
+
+func pickerMetadata() vault.DirectoryMetadata {
+	return vault.DirectoryMetadata{Servers: []vault.ServerMetadata{
+		{ID: "s1", Name: "production", Address: "prod.example:22", Accounts: []vault.AccountMetadata{{Name: "agent", User: "bot", Authentication: "key", Usage: "agent"}, {Name: "deploy", User: "root\x1b[31m", Authentication: "password", Usage: "both"}}},
+		{ID: "s2", Name: "other", Address: "other.example:22", Accounts: []vault.AccountMetadata{{Name: "admin", User: "admin", Authentication: "key", Usage: "human"}}},
+	}}
+}
+
+func points(ids ...string) vault.DirectoryMetadata {
+	var servers []vault.ServerMetadata
+	for _, id := range ids {
+		servers = append(servers, vault.ServerMetadata{ID: id, Name: id, Address: id + ".example:22", Accounts: []vault.AccountMetadata{{Name: "main", User: "u", Authentication: "key", Usage: "both"}}})
+	}
+	return vault.DirectoryMetadata{Servers: servers}
+}
+
+func press(m *Model, code rune) tea.Cmd {
+	_, cmd := m.Update(tea.KeyPressMsg{Code: code})
+	return cmd
+}
+
+func TestPickerListsEmptyHumanOnlyAndKeepsBackAndCtrlC(t *testing.T) {
+	empty := testModel(&fakeBackend{})
+	items := navigation(empty.at, empty.metadata)
+	if len(items) != 7 || items[0].action != "none" || items[0].label != "(no SSH connections available)" {
+		t.Fatal("empty database lacks the placeholder or management items")
+	}
+	if cmd := press(empty, 13); cmd != nil || empty.connection != nil || empty.message == "" || empty.at.screen != databaseScreen {
+		t.Fatal("placeholder was actionable")
+	}
+	press(empty, tea.KeyDown)
+	press(empty, 13)
+	if empty.at.screen != serversScreen {
+		t.Fatal("management was unreachable below the placeholder")
+	}
+	items = navigation(location{screen: databaseScreen}, pickerMetadata())
+	if len(items) != 8 || items[0].action != "connect" || items[1].action != "connect" || items[2].label != "Servers" || items[7].action != "exit" ||
+		items[0].target != (location{server: "s1", account: "deploy"}) || items[1].target != (location{server: "s2", account: "admin"}) {
+		t.Fatal("root did not list exactly the human-permitted connection points first")
+	}
+	label := items[0].label
+	if strings.ContainsAny(label, "\x1b\n") || !strings.Contains(label, escaped("production")) || !strings.Contains(label, escaped("prod.example:22")) || !strings.Contains(label, `\x1b`) || !strings.Contains(label, "password") {
+		t.Fatal("connection label did not identify the escaped server and account")
+	}
+	b := &fakeBackend{metadata: pickerMetadata()}
+	m := testModel(b)
+	for account, want := range map[string]int{"deploy": 3, "agent": 2} {
+		if err := m.Select("production", account); err != nil {
+			t.Fatal(err)
+		}
+		items := navigation(m.at, m.metadata)
+		if len(items) != want || (items[0].action == "connect") != (want == 3) || items[want-2].action != "edit-account" || (want == 3 && items[0].label != "Connect via SSH") {
+			t.Fatal("account screen Connect item is not human-only")
+		}
+	}
+	if _, ok := m.TakeConnection(); ok || b.closes != 0 {
+		t.Fatal("named selection created a connection")
+	}
+	if err := m.Select("production", ""); err != nil {
+		t.Fatal(err)
+	}
+	if press(m, 27); m.at.screen != serversScreen {
+		t.Fatal("Escape did not go back")
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || !m.working {
+		t.Fatal("Ctrl+C did not request a bounded close")
+	}
+	if _, next := m.Update(cmd()); b.closes != 1 || m.working || next == nil {
+		t.Fatal("Ctrl+C did not close through the backend and quit")
+	}
+}
+
+func TestEnterOnConnectionRecordsRequestAndQuitsWithoutClosing(t *testing.T) {
+	b := &fakeBackend{metadata: pickerMetadata()}
+	m := testModel(b)
+	if cmd := press(m, tea.KeyRight); cmd != nil || m.connection != nil {
+		t.Fatal("only Enter may start a connection")
+	}
+	cmd := press(m, 13)
+	if cmd == nil {
+		t.Fatal("Enter on a connection point did not quit the program")
+	}
+	if _, quit := cmd().(tea.QuitMsg); !quit || b.closes != 0 {
+		t.Fatal("selection closed the database or did not quit")
+	}
+	c, ok := m.TakeConnection()
+	if _, again := m.TakeConnection(); !ok || c != (Connection{ServerID: "s1", Account: "deploy"}) || again {
+		t.Fatal("selection recorded the wrong request or did not clear it when taken")
+	}
+	m.working, m.quitting = true, true
+	m.Connected(0, errors.New("synthetic-error-secret"))
+	if m.working || m.quitting || strings.Contains(m.View().Content, "synthetic-error-secret") || !strings.Contains(m.message, "failed") {
+		t.Fatal("connection failure leaked raw error text or left the model busy")
+	}
+	if m.Connected(3, nil); !strings.Contains(m.message, "exit code 3") {
+		t.Fatal("exit code was not reported")
+	}
+}
+
+func TestRefreshKeepsFocusOrRequiresReselection(t *testing.T) {
+	m := testModel(&fakeBackend{})
+	m.metadata = points("a", "b")
+	press(m, tea.KeyDown)
+	m.Update(refreshMsg{metadata: points("new", "a", "b")})
+	press(m, 13)
+	if c, ok := m.TakeConnection(); m.reselect || !ok || c != (Connection{ServerID: "b", Account: "main"}) {
+		t.Fatal("focus did not follow the item to its new index")
+	}
+	moved := points("a", "b")
+	moved.Servers[1].Address = "moved.example:22"
+	for i, next := range []vault.DirectoryMetadata{moved, points("a")} {
+		m = testModel(&fakeBackend{})
+		m.metadata = points("a", "b")
+		press(m, tea.KeyDown)
+		m.Update(refreshMsg{metadata: next})
+		if cmd := press(m, 13); cmd != nil || m.connection != nil || m.cursor != 0 || m.message != reselectMessage {
+			t.Fatal("Enter acted on a changed list")
+		}
+		press(m, tea.KeyDown)
+		press(m, 13)
+		if m.reselect || m.message == reselectMessage || (m.connection != nil) != (i == 0) {
+			t.Fatal("deliberate reselection did not re-enable activation on the new focus")
+		}
+	}
+	stale := item{label: "Connect: stale", target: location{server: "gone", account: "main"}, action: "connect"}
+	if m.activate(stale, true) != nil || m.connection != nil || m.message != "That connection is no longer available." {
+		t.Fatal("a vanished account was recorded for connection")
+	}
 }
