@@ -5,12 +5,61 @@ Stdin lines (never argv): 1 database password, 2 wrong archive password,
 3 correct archive password, 4+ strings that must never reach the screen.
 """
 import os
-import select
 import signal
 import subprocess
 import sys
 import time
 import uuid
+import threading
+
+
+class TerminalOutput:
+    """Drain a control client even while the driver waits for pane exit."""
+    def __init__(self, stream, limit=8 * 1024 * 1024):
+        self.stream, self.limit = stream, limit
+        self.data = bytearray()
+        self.condition = threading.Condition()
+        self.sequence, self.seen = 0, 0
+        self.ended, self.overflow = False, False
+        self.thread = threading.Thread(target=self.read)
+        self.thread.start()
+
+    def read(self):
+        try:
+            while True:
+                chunk = os.read(self.stream.fileno(), 32768)
+                if not chunk:
+                    return
+                with self.condition:
+                    if len(self.data) + len(chunk) <= self.limit and not self.overflow:
+                        self.data.extend(chunk)
+                    else:
+                        self.overflow = True
+                    self.sequence += 1
+                    self.condition.notify_all()
+        finally:
+            with self.condition:
+                self.ended = True
+                self.condition.notify_all()
+
+    def next(self, seconds, phase):
+        with self.condition:
+            changed = self.condition.wait_for(lambda: self.sequence != self.seen or self.ended, seconds)
+            if self.overflow:
+                raise RuntimeError("synthetic terminal output exceeded its bound")
+            if not changed:
+                raise RuntimeError("synthetic terminal timed out at phase: " + phase)
+            if self.ended and self.sequence == self.seen:
+                raise RuntimeError("synthetic terminal ended at phase: " + phase)
+            self.seen = self.sequence
+
+    def finish(self):
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise RuntimeError("synthetic terminal output reader did not join")
+        if self.overflow:
+            raise RuntimeError("synthetic terminal output exceeded its bound")
+        return bytes(self.data)
 
 IMPORT_ITEM = b"> Import credentials and values"
 PREVIEW_ROWS = [
@@ -61,9 +110,9 @@ def main():
     environment = dict(os.environ, TERM="xterm-256color", SSJACK_OWNER_TUI_CHILD="1",
                        SSJACK_OWNER_TUI_CHILD_SECONDS="580")
     deadline = time.monotonic() + 600
-    control = None
+    control, output = None, None
     server_pid = None
-    transcript = bytearray()
+    transcript = b""
 
     def remaining():
         seconds = deadline - time.monotonic()
@@ -83,14 +132,21 @@ def main():
         return content
 
     def pump(phase):
-        if not select.select([control.stdout], [], [], remaining())[0]:
-            raise RuntimeError("synthetic terminal timed out at phase: " + phase)
-        chunk = os.read(control.stdout.fileno(), 32768)
-        if not chunk:
-            raise RuntimeError("synthetic terminal ended at phase: " + phase)
-        transcript.extend(chunk)
-        if len(transcript) > 8 * 1024 * 1024:
-            raise RuntimeError("synthetic terminal output exceeded its bound")
+        output.next(remaining(), phase)
+
+    def close_control():
+        if control is None:
+            return b""
+        control.stdin.close()
+        control.terminate()
+        try:
+            control.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            control.kill()
+            control.wait(timeout=5)
+        captured = output.finish() if output is not None else b""
+        control.stdout.close()
+        return captured
 
     def wait_until(predicate, phase):
         while True:
@@ -152,7 +208,8 @@ def main():
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, env=environment)
+                                   stderr=subprocess.DEVNULL, env=environment)
+        output = TerminalOutput(control.stdout)
         expect("Vault secret:")
         paste(database_password + b"\n")
         expect("owner database")
@@ -184,35 +241,40 @@ def main():
         keys("Up")
         expect("> Exit")
         keys("Enter")
-        tmux("wait-for", "finished")
+        try:
+            subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, env=environment, check=True,
+                           timeout=min(remaining(), 75))
+        except subprocess.TimeoutExpired:
+            content = screen()
+            raise RuntimeError("synthetic terminal exit stalled: working=%s exit-stopped=%s selected-exit=%s list-changed=%s" % (
+                b"Working; please wait" in content, b"Exit stopped:" in content,
+                has_line(content, b"> Exit"), b"The list changed;" in content)) from None
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic terminal child failed")
+        transcript = close_control()
         if any(secret in transcript for secret in secrets):
             raise RuntimeError("synthetic terminal exposed private input")
         print("Synthetic owner import terminal interaction accepted.")
     finally:
-        if control is not None:
-            control.terminate()
-            try:
-                control.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                control.kill()
-                control.communicate()
-        if server_pid is not None:
-            try:
-                result = subprocess.run(prefix + ["display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_pid}"],
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
-                dead, pane = result.stdout.strip().split(b":")
-                pane_pid = int(pane)
-                if dead == b"0" and pane_pid > 1:
-                    os.kill(pane_pid, signal.SIGKILL)
-            except (OSError, ValueError, subprocess.SubprocessError):
-                pass
-            try:
-                os.kill(server_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        try:
+            close_control()
+        finally:
+            if server_pid is not None:
+                try:
+                    result = subprocess.run(prefix + ["display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_pid}"],
+                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+                    dead, pane = result.stdout.strip().split(b":")
+                    pane_pid = int(pane)
+                    if dead == b"0" and pane_pid > 1:
+                        os.kill(pane_pid, signal.SIGKILL)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+                try:
+                    os.kill(server_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
 
 if __name__ == "__main__":
