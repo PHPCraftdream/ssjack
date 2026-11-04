@@ -10,6 +10,11 @@ import (
 )
 
 func (t *Transaction) Publish(id [16]byte) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if id == ([16]byte{}) {
 		return ownerfs.ErrInvalid
 	}
@@ -24,6 +29,11 @@ func (t *Transaction) Publish(id [16]byte) error {
 	return source.Rename(idName(id), target, idName(id), false)
 }
 func (t *Transaction) Quarantine(id [16]byte) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if id == ([16]byte{}) {
 		return ownerfs.ErrInvalid
 	}
@@ -94,6 +104,11 @@ func writeRecord(root *ownerfs.Root, name string, data []byte) error {
 	return nil
 }
 func (t *Transaction) Pointer(tuple [64]byte) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	d, err := t.live()
 	if err != nil {
 		return err
@@ -131,6 +146,11 @@ func validIntent(txn [16]byte, raw [312]byte) bool {
 	return txn != ([16]byte{}) && string(raw[:8]) == "SSAPCMT1" && string(raw[8:24]) == string(txn[:])
 }
 func (t *Transaction) CreateIntent(txn [16]byte, raw [312]byte) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if !validIntent(txn, raw) {
 		return ownerfs.ErrInvalid
 	}

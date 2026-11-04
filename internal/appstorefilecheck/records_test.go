@@ -133,6 +133,16 @@ func TestNativeRecordTransactionPublicationAndRecovery(t *testing.T) {
 	if actual != intent {
 		t.Fatal("intent changed")
 	}
+	must(t, tx.Entries("intents", func(string) error {
+		reloaded, err := tx.LoadIntent(id(3))
+		if err != nil {
+			return err
+		}
+		if reloaded != intent {
+			return appstorefile.ErrChanged
+		}
+		return nil
+	}))
 	var pointer [64]byte
 	pointer[0] = 1
 	must(t, tx.Pointer(pointer))

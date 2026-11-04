@@ -61,9 +61,11 @@ candidates, immutable snapshots and retained ciphertext recovery copies. Record
 names are canonical nonzero lowercase hexadecimal identities. Readers validate
 sizes and before/after revisions; publication verifies identity and readback.
 
-One native data lock owns each transaction. Operation leases exclude concurrent
-mutation and transaction close. Closing a transaction invalidates its handles to
-future operations without invalidating independently owned ciphertext files.
+One native data lock owns each transaction. Shared operation leases permit nested
+reads from enumeration callbacks and exclude transaction close. A separate
+nonblocking mutation gate excludes concurrent record mutations. Closing a
+transaction invalidates its handles to future operations without invalidating
+independently owned ciphertext files.
 Installation ownership uses its separate lock. Hash/recovery copying is bounded
 and cancellation-aware; ambiguous writes are not replayed automatically.
 

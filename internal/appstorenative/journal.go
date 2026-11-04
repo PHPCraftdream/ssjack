@@ -9,6 +9,14 @@ import (
 )
 
 func (t *Transaction) Journal() (*os.File, error) {
+	release, err := t.mutation()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return t.journal()
+}
+func (t *Transaction) journal() (*os.File, error) {
 	d, err := t.live()
 	if err != nil {
 		return nil, err
@@ -46,11 +54,16 @@ func (t *Transaction) Journal() (*os.File, error) {
 	return file, nil
 }
 func (t *Transaction) AppendJournal(entry [40]byte, count uint64) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	var zero [16]byte
 	if count >= 1<<20 || binary.BigEndian.Uint64(entry[:8]) != count || string(entry[8:24]) == string(zero[:]) || string(entry[24:]) == string(zero[:]) {
 		return ownerfs.ErrInvalid
 	}
-	file, err := t.Journal()
+	file, err := t.journal()
 	if err != nil {
 		return err
 	}
@@ -98,7 +111,12 @@ func (t *Transaction) AppendJournal(entry [40]byte, count uint64) error {
 	return nil
 }
 func (t *Transaction) SyncJournal() error {
-	file, err := t.Journal()
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
+	file, err := t.journal()
 	if err != nil {
 		return err
 	}

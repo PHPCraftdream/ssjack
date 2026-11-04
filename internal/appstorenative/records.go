@@ -38,6 +38,11 @@ func (t *Transaction) OpenNamed(kind, name string) (*os.File, error) {
 	return root.Read(name)
 }
 func (t *Transaction) CreateCandidate(id [16]byte) (*os.File, error) {
+	release, err := t.mutation()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if id == ([16]byte{}) {
 		return nil, ownerfs.ErrInvalid
 	}
@@ -48,6 +53,11 @@ func (t *Transaction) CreateCandidate(id [16]byte) (*os.File, error) {
 	return root.Write(idName(id), true)
 }
 func (t *Transaction) SyncCandidate(id [16]byte) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if id == ([16]byte{}) {
 		return ownerfs.ErrInvalid
 	}

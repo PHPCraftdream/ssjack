@@ -41,9 +41,23 @@ func TestNativeOperationLeaseExcludesCloseAndConcurrentMutation(t *testing.T) {
 		}
 		result <- err
 	}()
-	if err := <-result; !errors.Is(err, ownerfs.ErrBusy) {
+	if err := <-result; err != nil {
 		release()
-		t.Fatal("concurrent mutation entered operation lease")
+		t.Fatal("shared read operation could not acquire a lease")
+	}
+	mutation, err := tx.mutation()
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	candidate, mutationErr := tx.CreateCandidate([16]byte{2})
+	if candidate != nil {
+		candidate.Close()
+	}
+	mutation()
+	if !errors.Is(mutationErr, ownerfs.ErrBusy) {
+		release()
+		t.Fatal("concurrent mutation bypassed its exclusive gate")
 	}
 	if err := tx.Close(); !errors.Is(err, ownerfs.ErrBusy) {
 		release()

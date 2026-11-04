@@ -10,6 +10,11 @@ import (
 )
 
 func (t *Transaction) Retain(ctx context.Context, snapshot, txn [16]byte, source *os.File, expected [32]byte, limit uint64) error {
+	release, err := t.mutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if snapshot == ([16]byte{}) || txn == ([16]byte{}) || expected == ([32]byte{}) || limit > 1<<42 {
 		return ownerfs.ErrInvalid
 	}

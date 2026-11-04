@@ -18,10 +18,11 @@ type Directory struct {
 }
 
 type Transaction struct {
-	mu     sync.Mutex
-	owner  *Directory
-	unlock func() error
-	ended  bool
+	mu      sync.RWMutex
+	writing sync.Mutex
+	owner   *Directory
+	unlock  func() error
+	ended   bool
 }
 
 type Revision struct {
@@ -137,14 +138,18 @@ func (t *Transaction) Begin() (func(), error) {
 	if t == nil {
 		return nil, ownerfs.ErrUnavailable
 	}
-	if !t.mu.TryLock() {
-		return nil, ownerfs.ErrBusy
-	}
+	t.mu.RLock()
 	if _, err := t.live(); err != nil {
-		t.mu.Unlock()
+		t.mu.RUnlock()
 		return nil, err
 	}
-	return t.mu.Unlock, nil
+	return t.mu.RUnlock, nil
+}
+func (t *Transaction) mutation() (func(), error) {
+	if !t.writing.TryLock() {
+		return nil, ownerfs.ErrBusy
+	}
+	return t.writing.Unlock, nil
 }
 func (t *Transaction) Close() error {
 	if t == nil {
@@ -182,6 +187,11 @@ func (t *Transaction) directory(kind string) (*ownerfs.Root, error) {
 	return root, nil
 }
 func (t *Transaction) Temporary() (*os.File, error) {
+	release, err := t.mutation()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	d, err := t.live()
 	if err != nil {
 		return nil, err
