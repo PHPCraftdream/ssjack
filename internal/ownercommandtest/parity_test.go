@@ -22,7 +22,7 @@ func TestEveryMenuManagementActionHasACommandAndEveryCommandHasAForm(t *testing.
 	}
 	pages := []route{{}, {path: []string{"Servers"}}, {server: "production"}, {server: "production", account: "main"}, {path: []string{"Global secrets"}}, {path: []string{"Global secrets", "token"}}, {server: "production", path: []string{"Server secrets"}}}
 	found := make(map[string]bool)
-	actionLine := regexp.MustCompile(`(?m)^[a-z]+(?:-[a-z]+)*$`)
+	actionLine := regexp.MustCompile(`(?m)^"[a-z]+(?:-[a-z]+)*"$`)
 	for _, page := range pages {
 		seen := make(map[string]bool)
 		for i := 0; i < 40; i++ {
@@ -40,7 +40,7 @@ func TestEveryMenuManagementActionHasACommandAndEveryCommandHasAForm(t *testing.
 			if strings.Contains(view, "Unsupported owner action") {
 				t.Fatal("menu action has no handler")
 			}
-			if action := actionLine.FindString(view); action != "" {
+			if action := strings.Trim(actionLine.FindString(view), `"`); action != "" {
 				if _, ok := ownercommand.Lookup(action); !ok {
 					t.Fatalf("menu-only management action: %s", action)
 				}
@@ -71,7 +71,7 @@ func TestEveryMenuManagementActionHasACommandAndEveryCommandHasAForm(t *testing.
 		if err := m.ConfigureCommand(request); err != nil {
 			t.Fatalf("%s: %v", spec.Action, err)
 		}
-		if actionLine.FindString(m.View().Content) != spec.Action {
+		if strings.Trim(actionLine.FindString(m.View().Content), `"`) != spec.Action {
 			t.Fatalf("command bypassed the shared form: %s", spec.Action)
 		}
 	}
