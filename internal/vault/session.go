@@ -120,13 +120,22 @@ func (s *Session) enqueue(payload []byte) {
 	s.signal()
 }
 
+var ErrOwnerRevision = errors.New("owner database revision changed")
+
 // Apply edits an owned candidate; failed or cancelled forms cannot change state.
 // The callback must not start background work or retain the candidate's buffers.
-func (s *Session) Apply(edit func(*Vault) error) error {
+func (s *Session) Apply(edit func(*Vault) error) error { return s.apply(nil, edit) }
+func (s *Session) ApplyAt(expected uint64, edit func(*Vault) error) error {
+	return s.apply(&expected, edit)
+}
+func (s *Session) apply(expected *uint64, edit func(*Vault) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.closing || edit == nil || s.revision == math.MaxUint64 {
 		return errors.New("database session does not accept edits")
+	}
+	if expected != nil && *expected != s.revision {
+		return ErrOwnerRevision
 	}
 	raw, err := marshal(s.state)
 	if err != nil {

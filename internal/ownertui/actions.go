@@ -9,6 +9,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/owneredit"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -50,7 +51,7 @@ func input(label, help string, limit int, secret bool, value string) field {
 }
 
 func (m *Model) openForm(action string) {
-	f := &form{action: action, origin: m.at}
+	f := &form{action: action, origin: m.at, revision: m.status.Database.Revision}
 	switch action {
 	case "add-server":
 		f.fields = []field{
@@ -134,18 +135,6 @@ func accountFields() []field {
 	}
 }
 
-func (m *Model) applyForm() tea.Cmd {
-	m.epoch++
-	f := m.form
-	m.form = nil
-	m.back()
-	m.working = true
-	return func() tea.Msg {
-		defer f.clear()
-		return operationMsg{err: m.perform(f), action: f.action}
-	}
-}
-
 func (m *Model) perform(f *form) error {
 	value := func(index int) string { return string(f.fields[index].value) }
 	switch f.action {
@@ -156,7 +145,7 @@ func (m *Model) perform(f *form) error {
 	case "link":
 		return m.backend.Link(value(0), f.fields[1].value)
 	case "add-server", "add-account", "edit-account", "rename-server", "edit-server", "edit-proxy":
-		return m.backend.Edit(func(v *vault.Vault) error { return editDirectory(v, f) })
+		return owneredit.Dispatch(m.backend, directoryChange(f))
 	case "pending":
 		return m.performPending(value(0))
 	case "add-secret", "edit-secret", "remove-secret":

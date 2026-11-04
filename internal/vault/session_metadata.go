@@ -43,6 +43,23 @@ type DirectoryMetadata struct {
 func (s *Session) Metadata() (DirectoryMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.metadata()
+}
+
+// MetadataSnapshot binds display data and persistence evidence to one revision.
+func (s *Session) MetadataSnapshot() (DirectoryMetadata, SessionStatus, [32]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	metadata, err := s.metadata()
+	status := SessionStatus{Revision: s.revision, SavedRevision: s.saved, Pending: s.saved != s.revision, Err: s.saveErr}
+	var digest [32]byte
+	if err == nil && s.saveErr == nil && s.saved == s.revision {
+		digest = s.savedCipher
+	}
+	return metadata, status, digest, err
+}
+
+func (s *Session) metadata() (DirectoryMetadata, error) {
 	if s.closed {
 		return DirectoryMetadata{}, errors.New("database session is closed")
 	}

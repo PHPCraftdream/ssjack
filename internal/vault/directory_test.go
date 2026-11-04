@@ -2,6 +2,8 @@ package vault
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -259,5 +261,23 @@ func TestEmptyVersionOneKeepsNilDirectory(t *testing.T) {
 	defer decoded.Close()
 	if decoded.Version != 1 || decoded.Targets == nil || decoded.Servers != nil || decoded.Secrets != nil {
 		t.Fatal("version 1 decoding gained directory maps")
+	}
+}
+
+func TestOwnerRevisionRefusalIsAtomicBeforeMutation(t *testing.T) {
+	v, server := directoryFixture(t)
+	session := newSession(v, func(context.Context, []byte) error { return nil }, func() {})
+	t.Cleanup(session.Discard)
+	if err := session.ApplyAt(0, func(v *Vault) error { return v.RenameServer(server, "first") }); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err := session.ApplyAt(0, func(v *Vault) error { called = true; return v.RenameServer(server, "stale-overwrite") })
+	if !errors.Is(err, ErrOwnerRevision) || called {
+		t.Fatal("stale owner revision reached a mutation")
+	}
+	metadata, status, _, err := session.MetadataSnapshot()
+	if err != nil || status.Revision != 1 || len(metadata.Servers) != 1 || metadata.Servers[0].Name != "first" {
+		t.Fatal("stale owner command changed the atomically observed revision")
 	}
 }

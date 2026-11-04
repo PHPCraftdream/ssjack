@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"io"
-	"os"
 	"strconv"
-	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
-	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
-	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/owneredit"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -106,150 +103,16 @@ func (m *Model) performPending(action string) error {
 	return errForm
 }
 
-func editDirectory(v *vault.Vault, f *form) error {
-	text := func(index int) string { return string(f.fields[index].value) }
-	if f.action == "edit-proxy" {
-		return editProxy(v, f)
+func directoryChange(f *form) owneredit.Change {
+	change := owneredit.Change{Action: f.action, ServerID: f.origin.server, Account: f.origin.account}
+	for _, field := range f.fields {
+		change.Fields = append(change.Fields, field.value)
 	}
-	if f.action == "edit-server" {
-		return editServer(v, f.origin.server, text(0), text(1))
-	}
-	if f.action == "rename-server" {
-		return v.RenameServer(f.origin.server, text(0))
-	}
-	start, account := 1, text(0)
-	var target vault.Target
-	if f.action == "add-server" {
-		start, account = 3, text(2)
-		target.Address = text(1)
-		for _, encoded := range strings.Split(text(7), "|") {
-			target.HostKeys = append(target.HostKeys, strings.TrimSpace(encoded))
-		}
-	} else {
-		server, exists := v.Servers[f.origin.server]
-		if !exists {
-			return errForm
-		}
-		profile, exists := server.Accounts[account]
-		if f.action == "edit-account" {
-			if !exists || account != f.origin.account {
-				return errForm
-			}
-			target = v.Targets[profile]
-		} else {
-			if exists {
-				return errForm
-			}
-			for _, profile := range server.Accounts {
-				previous := v.Targets[profile]
-				target.Address, target.HostKeys = previous.Address, previous.HostKeys
-				break
-			}
-		}
-	}
-	target.User, target.Usage = text(start), text(start+3)
-	kind, credential := text(start+1), f.fields[start+2].value
-	if kind != "key" && kind != "password" {
-		return errForm
-	}
-	var imported []byte
-	if len(credential) != 0 {
-		if kind == "password" {
-			target.Password, target.PrivateKey = credential, nil
-		} else {
-			var err error
-			imported, err = readPrivateKey(string(credential))
-			if err != nil {
-				return errForm
-			}
-			defer clear(imported)
-			target.PrivateKey, target.Password = imported, nil
-		}
-	} else if (kind == "key" && len(target.PrivateKey) == 0) || (kind == "password" && len(target.Password) == 0) {
-		return errForm
-	}
-	if f.action == "add-server" {
-		_, err := v.AddServer(text(0), account, target)
-		return err
-	}
-	return v.SetAccount(f.origin.server, account, target)
+	return change
 }
-
-func editProxy(v *vault.Vault, f *form) error {
-	if len(f.fields) != 4 {
-		return errForm
-	}
-	kind := string(f.fields[0].value)
-	if kind == "direct" {
-		return v.SetServerProxy(f.origin.server, nil)
-	}
-	route := &sshproxy.Config{Type: kind, Address: string(f.fields[1].value), Username: string(f.fields[2].value), Password: append([]byte(nil), f.fields[3].value...)}
-	defer route.Clear()
-	if route.Username != "" && len(route.Password) == 0 {
-		server, exists := v.Servers[f.origin.server]
-		if !exists {
-			return errForm
-		}
-		for _, profile := range server.Accounts {
-			previous := v.Targets[profile].Proxy
-			if previous == nil || previous.Type != route.Type || previous.Address != route.Address || previous.Username != route.Username {
-				return errForm
-			}
-			route.Password = append([]byte(nil), previous.Password...)
-			break
-		}
-	}
-	if route.Validate() != nil || route.Type == "" {
-		return errForm
-	}
-	return v.SetServerProxy(f.origin.server, route)
-}
-
+func editDirectory(v *vault.Vault, f *form) error { return owneredit.Apply(v, directoryChange(f)) }
 func editServer(v *vault.Vault, id, address, replacement string) error {
-	server, exists := v.Servers[id]
-	if !exists {
-		return errForm
-	}
-	var pins []string
-	if replacement != "" {
-		for _, pin := range strings.Split(replacement, "|") {
-			pins = append(pins, strings.TrimSpace(pin))
-		}
-	}
-	updated := make(map[string]vault.Target, len(server.Accounts))
-	for _, profile := range server.Accounts {
-		target := v.Targets[profile]
-		target.Address = address
-		if len(pins) != 0 {
-			target.HostKeys = append([]string(nil), pins...)
-		}
-		if err := target.Validate(); err != nil {
-			return errForm
-		}
-		updated[profile] = target
-	}
-	for profile, target := range updated {
-		v.Targets[profile] = target
-	}
-	return nil
-}
-
-func readPrivateKey(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, errForm
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > keyfile.MaxPlaintext {
-		return nil, errForm
-	}
-	data, err := io.ReadAll(io.LimitReader(file, keyfile.MaxPlaintext+1))
-	if err != nil || len(data) > keyfile.MaxPlaintext {
-		clear(data)
-		return nil, errForm
-	}
-	return data, nil
+	return owneredit.Server(v, id, address, replacement)
 }
 
 func (m *Model) submitSecret(f *form) error {
@@ -282,4 +145,20 @@ func (m *Model) submitSecret(f *form) error {
 		change.Value = f.fields[1].value
 	}
 	return m.backend.Submit(change)
+}
+
+func (m *Model) applyForm() tea.Cmd {
+	m.epoch++
+	f := m.form
+	m.form = nil
+	m.back()
+	m.working = true
+	operation := *m
+	if scoped, ok := m.backend.(interface{ AtRevision(uint64) Backend }); ok {
+		operation.backend = scoped.AtRevision(f.revision)
+	}
+	return func() tea.Msg {
+		defer f.clear()
+		return operationMsg{err: operation.perform(f), action: f.action}
+	}
 }

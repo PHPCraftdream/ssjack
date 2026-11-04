@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -247,4 +248,14 @@ func (m *Manager) stageImportSecret(staged *vault.OwnerImport, index int) (strin
 	m.pending, m.imp.inflight = pending, change.AliasID
 	m.mu.Unlock()
 	return pending.ID, nil
+}
+
+func (m *Manager) OwnerPeer(binding [32]byte) (*ownerpacket.Server, error) {
+	return m.db.OwnerPeer(m.path, binding)
+}
+func (m *Manager) LocalOwnerPeer(binding [32]byte) (*ownerpacket.Client, error) {
+	return m.db.LocalOwnerPeer(binding)
+}
+func (m *Manager) MetadataSnapshot() (vault.DirectoryMetadata, vault.SessionStatus, [32]byte, error) {
+	return m.db.MetadataSnapshot()
 }

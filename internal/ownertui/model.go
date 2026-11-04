@@ -12,7 +12,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
-type backend interface {
+type Backend interface {
 	Metadata() (vault.DirectoryMetadata, error)
 	Status() ownerdb.Status
 	Edit(func(*vault.Vault) error) error
@@ -31,6 +31,8 @@ type backend interface {
 	ResumeImport() error
 	AbortImport() error
 }
+
+type backend = Backend
 
 type refreshMsg struct {
 	epoch    uint64

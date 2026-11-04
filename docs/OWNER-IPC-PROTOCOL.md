@@ -1,10 +1,18 @@
 # Owner IPC primitives — integration in progress
 
-This document describes the native transport and authenticated packet layer under
-implementation. It is not an operator claim that live keeper coordination or
-Windows/macOS application-store editing is already available. Existing owner CLI
-and TUI behavior remains separate until the coordinator and storage ports are
-integrated and accepted.
+The native transport/packet primitives and native installation/record storage
+have separate accepted CI gates. Native production-profile owner editing passed
+on Windows, Linux and macOS at `866255d`; see `OWNER-NATIVE-STORAGE.md`. This is
+not an operator claim that live keeper coordination is available. Existing owner
+CLI and TUI behavior remains separate until coordinator integration is accepted.
+
+The coordinator foundation adds atomic expected-revision admission, a metadata
+snapshot tied to one revision, authenticated vault adoption without another KDF,
+and narrow owner packet capabilities. Directory forms share one typed mutation
+implementation. A form may pin its displayed revision through a scoped backend;
+this does not itself provide the remote backend or RPC service. Dispatcher,
+helper/keeper lifecycle, single-writer exclusion and cross-process integration
+remain unfinished.
 
 ## Authority and confidentiality
 

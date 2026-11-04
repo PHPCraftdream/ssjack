@@ -277,3 +277,16 @@ func (m *Manager) readImport(ctx context.Context, path string, password []byte) 
 	defer opened.Close()
 	return vault.ParseOwnerImport(opened)
 }
+
+func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent {
+	if pending == nil {
+		return nil
+	}
+	copy := *pending
+	copy.Change.Value = append([]byte{}, pending.Change.Value...)
+	copy.Versions = make(map[string]string, len(pending.Versions))
+	for object, version := range pending.Versions {
+		copy.Versions[object] = version
+	}
+	return &copy
+}

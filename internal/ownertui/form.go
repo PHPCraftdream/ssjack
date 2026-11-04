@@ -23,6 +23,7 @@ type field struct {
 }
 
 type form struct {
+	revision    uint64
 	action      string
 	fields      []field
 	focus       int
