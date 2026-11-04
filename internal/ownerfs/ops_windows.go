@@ -95,6 +95,11 @@ func temporary(root *os.File) (*os.File, error) {
 		spool.Close()
 		return nil, ErrUnsupported
 	}
+	position := windows.Overlapped{}
+	if err := windows.LockFileEx(windows.Handle(spool.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &position); err != nil {
+		spool.Close()
+		return nil, mapError(err)
+	}
 	return spool, nil
 }
 func remove(root *os.File, name string) error {

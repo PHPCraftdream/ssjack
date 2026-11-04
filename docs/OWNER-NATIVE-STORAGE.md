@@ -2,9 +2,10 @@
 
 The native filesystem capability layer and installation-binding port are under
 implementation. This is not acceptance of the complete application-store port:
-the native record engine, provisioning CLI and live owner coordinator still need
-integration and real cross-platform acceptance. The existing Linux implementation
-remains unchanged.
+the record engine requires native CI acceptance; owner intent storage, private-value
+workflows, provisioning and the live owner coordinator still need integration and
+real cross-platform acceptance. The existing Linux record implementation remains
+unchanged.
 
 ## Protected filesystem capabilities
 
@@ -51,6 +52,27 @@ owned duplicates; they are not master-key or plaintext-value getters.
 Directory identity remains an authenticated part of the installation binding.
 Moving/copying a binding does not automatically rebind it to a different root.
 No container/KDF/profile/version reduction or automatic enrollment is included.
+
+## Native ciphertext records
+
+On Windows/macOS, `appstorefile` delegates to `appstorenative` over protected
+`ownerfs` capabilities. The on-disk layout and byte shapes are unchanged: 40-byte
+journal entries, 312-byte commit intents, 64-byte replaceable pointers, exclusive
+candidates, immutable snapshots and retained ciphertext recovery copies. Record
+names are canonical nonzero lowercase hexadecimal identities. Readers validate
+sizes and before/after revisions; publication verifies identity and readback.
+
+One native data lock owns each transaction. Operation leases exclude concurrent
+mutation and transaction close. Closing a transaction invalidates its handles to
+future operations without invalidating independently owned ciphertext files.
+Installation ownership uses its separate lock. Hash/recovery copying is bounded
+and cancellation-aware; ambiguous writes are not replayed automatically.
+
+The native record tests exercise the public `appstorefile` facade on all three
+OSes, including duplicate publication, stale journal counts, intent/pointer
+round trips, recovery, cancellation, operation lifecycle and anonymous spools.
+These tests use synthetic ciphertext, not real credentials or substitute crypto.
+The record layer performs no KDF or encryption and makes no consumer-adoption claim.
 
 ## Acceptance required before shipping
 
