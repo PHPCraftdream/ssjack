@@ -13,7 +13,12 @@ func relative(root *os.File, name string, directory, create, writable bool) (*os
 	if name == "" || (name == "." && (!directory || create)) || name == ".." || strings.ContainsAny(name, "\\/:\x00") {
 		return nil, ErrInvalid
 	}
-	unicode, err := windows.NewNTUnicodeString(name)
+	objectName := name
+	if name == "." {
+		// NT reopens the root with an empty name, not a POSIX dot component.
+		objectName = ""
+	}
+	unicode, err := windows.NewNTUnicodeString(objectName)
 	if err != nil {
 		return nil, ErrInvalid
 	}

@@ -207,6 +207,39 @@ func assertSpoolUnreachable(t *testing.T, root *Root, spool *os.File) {
 	}
 }
 
+func TestNativeDirectoryEnumerationOwnsIndependentCursor(t *testing.T) {
+	root, _ := rootFixture(t)
+	for _, name := range []string{"first.bin", "second.bin"} {
+		writeFixture(t, root, name, []byte("synthetic ciphertext"))
+	}
+	for iteration := 0; iteration < 2; iteration++ {
+		seen := make(map[string]bool)
+		err := root.Entries(func(name string) error {
+			if seen[name] || (name != "first.bin" && name != "second.bin") {
+				return ErrInvalid
+			}
+			seen[name] = true
+			nested := make(map[string]bool)
+			if err := root.Entries(func(other string) error {
+				if nested[other] {
+					return ErrInvalid
+				}
+				nested[other] = true
+				return nil
+			}); err != nil {
+				return err
+			}
+			if !nested["first.bin"] || !nested["second.bin"] || len(nested) != 2 {
+				return ErrInvalid
+			}
+			return nil
+		})
+		if err != nil || len(seen) != 2 {
+			t.Fatalf("native enumeration lost its independent cursor: %v", err)
+		}
+	}
+}
+
 func TestNativeRootRefusesTraversalHardLinksAndUnexpectedPermissions(t *testing.T) {
 	root, path := rootFixture(t)
 	for _, name := range []string{"", ".", "..", "../escape", `..\escape`, "stream:secret", "a/b", "a\x00b"} {
