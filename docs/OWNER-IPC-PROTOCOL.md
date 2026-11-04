@@ -1,0 +1,89 @@
+# Owner IPC primitives — integration in progress
+
+This document describes the native transport and authenticated packet layer under
+implementation. It is not an operator claim that live keeper coordination or
+Windows/macOS application-store editing is already available. Existing owner CLI
+and TUI behavior remains separate until the coordinator and storage ports are
+integrated and accepted.
+
+## Authority and confidentiality
+
+The database-password holder owns its contents. OS endpoint permissions are
+necessary but do not prove human approval: a model harness can share the same OS
+identity. The helper must obtain its database context through trusted hidden
+owner unlock. No password, application value or master is sent through MCP,
+argv, environment, a watched file, or a plaintext bootstrap document.
+
+Packets reuse the existing authenticated `keyfile.Unlocked` storage context and
+full data-encryption profile. Four independent sequential Argon2id derivations
+remain 1 GiB/t1/p1/output32 each; sealing retains 1000 actual AES-256-GCM DATA
+layers and fresh nonces. There is no new password hash, raw master getter or
+weaker production cipher. Protocol-only unit fixtures are private test helpers,
+not constructors available to production callers. The dedicated full-profile
+test uses independently unlocked real contexts and the production KDF.
+
+Root/Administrator, the same OS identity, kernel and trusted runtime remain
+trusted. This is not a process-memory sandbox or a guarantee against a local
+same-user debugger, swap, dumps or all copies in Go memory.
+
+## Native endpoint ownership
+
+The endpoint is bound to a canonical database path using a domain-separated
+SHA-256 metadata digest. A path hash is never authorization. Symlink database
+files and non-regular paths refuse.
+
+- Windows uses a local Named Pipe with a protected current-user DACL, first-pipe
+  instance protection and remote-client refusal. A protected globally named
+  kernel event retains the endpoint ownership claim between peer connections;
+  it carries no request data or secret. OVERLAPPED operations pin native buffers,
+  count and state until kernel completion. Cancellation is joined before unpin
+  or owned-handle close.
+- Linux/macOS use a private per-database socket namespace under `/tmp`, with an
+  owner-only `0700` directory and `0600` socket. Existing unsafe permissions are
+  refused rather than repaired. Stale or foreign entries are never silently
+  unlinked. Close removes only the socket identity that this listener created.
+  Cancelled Accept retains endpoint ownership until explicit listener close.
+
+Listeners admit connections, not mutations. The coordinator must stop/join peers
+and complete or fail closed on outstanding persistence before releasing its
+listener ownership. No TCP, environment route or transport fallback is supplied.
+
+## Packet state machine and bounds
+
+1. The server seals a fresh session challenge, exact endpoint binding, saved
+   ciphertext-origin digest and expiry under its retained context.
+2. The client authenticates the server before sending any owner value. It then
+   generates a fresh client nonce and seals the matching authentication packet.
+3. The server authenticates that proof and returns a sealed ready acknowledgement
+   bound to both nonces, the database context and the exact protocol direction.
+4. Commands and metadata-only replies use matching sequence numbers. Exactly one
+   command may be outstanding. A completed request, handshake, reflected response
+   or packet from another database/session cannot be reused.
+
+The protocol domain is `ssjack/owner-ipc/v1`. Strict canonical JSON rejects
+unknown or duplicate fields, alternate encodings, mixed command/reply bodies and
+trailing data. A storage container cannot itself become an owner command.
+
+A four-byte big-endian frame length is checked before body allocation. Ciphertext
+is at most 256 KiB; plaintext remains within the existing 64 KiB keyfile payload
+bound. A peer has a 10-minute lease and at most 4096 command messages, with the
+last admitted command still eligible for its matching reply. All frame I/O
+requires a bounded context. A failed/partial write is uncertain and never grants
+permission to automatically replay a mutation.
+
+The closed operation union covers directory changes, selected secret changes,
+export, link, import inspection/confirmation, explicit recovery, metadata and
+flush. Replies contain only directory/import metadata and persistence evidence;
+there is no stored-secret or master getter. Mutating requests carry an expected
+revision, whose atomic admission must be enforced by the integrated coordinator.
+A successful receipt is not application adoption or an environment reload.
+
+## Acceptance layers
+
+Native tests exercise round trips, exclusive ownership, cancellation, protected
+ACLs/modes and preservation of stale/foreign paths on their actual OS. Protocol
+tests exercise replay, reflection, cross-binding/context confusion, strict
+framing, expiry, message budget and uncertainty. `TestOwnerPacketFullProfile` is
+mandatory in the dedicated production-KDF gate. Tests must report actual results;
+writing them or a successful old owner-menu run does not accept these primitives,
+and primitive acceptance alone does not accept the complete live-update feature.
