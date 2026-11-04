@@ -130,7 +130,7 @@ func TestNativeProtectedRootIdentityLockAndExclusivePublication(t *testing.T) {
 }
 
 func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
-	root, path := rootFixture(t)
+	root, _ := rootFixture(t)
 	file, err := root.Temporary()
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 	if err != nil || metadata.Links != 0 || metadata.Size != 0 || metadata.Directory {
 		t.Fatal("native spool is not an owned anonymous empty file")
 	}
-	assertSpoolUnreachable(t, path)
+	assertSpoolUnreachable(t, root, file)
 	if err := root.Entries(func(name string) error {
 		if strings.HasPrefix(name, ".spool-") {
 			return ErrInvalid
@@ -160,27 +160,22 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 	if err != nil || metadata.Size != int64(len(value)) {
 		t.Fatal("native spool lost its data or anonymity")
 	}
-	assertSpoolUnreachable(t, path)
+	assertSpoolUnreachable(t, root, file)
 }
 
-func assertSpoolUnreachable(t *testing.T, path string) {
+func assertSpoolUnreachable(t *testing.T, root *Root, spool *os.File) {
 	t.Helper()
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		t.Fatal(err)
+	name := filepath.Base(spool.Name())
+	if !strings.HasPrefix(name, ".spool-") {
+		t.Fatal("native spool has no checkable creation identity")
 	}
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".spool-") {
-			continue
-		}
-		file, err := os.Open(filepath.Join(path, entry.Name()))
-		if err == nil {
-			file.Close()
-			t.Fatal("anonymous ciphertext is reachable through a filesystem name")
-		}
-		if !os.IsNotExist(err) && !os.IsPermission(err) && !errors.Is(mapError(err), ErrMissing) {
-			t.Fatalf("unexpected unlinked spool lookup result: %v", err)
-		}
+	file, err := root.Read(name)
+	if file != nil {
+		file.Close()
+		t.Fatal("anonymous ciphertext retained an openable root-relative name")
+	}
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("unlinked spool lookup did not report absence: %v", err)
 	}
 }
 
