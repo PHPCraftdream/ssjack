@@ -1,37 +1,37 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestDirectoryMigrationRoutingStopsBeforeCredentialInput(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	source := filepath.Join(t.TempDir(), "missing-source")
-	destination := source + "-new"
-	code, err := runVaultMaintenance(ctx, source, "main", []string{"migrate-directory", destination})
-	if code != 1 || !errors.Is(err, context.Canceled) {
-		t.Fatal("cancelled migration did not reach the dedicated command")
-	}
-	if _, err := os.Lstat(source); !os.IsNotExist(err) {
-		t.Fatal("cancelled migration created a source database")
-	}
-	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
-		t.Fatal("cancelled migration created output")
-	}
-	if err := os.WriteFile(destination, []byte("existing"), 0600); err != nil {
+func TestRemovedDirectoryMigrationRefusesBeforeCredentialInput(t *testing.T) {
+	dir := t.TempDir()
+	source, destination := filepath.Join(dir, "source"), filepath.Join(dir, "destination")
+	original := []byte("synthetic ciphertext sentinel")
+	if err := os.WriteFile(source, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	code, err = runVaultMaintenance(context.Background(), source, "main", []string{"migrate-directory", destination})
-	if code != 1 || err == nil {
-		t.Fatal("migration did not reject existing output before prompting")
+	for _, tail := range [][]string{{"vault", "migrate-directory", destination}, {"help", "vault", "migrate-directory"}} {
+		args := append([]string{"--vault", source}, tail...)
+		code, err := run(context.Background(), args)
+		if code != 1 || err == nil || strings.Contains(err.Error(), "interactive terminal") {
+			t.Fatalf("removed command did not refuse as invalid syntax: %d %v", code, err)
+		}
 	}
-	got, err := os.ReadFile(destination)
-	if err != nil || string(got) != "existing" {
-		t.Fatal("refused migration modified existing output")
+	if findHelp("vault migrate-directory") != nil {
+		t.Fatal("removed command remains advertised")
+	}
+	got, err := os.ReadFile(source)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatal("removed command changed the source")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "source" {
+		t.Fatal("removed command created output or staging files")
 	}
 }

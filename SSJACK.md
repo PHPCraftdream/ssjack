@@ -49,7 +49,7 @@ An old plaintext target file is an explicit migration input only: `ssjack [-p NA
 
 The owner coordinator retains authenticated RAM state, serializes encrypted saves and exposes explicit pending-intent recovery. Export scopes all/server/account/global include actual values; encrypted by default, exact `EXPORT PLAINTEXT` for the deliberate alternative. Import inspects existing ZIP archives in RAM, previews metadata and requires `IMPORT`; conflicts refuse without overwrite, and values receive fresh authenticated destination refs. Per-secret intents are durable; the remainder of a partial import plan is RAM-only, with no full-plan restart resume. These owner capabilities are not MCP getters or remote enrollment.
 
-`vault migrate-directory NEW_FILE` explicitly converts the payload schema while preserving the original ciphertext and credentials. The operator must select the result or activate it at the old path; installation never switches files. `vault upgrade` is a different outer-container operation. See [the credential/migration guide](docs/VAULT.md) and [owner menu](docs/application-store/OWNER-TUI.md).
+`vault init` creates directory payload schema v2 directly, with the selected profile name as the first server and credential name and one `main` account. Existing directory databases need no conversion; the pre-release profile converter has been removed. `vault upgrade` remains a separate outer-container operation. See [the credential guide](docs/VAULT.md) and [owner menu](docs/application-store/OWNER-TUI.md).
 
 ## Keys and host verification
 
@@ -66,7 +66,7 @@ The passphrase buffer is cleared after unlocking, but Go and the OS cannot guara
 
 ## Interactive shell and encrypted credentials
 
-`ssjack [-p NAME] ssh` opens a PTY using the same encrypted database as `run HARNESS [ARGS...]`; named-directory callers can instead use `--server NAME --account NAME`. Separate CLI invocations unlock individually, while the owner menu reuses one session. The vault stores address, user, key or password, verified server pins and settings. `vault init|passwd|backup|restore|check|upgrade|migrate-directory` manages storage without plaintext staging. Native SSH never starts an external `ssh` executable. Input is owned and joined before returning to the menu; Windows VT consoles can fail closed and require a restart rather than unsafe reader reuse.
+`ssjack [-p NAME] ssh` opens a PTY using the same encrypted database as `run HARNESS [ARGS...]`; named-directory callers can instead use `--server NAME --account NAME`. Separate CLI invocations unlock individually, while the owner menu reuses one session. The vault stores address, user, key or password, verified server pins and settings. `vault init|passwd|backup|restore|check|upgrade` manages storage without plaintext staging. Native SSH never starts an external `ssh` executable. Input is owned and joined before returning to the menu; Windows VT consoles can fail closed and require a restart rather than unsafe reader reuse.
 
 This is a full PTY shell, not a new MCP tool. Password authorization is per CLI invocation, not per remote shell command. The keeper exposes only the selected record to MCP, keeps the signer session-scoped, and preserves host-key verification. The bridge never receives the vault secret. See [vault commands and shell](docs/VAULT.md) for setup, terminal behavior, concurrency, and security limits.
 

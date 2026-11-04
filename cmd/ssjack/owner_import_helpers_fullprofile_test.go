@@ -40,7 +40,7 @@ func importDigest(t *testing.T, path string) [32]byte { return sha256.Sum256(imp
 // preserve; seed "" yields a truly empty destination (no server, no account).
 func openImportDestination(t *testing.T, ctx context.Context, storeDirectory, master string, password []byte, seed string) (*ownerdb.Manager, string) {
 	t.Helper()
-	v := vault.New()
+	v := vault.NewDirectory()
 	defer v.Close()
 	if seed != "" {
 		public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -56,10 +56,11 @@ func openImportDestination(t *testing.T, ctx context.Context, storeDirectory, ma
 		if err != nil {
 			t.Fatal(err)
 		}
-		v.Targets[seed] = vault.Target{Address: "seed.invalid:22", User: "seed", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(pin))}}
-	}
-	if err := v.UpgradeDirectory(); err != nil {
-		t.Fatal(err)
+		target := vault.Target{Address: "seed.invalid:22", User: "seed", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(pin))}}
+		defer clear(target.PrivateKey)
+		if err := v.InitializeDirectory(seed, target); err != nil {
+			t.Fatal(err)
+		}
 	}
 	path := filepath.Join(t.TempDir(), "destination.ssjack.ktav")
 	if err := vault.CreateWithRecords(ctx, path, v, password); err != nil {

@@ -12,8 +12,9 @@ import (
 func directoryFixture(t *testing.T) (*Vault, string) {
 	t.Helper()
 	v := New()
-	v.Targets["production"] = testTarget(t)
-	if err := v.UpgradeDirectory(); err != nil {
+	target := testTarget(t)
+	defer clear(target.PrivateKey)
+	if err := v.InitializeDirectory("production", target); err != nil {
 		v.Close()
 		t.Fatal(err)
 	}
@@ -38,38 +39,16 @@ func directoryRef(t *testing.T, version byte) string {
 	return string(encoded)
 }
 
-func TestDirectoryMigrationPreservesEveryProfile(t *testing.T) {
-	v := New()
-	defer v.Close()
-	first := testTarget(t)
-	first.Usage = "human"
-	v.Targets["production"] = first
-	second := ownTarget(first)
-	second.User = "another-user"
-	v.Targets["same-address"] = second
-	before := make(map[string]Target)
-	for name, target := range v.Targets {
-		before[name] = ownTarget(target)
-		defer clear(before[name].PrivateKey)
+func TestDirectoryInitializationPreservesProfileAndRefusesExistingRecords(t *testing.T) {
+	v, server := directoryFixture(t)
+	profile, err := v.AccountProfile(server, "main")
+	if err != nil || profile != "production" || v.Version != 2 {
+		t.Fatal("initial directory changed the selected profile identity")
 	}
-	if err := v.UpgradeDirectory(); err != nil {
-		t.Fatal(err)
-	}
-	if v.Version != 2 || len(v.Servers) != 2 || !reflect.DeepEqual(before, v.Targets) {
-		t.Fatal("migration merged profiles or changed credential metadata")
-	}
-	for name := range before {
-		id, err := v.ServerID(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		profile, err := v.AccountProfile(id, "main")
-		if err != nil || profile != name {
-			t.Fatal("legacy profile selection changed")
-		}
-	}
-	if err := v.UpgradeDirectory(); err == nil {
-		t.Fatal("repeated migration was accepted")
+	before := ownTarget(v.Targets[profile])
+	defer clear(before.PrivateKey)
+	if err := v.InitializeDirectory("another", before); err == nil {
+		t.Fatal("initialization replaced an existing directory")
 	}
 	encoded, err := marshal(v)
 	if err != nil {
@@ -81,8 +60,38 @@ func TestDirectoryMigrationPreservesEveryProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer decoded.Close()
-	if !reflect.DeepEqual(decoded.Targets, v.Targets) || !reflect.DeepEqual(decoded.Servers, v.Servers) {
-		t.Fatal("version 2 roundtrip lost credentials or account metadata")
+	if !reflect.DeepEqual(decoded.Targets[profile], before) || !reflect.DeepEqual(decoded.Servers, v.Servers) {
+		t.Fatal("version 2 roundtrip lost initial credentials or account metadata")
+	}
+	legacy := New()
+	defer legacy.Close()
+	legacy.Targets["existing"] = ownTarget(before)
+	if err := legacy.InitializeDirectory("another", before); err == nil || legacy.Version != 1 || len(legacy.Targets) != 1 {
+		t.Fatal("initialization converted or modified a populated legacy database")
+	}
+}
+
+func TestDirectoryInitializationValidatesAndOwnsCredentials(t *testing.T) {
+	v := New()
+	defer v.Close()
+	target := testTarget(t)
+	defer clear(target.PrivateKey)
+	if err := v.InitializeDirectory("invalid/name", target); err == nil || v.Version != 1 || len(v.Targets) != 0 || v.Servers != nil || v.Secrets != nil {
+		t.Fatal("invalid initialization changed the database")
+	}
+	if err := v.InitializeDirectory("initial", target); err != nil {
+		t.Fatal(err)
+	}
+	owned := v.Targets["initial"].PrivateKey
+	before := append([]byte(nil), owned...)
+	defer clear(before)
+	clear(target.PrivateKey)
+	if !bytes.Equal(v.Targets["initial"].PrivateKey, before) {
+		t.Fatal("initial directory retained caller-owned credential bytes")
+	}
+	v.Close()
+	if len(v.Targets) != 0 || !bytes.Equal(owned, make([]byte, len(owned))) {
+		t.Fatal("closed directory retained credential records or private bytes")
 	}
 }
 
@@ -198,11 +207,8 @@ func TestDirectoryPasswordRoundtripAndCleanup(t *testing.T) {
 // credentials and secrets survives the codec: Ktav writes "{}" and decoding must
 // yield non-nil empty maps, which validate requires for version 2.
 func TestEmptyDirectoryRoundtrip(t *testing.T) {
-	v := New()
+	v := NewDirectory()
 	defer v.Close()
-	if err := v.UpgradeDirectory(); err != nil {
-		t.Fatal(err)
-	}
 	link := OwnerStore{Directory: t.TempDir(), StoreID: ownerID(1), Master: []byte("synthetic empty master")}
 	for _, linked := range []bool{false, true} {
 		if linked {

@@ -28,7 +28,7 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 	manager, err := ownerdb.Open(ctx, path, password)
 	clear(password)
 	if err != nil {
-		return 1, errors.New("cannot unlock owner database; legacy databases require explicit vault migrate-directory")
+		return 1, errors.New("cannot unlock owner database; directory payload schema v2 is required")
 	}
 	model := ownertui.New(ctx, manager)
 	if err := model.Select(server, account); err != nil {

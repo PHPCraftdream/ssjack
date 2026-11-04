@@ -119,9 +119,8 @@ func TestTeaFormsKeepSecretsOwnedAndHiddenRefreshAndCloseStaySafeAndDirectoryFor
 	cmd = m.requestClose()
 	_, next = m.Update(cmd())
 	check(t, next != nil || b.closes != 1 || m.working || !strings.Contains(m.message, "Exit stopped"), "failed persistence allowed exit")
-	v := vault.New()
+	v := vault.NewDirectory()
 	defer v.Close()
-	must(t, v.UpgradeDirectory())
 	m = testModel(&fakeBackend{})
 	open(m, "add-server", "production", "localhost:22", "main", "first", "password", "synthetic-first", "both", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAA"+strings.Repeat("A", 40)) // a syntactically valid all-zero ed25519 host key
 	must(t, editDirectory(v, m.form))

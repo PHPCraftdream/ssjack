@@ -106,7 +106,7 @@ func TestNamedCredentialSelectionNeverFallsBackAcrossAccounts(t *testing.T) {
 	}
 	legacy := vault.New()
 	defer legacy.Close()
-	if _, err := chooseCredential(legacy, "@production/deploy"); err == nil || !strings.Contains(err.Error(), "migrate-directory") {
+	if _, err := chooseCredential(legacy, "@production/deploy"); err == nil || !strings.Contains(err.Error(), "directory payload schema v2") {
 		t.Fatal("legacy database silently acquired directory semantics")
 	}
 }

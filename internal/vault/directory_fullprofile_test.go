@@ -10,81 +10,46 @@ import (
 	"testing"
 )
 
-func TestVaultDirectoryMigrationFullProfile(t *testing.T) {
+func TestVaultDirectoryFullProfile(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("production KDF runs only in its dedicated GitHub CI job")
 	}
 	ctx := context.Background()
-	source := filepath.Join(t.TempDir(), "original")
-	destination := source + "-directory"
-	password := []byte("synthetic directory migration fixture")
+	path := filepath.Join(t.TempDir(), "directory")
+	password := []byte("synthetic directory fixture")
 	defer clear(password)
-	v := New()
-	defer v.Close()
-	v.Targets["production"] = testTarget(t)
+	v, server := directoryFixture(t)
 	other := ownTarget(v.Targets["production"])
+	defer clear(other.PrivateKey)
 	other.User, other.Usage = "another-user", "human"
-	v.Targets["same-endpoint"] = other
-	if err := CreateWithRecords(ctx, source, v, password); err != nil {
+	if _, err := v.AddServer("same-endpoint", "main", other); err != nil {
 		t.Fatal(err)
 	}
-	original, err := os.ReadFile(source)
+	if err := CreateWithRecords(ctx, path, v, password); err != nil {
+		t.Fatal(err)
+	}
+	if invalid, err := Load(path, []byte("wrong password")); err == nil {
+		invalid.Close()
+		t.Fatal("directory accepted a wrong database password")
+	}
+	loaded, err := Load(path, password)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareDirectoryMigration(ctx, source, []byte("wrong password")); err == nil {
-		t.Fatal("migration accepted a wrong database password")
+	defer loaded.Close()
+	if loaded.Version != 2 || loaded.format != 2 || len(loaded.Servers) != 2 || !reflect.DeepEqual(v.Targets, loaded.Targets) || !reflect.DeepEqual(v.Servers, loaded.Servers) {
+		t.Fatal("directory lost credentials, metadata or container format")
 	}
-	plan, err := PrepareDirectoryMigration(ctx, source, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := plan.Commit(ctx, destination); err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := Load(destination, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer migrated.Close()
-	if migrated.Version != 2 || migrated.format != 2 || len(migrated.Servers) != 2 || !reflect.DeepEqual(v.Targets, migrated.Targets) {
-		t.Fatal("migration lost credentials, metadata, profiles, or container format")
-	}
-	for name := range v.Targets {
-		server, err := migrated.ServerID(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		profile, err := migrated.AccountProfile(server, "main")
-		if err != nil || profile != name {
-			t.Fatal("migration changed legacy account identity")
-		}
-	}
-	encoded, err := os.ReadFile(destination)
+	encoded, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range v.Targets {
 		if bytes.Contains(encoded, target.PrivateKey) || bytes.Contains(encoded, []byte(target.Address)) {
-			t.Fatal("migration persisted plaintext credentials")
+			t.Fatal("directory persisted plaintext credentials")
 		}
 	}
-	if after, err := os.ReadFile(source); err != nil || !bytes.Equal(after, original) {
-		t.Fatal("migration rewrote the original database")
-	}
-	legacy, err := Load(source, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer legacy.Close()
-	if legacy.Version != 1 || !reflect.DeepEqual(v.Targets, legacy.Targets) {
-		t.Fatal("original database cannot be used for rollback")
-	}
-	server, err := migrated.ServerID("production")
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifySessionFullProfile(t, destination, password, server)
+	verifySessionFullProfile(t, path, password, server)
 }
 
 func verifySessionFullProfile(t *testing.T, path string, password []byte, server string) {

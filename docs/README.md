@@ -14,7 +14,6 @@ opening a database; global flags precede commands.
 | Route a server through SOCKS5 / HTTP CONNECT | Servers → SERVER → Edit SSH proxy | [Proxy configuration and wire-auth limits](PROXY.md) |
 | Select a named SSH account without menus | `--server NAME --account NAME ssh`, `check`, `rotate`, `run` | [Named startup](application-store/NAMED-STARTUP.md) |
 | Use a stable credential-record ID | `-p PROFILE` / `--profile PROFILE` (default `main`) | [Credentials](VAULT.md#default-profile-selection) |
-| Convert an old encrypted profile database | `vault migrate-directory NEW_FILE` | [Migration and path activation](VAULT.md#named-directory-migration) |
 | Import old plaintext SSH metadata | `vault migrate LEGACY_FILE` | [Legacy metadata](VAULT.md#legacy-metadata-migration-boundary) |
 | Upgrade the encrypted outer container | `vault upgrade` | [Container upgrade](VAULT.md#explicit-container-format-upgrade) |
 | Back up/verify/restore the entire database | `vault backup FILE`, `vault check FILE`, `vault restore FILE` | [Recovery](VAULT.md#backup-verification-and-restore) |

@@ -14,54 +14,15 @@ Validated edits remain in RAM with ordered encrypted autosave and visible persis
 
 After SSH the picker resumes without another database unlock when stdin is safely released. Windows VT-input cancellation can instead force a safe database close and restart. See [menu and import](application-store/OWNER-TUI.md), [directory](application-store/NAMED-DIRECTORY.md), [coordinator](application-store/OWNER-COORDINATOR.md) and [archive format](application-store/OWNER-EXPORT-FORMAT.md).
 
-## Named-directory migration
+## Current directory format
 
-Payload schema and encrypted container version are separate. `vault init` creates an initial profile database; use this explicit migration before opening the directory editor:
-
-```sh
-ssjack --vault .ssh/credentials.ssjack.ktav vault migrate-directory .ssh/directory-new.ssjack.ktav
-```
-
-Enter the existing password and exact `MIGRATE DIRECTORY`. The new file must not exist. Every legacy profile becomes its own server with the same name and one `main` account; equal endpoints are not merged. Credential bytes/settings and the original ciphertext are preserved, the password is unchanged, and no SSH connection occurs. Installing/updating a binary never runs this operation.
-
-### Activate the new database at the old path
-
-Stop every process that could write the database. Run from the usual application directory. These guarded sequences create the verified replacement, retain the original for rollback and put the replacement at the previous default path. If using another path, change `db` and continue using that same `--vault` path in your launch commands.
-
-PowerShell (two moves; keep ssjack stopped during the switch):
-
-```powershell
-$ErrorActionPreference = "Stop"
-$db = ".ssh/credentials.ssjack.ktav"
-$new = "$db.directory-new"
-$backup = "$db.before-directory"
-if (!(Test-Path -LiteralPath $db -PathType Leaf)) { throw "Original database not found" }
-if ((Test-Path -LiteralPath $new) -or (Test-Path -LiteralPath $backup)) { throw "Destination or backup already exists" }
-ssjack --vault $db vault migrate-directory $new
-if ($LASTEXITCODE -ne 0) { throw "Migration failed; original remains unchanged" }
-Move-Item -LiteralPath $db -Destination $backup
-try { Move-Item -LiteralPath $new -Destination $db }
-catch { Move-Item -LiteralPath $backup -Destination $db; throw }
-ssjack --interactive
-```
-
-POSIX shell (exclusive hard-link backup before replacing the old path):
-
-```sh
-set -eu
-db=.ssh/credentials.ssjack.ktav
-new="$db.directory-new"
-backup="$db.before-directory"
-test -f "$db" && test ! -L "$db"
-test ! -e "$new" && test ! -L "$new"
-test ! -e "$backup" && test ! -L "$backup"
-ssjack --vault "$db" vault migrate-directory "$new"
-ln "$db" "$backup"
-mv "$new" "$db"
-ssjack --interactive
-```
-
-Keep the backup until the new database is checked. Old binaries must use that original file explicitly; rollback is not a schema downgrade. This manual switch is not a power-loss durability guarantee. A cancelled migration does not publish the new file; failed activation requires inspecting the retained files, not deleting them to retry.
+`vault init` creates payload schema v2 directly with the first named server and
+one account named `main`. The server and credential profile keep the selected
+`-p` name (`main` by default). Existing directory databases need no conversion.
+Payload schema and encrypted container version are separate; `vault upgrade`
+changes only the outer container. Startup and installation never convert payloads.
+Legacy profile databases cannot use the owner editor or named selectors; the
+pre-release directory converter has been removed.
 
 For non-menu connections use `--server production --account operator ssh`, `check`, `rotate` or full-mode `run HARNESS`. An omitted account is inferred only for an explicitly selected server with one account; multiple accounts refuse. `--server` conflicts with `-p`, and `--account` requires `--server`. See [named startup](application-store/NAMED-STARTUP.md).
 

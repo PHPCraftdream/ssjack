@@ -52,10 +52,7 @@ func TestProxyStreamRunnerAndVaultClose(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer clear(block.Bytes)
-				v := vault.New()
-				if err := v.UpgradeDirectory(); err != nil {
-					t.Fatal(err)
-				}
+				v := vault.NewDirectory()
 				id, err := v.AddServer("proxied", "main", vault.Target{Address: target, User: "test", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(host))}, Proxy: route})
 				if err != nil {
 					t.Fatal(err)

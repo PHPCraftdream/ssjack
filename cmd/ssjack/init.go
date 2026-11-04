@@ -51,7 +51,11 @@ func runInitProfileWithKey(ctx context.Context, path, name string, generate bool
 	if err != nil {
 		return 1, err
 	}
-	v.Targets[name] = target
+	defer clear(target.PrivateKey)
+	defer clear(target.Password)
+	if err := v.InitializeDirectory(name, target); err != nil {
+		return 1, err
+	}
 	save := func() error {
 		if generate {
 			return vault.CreateUnlocked(ctx, path, v)

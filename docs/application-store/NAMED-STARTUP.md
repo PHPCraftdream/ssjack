@@ -14,7 +14,8 @@ ssjack --vault DATABASE --interactive --server production --account deploy
 one account on that server. An omitted account is inferred only when the selected
 server has exactly one account. Multiple accounts without an explicit selection
 refuse with guidance; neither `main` nor another account is silently substituted.
-Unknown names refuse. Legacy databases require explicit directory migration.
+Unknown names refuse. Directory payload schema v2 is required; `vault init`
+creates it directly. Legacy profile databases cannot use named selectors.
 
 `--profile`/`-p` remain legacy credential-record selectors and cannot be combined
 with `--server`. `--account` without `--server`, empty explicit names and malformed

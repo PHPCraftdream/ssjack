@@ -28,7 +28,7 @@ has separate, finite authorization; unrestricted SSH output is **not** secret-sa
 | Interactive terminal | Explicit `--interactive` Bubble Tea connection picker, manual credential entry, server/account edits, global/server-local secrets, exports, imports, pending-change recovery. One database unlock per owner session. |
 | Connection choice | No automatic connection, even for one point. Enter selects human SSH; management stays reachable in an empty database. Named startup selectors are also available. |
 | Persistence | Validated RAM edits, ordered encrypted background saves, visible save/error state, explicit retry/recovery, fresh nonces and unchanged data-encryption layers. |
-| Migration and recovery | Credential-preserving directory migration, independent container upgrade, encrypted backups, verified restore, password changes, and recovery copies. |
+| Storage and recovery | Direct directory-schema creation, independent container upgrade, encrypted backups, verified restore, password changes, and recovery copies. |
 | Keys and trust | Derived Ed25519 generation, key import/encrypted OpenSSH export, public-key output/install instructions, explicit server-pin replacement, SSH policy and two-phase key rotation. |
 | Native SSH | Human PTY shell with terminal resize; no external SSH client or forwarded SSH agent. `check` verifies pins/authentication without a remote command. |
 | Coding-agent access | One selected credential, pinned loopback TLS, single-use bootstrap, bounded `remote_*` jobs, read/cancel, compatible project-local command/result cards. |
@@ -48,13 +48,12 @@ Run from the application working directory. The default database is
 `.ssh/credentials.ssjack.ktav` **relative to that directory**, not automatically
 relative to your home or the executable. `--vault FILE` selects another file.
 
-For a new installation, create the parent directory, initialize a first legacy
-profile with verified server pins, then explicitly migrate to the directory schema:
+For a new installation, create the parent directory and initialize the directory
+database directly with verified server pins:
 
 ```sh
 ssjack vault init --generate-key
-ssjack vault migrate-directory .ssh/directory.ssjack.ktav
-ssjack --vault .ssh/directory.ssjack.ktav --interactive
+ssjack --interactive
 ```
 
 `vault init` prompts for an existing remote login and independently verified server
@@ -84,28 +83,13 @@ competing reader; Windows VT consoles may require restarting ssjack after SSH.
 
 See [the menu guide](docs/application-store/OWNER-TUI.md) for exact fields and limits.
 
-## Migrate an existing database and keep its usual path
+## Current database format
 
-Stop all processes that could write the database. Migration first creates a
-**different** verified encrypted file; it never replaces the source automatically:
-
-```sh
-ssjack --vault .ssh/credentials.ssjack.ktav vault migrate-directory .ssh/directory-new.ssjack.ktav
-```
-
-Enter the existing database password and confirm `MIGRATE DIRECTORY`. Each old
-profile becomes a separate server with one `main` account, even if addresses match.
-The source ciphertext and credentials are preserved, and the password is unchanged.
-
-To let existing launch commands find the result automatically, put the verified
-replacement at the **old path**, keeping the old file as a rollback copy. Follow
-[the guarded PowerShell/POSIX switching instructions](docs/VAULT.md#activate-the-new-database-at-the-old-path).
-There is no automatic path switch or background migration. Old binaries must use
-the original database; downgrading the new payload is not a rollback strategy.
-
-`vault migrate LEGACY_FILE` imports old plaintext SSH metadata instead.
-`vault upgrade` changes the encrypted **container** format. These are three
-separate operations; installing a binary performs none of them.
+`vault init` creates directory payload schema v2 directly. The first server keeps
+the selected profile name (`main` by default) and contains an account named `main`.
+Existing directory databases need no conversion. Startup and installation never
+rewrite a database automatically. Payload schema and encrypted container version
+are independent; `vault upgrade` concerns only the outer container.
 
 ## Select a connection without the menu
 
@@ -251,7 +235,7 @@ that every installed or future revision behaves identically.
 ssjack help
 ssjack help --interactive
 ssjack help text-adapter
-ssjack help vault migrate-directory
+ssjack help vault init
 ssjack --version
 ssjack --licenses
 ```

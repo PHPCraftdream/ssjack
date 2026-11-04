@@ -23,9 +23,6 @@ func confirmValue(prompt, expected string) error {
 }
 
 func runVaultMaintenance(ctx context.Context, path, profile string, args []string) (int, error) {
-	if len(args) == 2 && args[0] == "migrate-directory" {
-		return runDirectoryMigration(ctx, path, args[1])
-	}
 	if len(args) == 2 && args[0] == "migrate" {
 		return runLegacyMigration(ctx, path, profile, args[1])
 	}

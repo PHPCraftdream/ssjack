@@ -218,7 +218,14 @@ func TestVaultGeneratedProfileFullProfile(t *testing.T) {
 	target := testTarget(t)
 	clear(target.PrivateKey)
 	target.PrivateKey = append([]byte(nil), private...)
-	v.Targets["generated"] = target
+	defer clear(target.PrivateKey)
+	owned := v.unlocked
+	if err := v.InitializeDirectory("generated", target); err != nil {
+		t.Fatal(err)
+	}
+	if v.unlocked != owned {
+		t.Fatal("directory initialization replaced the retained encryption context")
+	}
 	if err := CreateUnlocked(context.Background(), path, v); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +238,14 @@ func TestVaultGeneratedProfileFullProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	server, err := reopened.ServerID("generated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := reopened.AccountProfile(server, "main")
+	if err != nil || profile != "generated" || reopened.Version != 2 {
+		t.Fatal("generated database did not retain directory schema and profile selection")
+	}
 	got, err := keyfile.PublicSSH(reopened.Targets["generated"].PrivateKey)
 	if err != nil || !bytes.Equal(got, public) {
 		t.Fatal("stored generated identity changed")

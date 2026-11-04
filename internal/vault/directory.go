@@ -109,26 +109,31 @@ func sameHostKeys(a, b []string) bool {
 	return true
 }
 
-// UpgradeDirectory changes only in-memory metadata; persistence is explicit.
-func (v *Vault) UpgradeDirectory() error {
+// NewDirectory creates an empty current-schema database.
+func NewDirectory() *Vault {
+	return &Vault{Version: 2, Targets: make(map[string]Target), Servers: make(map[string]Server), Secrets: make(map[string]SecretBinding)}
+}
+
+// InitializeDirectory installs the first account in an empty database.
+func (v *Vault) InitializeDirectory(name string, target Target) error {
 	if err := v.validate(); err != nil {
 		return err
 	}
-	if v.Version != 1 {
-		return errors.New("directory migration requires a version 1 database")
+	if len(v.Targets) != 0 || len(v.Servers) != 0 || len(v.Secrets) != 0 || v.OwnerStore != nil {
+		return errors.New("directory initialization requires an empty database")
 	}
-	servers := make(map[string]Server, len(v.Targets))
-	for profile := range v.Targets {
-		id, err := directoryID()
-		if err != nil {
-			return err
-		}
-		if _, exists := servers[id]; exists {
-			return errors.New("directory identity collision")
-		}
-		servers[id] = Server{Name: profile, Accounts: map[string]string{"main": profile}}
+	id, err := directoryID()
+	if err != nil {
+		return err
 	}
-	v.Version, v.Servers, v.Secrets = 2, servers, make(map[string]SecretBinding)
+	candidate := NewDirectory()
+	candidate.Targets[name] = ownTarget(target)
+	candidate.Servers[id] = Server{Name: name, Accounts: map[string]string{"main": name}}
+	if err := candidate.validate(); err != nil {
+		candidate.Close()
+		return err
+	}
+	v.Version, v.Targets, v.Servers, v.Secrets = candidate.Version, candidate.Targets, candidate.Servers, candidate.Secrets
 	return nil
 }
 

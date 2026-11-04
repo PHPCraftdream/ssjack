@@ -69,7 +69,7 @@ func validateCredentialSelection(name string) error {
 
 func resolveNamedCredential(v *vault.Vault, server, account string) (string, error) {
 	if v.Version != 2 {
-		return "", errors.New("named server selection requires explicit vault migrate-directory")
+		return "", errors.New("named server selection requires directory payload schema v2")
 	}
 	id, err := v.ServerID(server)
 	if err != nil {

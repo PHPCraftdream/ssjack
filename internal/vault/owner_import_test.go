@@ -99,10 +99,7 @@ func newImportFixture(t *testing.T, tokenValue []byte) *importFixture {
 
 func importDestination(t *testing.T, linked bool, mutate func(*Vault)) *Session {
 	t.Helper()
-	v := New()
-	if err := v.UpgradeDirectory(); err != nil {
-		t.Fatal(err)
-	}
+	v := NewDirectory()
 	if linked {
 		if err := v.LinkOwnerStore(OwnerStore{Directory: t.TempDir(), StoreID: ownerID(1), Master: []byte("synthetic destination master")}); err != nil {
 			t.Fatal(err)

@@ -9,9 +9,8 @@ No command, omitted selectors, and terminal detection never enable the editor im
 Interactive mode requires terminal input and output and refuses command/mode
 combinations before requesting the database password. Named selector syntax and
 conflicts are also checked before unlock; actual directory names are resolved only
-after authentication. Legacy databases require
-an explicit `vault migrate-directory NEW_FILE` first; opening this editor does
-not silently migrate or rewrite them.
+after authentication. Directory payload schema v2 is required; `vault init`
+creates it directly. Legacy profile databases are not converted by this editor.
 
 The database password is requested once. The existing owner coordinator retains
 its authenticated session in RAM and serializes encrypted persistence. The root

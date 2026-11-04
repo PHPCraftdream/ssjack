@@ -34,8 +34,9 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	}
 	v := vault.New()
 	defer v.Close()
-	v.Targets["legacy"] = vault.Target{Address: "example.invalid:22", User: "first", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(public))}}
-	if err := v.UpgradeDirectory(); err != nil {
+	target := vault.Target{Address: "example.invalid:22", User: "first", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(public))}}
+	defer clear(target.PrivateKey)
+	if err := v.InitializeDirectory("legacy", target); err != nil {
 		t.Fatal(err)
 	}
 	server, err := v.ServerID("legacy")

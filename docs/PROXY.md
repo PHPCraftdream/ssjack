@@ -71,7 +71,7 @@ Proxy settings/passwords are part of the encrypted credential payload (directory
 schema v2). No container/KDF version is changed. Old no-proxy databases retain
 direct behavior. Older strict binaries may reject the new optional `proxy` field;
 keep an encrypted recovery copy before using extended settings. Legacy v1 payloads
-require explicit [directory migration](VAULT.md#named-directory-migration).
+do not support proxy settings. New databases use [directory schema v2](VAULT.md#current-directory-format) directly.
 
 Owner export/import includes proxy settings and actual credentials in the selected
 account records. Preview exposes type/address/login/auth-present metadata only,

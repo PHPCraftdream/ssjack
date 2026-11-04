@@ -11,7 +11,7 @@ func (v *Vault) directoryCopy() (*Vault, error) {
 		return nil, err
 	}
 	if v.Version != 2 {
-		return nil, errors.New("explicit directory migration is required")
+		return nil, errors.New("directory payload schema v2 is required")
 	}
 	copy := &Vault{Version: 2, Targets: make(map[string]Target), Servers: make(map[string]Server), Secrets: make(map[string]SecretBinding), OwnerStore: v.OwnerStore}
 	for name, target := range v.Targets {

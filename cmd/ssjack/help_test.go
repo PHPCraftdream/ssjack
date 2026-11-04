@@ -72,10 +72,10 @@ func TestHelpAndVersionNeverOpenVault(t *testing.T) {
 func TestOwnerAndTextHelpStateActualBoundaries(t *testing.T) {
 	for topic, fragments := range map[string][]string{
 		"--interactive":                {"even for one point", "key-file", "hidden-password", "EXPORT PLAINTEXT", "IMPORT", "RAM-only", "Windows", "SOCKS5", "HTTP CONNECT", "no environment proxy", "unencrypted"},
+		"vault init":                   {"directory payload schema v2 directly", "account named main"},
 		"--server":                     {"conflicts with -p", "exactly one account", "never connect automatically"},
 		"text-adapter":                 {"Linux/amd64", "separate registry", "unknown", "not adoption"},
 		"text-adapter serve-stream":    {"--stream-references PATH", "never both", "EOF", "no raw tools"},
-		"vault migrate-directory":      {"MIGRATE DIRECTORY", "never switches the default path", "unchanged SOURCE"},
 		"text-adapter register-stream": {"64 MiB", "32 KiB", "16", "separate"},
 	} {
 		entry := findHelp(topic)
