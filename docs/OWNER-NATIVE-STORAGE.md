@@ -25,8 +25,11 @@ reparse points, object type or permissions refuse.
 - Installation ownership and data transactions use separate lock names. A store
   holding its installation lock must still be able to execute one data transaction.
 - Temporary files are created empty and detached before callers can write any
-  ciphertext. NTFS may still enumerate an unlinked delete-pending metadata
-  tombstone; its name must not be openable, before or after ciphertext writes.
+  ciphertext. On Windows, an independently opened handle retains the empty file;
+  the POSIX-disposition handle must close before the spool is returned. Setting
+  disposition alone does not remove the name. Both handles must identify the same
+  file before unlinking. The original name must be absent before and after writes,
+  and reusing that name must create a different file, not alias the spool.
   Failure to obtain an anonymous-before-use handle refuses; there is no named
   ciphertext-spool fallback and never plaintext staging.
 

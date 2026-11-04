@@ -66,17 +66,36 @@ func temporary(root *os.File) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Detach the empty name before any caller can write ciphertext.
-	if err := discard(file); err != nil {
+	// POSIX unlink completes when the disposition handle closes.
+	spool, err := openFile(root, name, true, false)
+	if err != nil {
+		discard(file)
 		file.Close()
 		return nil, err
 	}
-	metadata, err := stat(file, true)
-	if err != nil || metadata.Size != 0 || metadata.Directory {
+	created, firstErr := stat(file, false)
+	retained, secondErr := stat(spool, false)
+	if firstErr != nil || secondErr != nil || created.Dev != retained.Dev || created.Ino != retained.Ino {
+		spool.Close()
+		discard(file)
 		file.Close()
+		return nil, ErrChanged
+	}
+	if err := discard(file); err != nil {
+		spool.Close()
+		file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		spool.Close()
+		return nil, ErrUncertain
+	}
+	metadata, err := stat(spool, true)
+	if err != nil || metadata.Size != 0 || metadata.Directory {
+		spool.Close()
 		return nil, ErrUnsupported
 	}
-	return file, nil
+	return spool, nil
 }
 func remove(root *os.File, name string) error {
 	file, err := openFile(root, name, true, false)

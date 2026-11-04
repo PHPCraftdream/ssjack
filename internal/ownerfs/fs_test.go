@@ -161,6 +161,29 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 		t.Fatal("native spool lost its data or anonymity")
 	}
 	assertSpoolUnreachable(t, root, file)
+	// Reusing the detached name must not alias the retained spool.
+	name := filepath.Base(file.Name())
+	writeFixture(t, root, name, []byte("independent named ciphertext"))
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := io.ReadAll(file)
+	if err != nil || !bytes.Equal(actual, value) {
+		t.Fatal("reused pathname changed anonymous ciphertext")
+	}
+	named, err := root.Read(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namedMetadata, err := Stat(named, false)
+	named.Close()
+	if err != nil || (namedMetadata.Dev == metadata.Dev && namedMetadata.Ino == metadata.Ino) {
+		t.Fatal("reused pathname aliases the anonymous spool")
+	}
+	if err := root.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+	assertSpoolUnreachable(t, root, file)
 }
 
 func assertSpoolUnreachable(t *testing.T, root *Root, spool *os.File) {
