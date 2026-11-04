@@ -2,10 +2,9 @@
 
 The native filesystem capability layer and installation-binding port are under
 implementation. This is not acceptance of the complete application-store port:
-the record engine requires native CI acceptance; owner intent storage, private-value
-workflows, provisioning and the live owner coordinator still need integration and
-real cross-platform acceptance. The existing Linux record implementation remains
-unchanged.
+the filesystem/record engine passed scoped native CI at `a270545`, but private-value
+workflows, provisioning and the live owner coordinator still require acceptance.
+The existing Linux record implementation remains unchanged.
 
 ## Protected filesystem capabilities
 
@@ -73,6 +72,27 @@ OSes, including duplicate publication, stale journal counts, intent/pointer
 round trips, recovery, cancellation, operation lifecycle and anonymous spools.
 These tests use synthetic ciphertext, not real credentials or substitute crypto.
 The record layer performs no KDF or encryption and makes no consumer-adoption claim.
+
+## Native production-profile owner acceptance
+
+`TestNativeOwnerFullProfile` exercises native installation creation, encrypted
+binding persistence, production unlock, secret add/update/remove, owner reopen,
+immutable references, historical encrypted snapshot verification and unchanged
+installation binding. It uses the real four sequential 1 GiB Argon2id derivations
+and real 1000-layer data encryption, never the scoped KDF overlay. No secret-value
+getter is added for testing. Assertions use public owner metadata, authenticated
+snapshot checks and absence of synthetic plaintext from stored ciphertext.
+
+The test's loopback mTLS authority uses real signed protocol transitions in RAM.
+It is deliberately volatile and does not certify native anchor-service ledger
+storage, crash recovery or remote-service deployment. The production anchor service
+and separate `appstoreintentio` prerequisite are not broadened by this client-store
+port. Owner editing uses `appstorefile` commit intents, not `appstoreintentio`.
+
+Both the scoped native matrix (when this test is impacted) and the full native
+matrix require an explicit PASS from the production-profile test. An environment
+skip in the ordinary unit suite is not acceptance. Until those jobs pass, the new
+private-value test remains an unaccepted candidate.
 
 ## Acceptance required before shipping
 

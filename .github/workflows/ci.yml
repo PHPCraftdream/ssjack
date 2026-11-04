@@ -67,6 +67,14 @@ jobs:
           grep -F 'MIT OR Apache-2.0' "$RUNNER_TEMP/source-install-licenses.txt"
       - name: Test
         run: go test -mod=readonly -count=1 -timeout 180s . ./cmd/ssjack ./internal/... ./plugins/ssjack-ui
+      - name: Native owner with production KDF
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestNativeOwnerFullProfile$' -count=1 -timeout 600s ./internal/nativeownercheck | tee "$RUNNER_TEMP/native-owner.log"
+          grep -q '^--- PASS: TestNativeOwnerFullProfile ' "$RUNNER_TEMP/native-owner.log"
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build and install source on Linux or macOS

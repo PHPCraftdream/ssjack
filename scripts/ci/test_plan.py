@@ -54,6 +54,24 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(set(plan.select(graph, [path])["packages"]), expected)
 
+    def test_native_owner_acceptance_follows_private_storage_edges(self):
+        graph = [
+            {"directory": "internal/ownerfs", "import": "app/ownerfs", "dependencies": []},
+            {"directory": "internal/appstorenative", "import": "app/native",
+             "dependencies": ["app/ownerfs"]},
+            {"directory": "internal/appstorefile", "import": "app/file",
+             "dependencies": ["app/native"]},
+            {"directory": "internal/appstorecrypto", "import": "app/crypto",
+             "dependencies": ["app/file"]},
+            {"directory": "internal/nativeownercheck", "import": "app/nativeownercheck",
+             "dependencies": ["app/crypto", "app/ownerfs"]},
+        ]
+        for path in ("internal/ownerfs/fs_windows.go", "internal/appstorenative/state.go",
+                     "internal/appstorefile/file_other.go", "internal/appstorecrypto/master.go",
+                     "internal/nativeownercheck/fullprofile_test.go"):
+            with self.subTest(path=path):
+                self.assertIn("./internal/nativeownercheck", plan.select(graph, [path])["packages"])
+
     def test_transitive_reverse_dependencies(self):
         self.assertEqual(self.selected("internal/core/core.go"),
                          ["./cmd/app", "./internal/consumer", "./internal/core"])

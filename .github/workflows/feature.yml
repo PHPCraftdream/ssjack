@@ -42,6 +42,15 @@ jobs:
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Native owner with production KDF
+        if: steps.scope.outputs.nativeowner == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestNativeOwnerFullProfile$' -count=1 -timeout 600s ./internal/nativeownercheck | tee "$RUNNER_TEMP/native-owner.log"
+          grep -q '^--- PASS: TestNativeOwnerFullProfile ' "$RUNNER_TEMP/native-owner.log"
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash
