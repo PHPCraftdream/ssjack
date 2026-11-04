@@ -73,7 +73,7 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
             self.assertIn("  text-pair:\n", source)
             self.assertIn("uses: ./.github/workflows/text-pair.yml", source)
         workflow = (ROOT / ".github/workflows/text-pair.yml").read_text(encoding="utf-8")
-        self.assertIn("506ff2a2802bbfa5cf931f735f1b06aaee7f5244", workflow)
+        self.assertIn("b0babb132d74532746501b3aeda92e088d343d17", workflow)
         self.assertIn("repository: PHPCraftdream/clawwright", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("python3 scripts/ci/text_pair_scoped.py", workflow)
@@ -83,6 +83,10 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn('NAME = "TestClawwrightTextPairConnected"', runner)
         self.assertIn("^--- SKIP: {NAME}", runner)
         self.assertIn("^--- PASS: {NAME}", runner)
+        self.assertIn('STREAM_NAME = "TestClawwrightTextStreamPairConnected"', runner)
+        self.assertIn("^--- SKIP: {STREAM_NAME}", runner)
+        self.assertIn("^--- PASS: {STREAM_NAME}", runner)
+        self.assertIn('f"^({NAME}|{STREAM_NAME})$"', runner)
 
     def test_fixture_request_identifiers_are_exact_16_bytes(self):
         files = (ROOT / "internal/declarativeslice").glob("scoped*_test.go")

@@ -10,6 +10,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = "TestClawwrightTextPairConnected"
+STREAM_NAME = "TestClawwrightTextStreamPairConnected"
 
 
 def main() -> int:
@@ -43,7 +44,7 @@ def main() -> int:
         env["SSJACK_CLAWWRIGHT_PAIR_CI"] = "1"
         env["SSJACK_CLAWWRIGHT_PAIR_ROOT"] = str(claw)
         completed = subprocess.run(
-            [str(binary), "-test.v", "-test.run", f"^{NAME}$", "-test.timeout=300s"],
+            [str(binary), "-test.v", "-test.run", f"^({NAME}|{STREAM_NAME})$", "-test.timeout=300s"],
             cwd=ROOT,
             env=env,
             check=False,
@@ -59,6 +60,10 @@ def main() -> int:
             raise SystemExit("paired acceptance was skipped")
         if not re.search(rf"(?m)^--- PASS: {NAME}(?:\s|$)", completed.stdout):
             raise SystemExit("paired acceptance did not report PASS")
+        if re.search(rf"(?m)^--- SKIP: {STREAM_NAME}(?:\s|$)", completed.stdout):
+            raise SystemExit("stream paired acceptance was skipped")
+        if not re.search(rf"(?m)^--- PASS: {STREAM_NAME}(?:\s|$)", completed.stdout):
+            raise SystemExit("stream paired acceptance did not report PASS")
     return 0
 
 
