@@ -49,6 +49,9 @@ func Identity(database string) (Endpoint, error) {
 		return Endpoint{}, ErrEndpoint
 	}
 	canonical := normalize(filepath.Join(parent, filepath.Base(absolute)))
+	if canonical == "" {
+		return Endpoint{}, ErrEndpoint
+	}
 	binding := sha256.Sum256([]byte("ssjack/owner-endpoint/v1\x00" + canonical))
 	address, err := endpointAddress(binding)
 	return Endpoint{Address: address, Binding: binding}, err

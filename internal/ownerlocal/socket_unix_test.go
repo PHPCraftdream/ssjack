@@ -91,3 +91,26 @@ func TestUnixOwnerSocketNeverUnlinksStaleEndpointsOrAcceptsPublicPermissions(t *
 		t.Fatal("existing runtime permissions were modified")
 	}
 }
+
+func TestUnixEndpointNeverFoldsDistinctCaseSensitiveFiles(t *testing.T) {
+	path := endpointFixture(t)
+	other := filepath.Join(filepath.Dir(path), "VAULT.ktav")
+	file, err := os.OpenFile(other, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if os.IsExist(err) {
+		t.Skip("fixture filesystem is case-insensitive")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Identity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Identity(other)
+	if err != nil || first.Binding == second.Binding || first.Address == second.Address {
+		t.Fatal("distinct databases were merged by case normalization")
+	}
+}

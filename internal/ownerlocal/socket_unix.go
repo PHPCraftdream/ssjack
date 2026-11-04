@@ -9,12 +9,43 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
-func normalize(path string) string { return path }
+func normalize(path string) string {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return ""
+	}
+	if runtime.GOOS != "darwin" {
+		return path
+	}
+	var name [1024]byte
+	// F_GETPATH is synchronous and writes only this owned buffer.
+	_, _, failure := syscall.Syscall(syscall.SYS_FCNTL, file.Fd(), 50, uintptr(unsafe.Pointer(&name[0])))
+	if failure != 0 {
+		return ""
+	}
+	for i, b := range name {
+		if b == 0 {
+			return string(name[:i])
+		}
+	}
+	return ""
+}
 func endpointAddress(binding [32]byte) (string, error) {
 	path := filepath.Join("/tmp", "ssjack-owner-"+hex.EncodeToString(binding[:16]), "control.sock")
 	if len(path) >= 104 {

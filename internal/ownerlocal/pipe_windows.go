@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"reflect"
-	"strings"
 	"sync"
 
 	"golang.org/x/sys/windows"
@@ -14,7 +13,38 @@ import (
 // Win32 CreateNamedPipe byte mode, duplex access, and local clients only.
 const pipeDuplex, pipeRejectRemote = 0x00000003, 0x00000008
 
-func normalize(path string) string { return strings.ToLower(path) }
+func normalize(path string) string {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return ""
+	}
+	handle, err := windows.CreateFile(name, windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+		windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(handle)
+	var info windows.ByHandleFileInformation
+	kind, err := windows.GetFileType(handle)
+	if err != nil || kind != windows.FILE_TYPE_DISK || windows.GetFileInformationByHandle(handle, &info) != nil || info.NumberOfLinks != 1 || info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
+		return ""
+	}
+	buffer := make([]uint16, 512)
+	// VOLUME_NAME_GUID also normalizes drive aliases and short filenames.
+	count, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 1)
+	if err != nil || count == 0 || count > 32768 {
+		return ""
+	}
+	if count >= uint32(len(buffer)) {
+		buffer = make([]uint16, int(count)+1)
+		count, err = windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 1)
+		if err != nil || count == 0 || count >= uint32(len(buffer)) {
+			return ""
+		}
+	}
+	return windows.UTF16ToString(buffer[:count])
+}
 func endpointAddress(binding [32]byte) (string, error) {
 	return `\\.\pipe\ssjack-owner-` + hex.EncodeToString(binding[:]), nil
 }

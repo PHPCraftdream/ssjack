@@ -188,3 +188,16 @@ func TestEndpointIdentityHasNoPlaintextPathAndRejectsNonFiles(t *testing.T) {
 		t.Fatal("directory was accepted as a database")
 	}
 }
+
+func TestEndpointRefusesHardLinkedDatabases(t *testing.T) {
+	path := endpointFixture(t)
+	alias := filepath.Join(filepath.Dir(path), "hard-link.ktav")
+	if err := os.Link(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{path, alias} {
+		if _, err := Identity(name); !errors.Is(err, ErrEndpoint) {
+			t.Fatal("hard-linked database could acquire an ambiguous owner endpoint")
+		}
+	}
+}

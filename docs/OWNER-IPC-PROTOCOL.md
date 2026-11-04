@@ -29,8 +29,10 @@ same-user debugger, swap, dumps or all copies in Go memory.
 ## Native endpoint ownership
 
 The endpoint is bound to a canonical database path using a domain-separated
-SHA-256 metadata digest. A path hash is never authorization. Symlink database
-files and non-regular paths refuse.
+SHA-256 metadata digest. A path hash is never authorization. Symlink/hard-linked
+database files and non-regular paths refuse. Windows uses the native normalized
+volume-GUID filename, not case folding; macOS resolves the native filename before
+binding a context. This avoids merging distinct case-sensitive database names.
 
 - Windows uses a local Named Pipe with a protected current-user DACL, first-pipe
   instance protection and remote-client refusal. A protected globally named

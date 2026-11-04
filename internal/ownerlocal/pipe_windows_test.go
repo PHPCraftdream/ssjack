@@ -3,9 +3,11 @@ package ownerlocal
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -40,8 +42,32 @@ func TestWindowsPipeAndLifetimeClaimHaveProtectedCurrentUserACLs(t *testing.T) {
 			t.Fatal("owner endpoint ACL permits inheritance")
 		}
 		acl, _, err := descriptor.DACL()
-		if err != nil || acl == nil || acl.AceCount != 1 || !strings.Contains(descriptor.String(), ";"+sid+")") {
-			t.Fatal("owner endpoint ACL admits an additional principal")
+		if err != nil || acl == nil || acl.AceCount != 1 {
+			t.Fatal("owner endpoint ACL does not contain exactly one ACE")
+		}
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(acl, 0, &ace) != nil || ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 {
+			t.Fatal("owner endpoint ACE is not an explicit access allowance")
+		}
+		offset := int(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart))
+		if int(ace.Header.AceSize) < offset+8 {
+			t.Fatal("owner endpoint ACE has a truncated SID")
+		}
+		// GetAce owns this in-descriptor SID until descriptor leaves scope.
+		header := (*[8]byte)(unsafe.Pointer(&ace.SidStart))
+		if offset+8+4*int(header[1]) != int(ace.Header.AceSize) {
+			t.Fatal("owner endpoint ACE has an invalid SID length")
+		}
+		principal := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !principal.Equals(user.User.Sid) {
+			t.Fatal("owner endpoint ACE grants another principal access")
+		}
+		fullAccess := uint32(0x001f01ff) // FILE_ALL_ACCESS.
+		if claim {
+			fullAccess = 0x001f0003
+		} // EVENT_ALL_ACCESS.
+		if uint32(ace.Mask) != windows.GENERIC_ALL && uint32(ace.Mask) != fullAccess {
+			t.Fatal("owner endpoint ACE has an unexpected access mask")
 		}
 	}
 }
@@ -88,5 +114,29 @@ func TestWindowsOverlappedReadCancellationJoinsKernelCompletion(t *testing.T) {
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsEndpointUsesNativeCanonicalFilename(t *testing.T) {
+	path := endpointFixture(t)
+	first, err := Identity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := strings.TrimSuffix(path, "vault.ktav") + "VAULT.KTAV"
+	original, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternate, err := os.Stat(alias)
+	if os.IsNotExist(err) {
+		t.Skip("fixture directory uses case-sensitive filenames")
+	}
+	if err != nil || !os.SameFile(original, alternate) {
+		t.Fatal("case alias does not identify the fixture file")
+	}
+	second, err := Identity(alias)
+	if err != nil || first != second {
+		t.Fatal("same Windows file acquired separate endpoints by letter case")
 	}
 }
