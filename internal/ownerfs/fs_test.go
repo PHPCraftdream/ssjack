@@ -131,6 +131,9 @@ func TestNativeProtectedRootIdentityLockAndExclusivePublication(t *testing.T) {
 
 func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 	root, _ := rootFixture(t)
+	if err := root.Entries(func(string) error { return ErrInvalid }); err != nil {
+		t.Fatalf("empty protected directory enumeration failed: %v", err)
+	}
 	file, err := root.Temporary()
 	if err != nil {
 		t.Fatal(err)
@@ -141,13 +144,15 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 		t.Fatal("native spool is not an owned anonymous empty file")
 	}
 	assertSpoolUnreachable(t, root, file)
+	visible := false
 	if err := root.Entries(func(name string) error {
 		if strings.HasPrefix(name, ".spool-") {
+			visible = true
 			return ErrInvalid
 		}
 		return nil
 	}); err != nil {
-		t.Fatal("temporary spool retained a visible name")
+		t.Fatalf("anonymous spool enumeration failed (visible=%t): %v", visible, err)
 	}
 	value := []byte("synthetic anonymous ciphertext")
 	if _, err := file.Write(value); err != nil {

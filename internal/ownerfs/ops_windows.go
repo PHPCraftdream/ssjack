@@ -5,10 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -235,7 +237,9 @@ func entries(root *os.File, visit func(string) error) error {
 			return nil
 		}
 		if err != nil {
-			return ErrUnavailable
+			var code syscall.Errno
+			errors.As(err, &code)
+			return fmt.Errorf("native directory read (code %d): %w", uint32(code), ErrUnavailable)
 		}
 	}
 }
