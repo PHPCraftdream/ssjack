@@ -14,6 +14,9 @@ Validated edits remain in RAM with ordered encrypted autosave and visible persis
 
 After SSH the picker resumes without another database unlock when stdin is safely released. Windows VT-input cancellation can instead force a safe database close and restart. See [menu and import](application-store/OWNER-TUI.md), [directory](application-store/NAMED-DIRECTORY.md), [coordinator](application-store/OWNER-COORDINATOR.md) and [archive format](application-store/OWNER-EXPORT-FORMAT.md).
 
+Parameterized single-action administration is available through `ssjack owner ACTION`;
+missing fields/secrets use the same Bubble Tea forms. See [owner CLI](OWNER-CLI.md).
+
 ## Current directory format
 
 `vault init` creates payload schema v2 directly with the first named server and

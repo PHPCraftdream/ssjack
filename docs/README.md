@@ -9,6 +9,7 @@ opening a database; global flags precede commands.
 
 | Goal | Entry point | Guide |
 | --- | --- | --- |
+| Run one owner action with parameters | `owner ACTION [OPTIONS]` | [Owner CLI and shared forms](OWNER-CLI.md) |
 | Choose a human SSH connection, even a single one | `ssjack --interactive` | [Owner menu](application-store/OWNER-TUI.md) |
 | Manually add/edit servers, accounts and passwords | Servers → Add server / server → Add SSH account | [Directory model](application-store/NAMED-DIRECTORY.md) |
 | Route a server through SOCKS5 / HTTP CONNECT | Servers → SERVER → Edit SSH proxy | [Proxy configuration and wire-auth limits](PROXY.md) |

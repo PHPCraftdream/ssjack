@@ -39,7 +39,6 @@ func main() {
 	}
 	os.Exit(code)
 }
-
 func run(ctx context.Context, args []string) (int, error) {
 	if handled, err := handleHelp(args, os.Stdout); handled {
 		if err != nil {
@@ -174,6 +173,8 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, errors.New("specify a command; default profile is main")
 	}
 	switch command[0] {
+	case "owner":
+		return runOwnerCommand(ctx, flags, *vaultPath, *server, *account, command[1:])
 	case "text-adapter":
 		return runTextAdapterCommand(ctx, *vaultPath, profile, command[1:])
 	case "ssh":
@@ -284,7 +285,6 @@ func run(ctx context.Context, args []string) (int, error) {
 	} else if identitySupplied {
 		return 1, errors.New("--enrollment-identity requires --enrollment-metadata")
 	}
-
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}

@@ -161,4 +161,5 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	}
 	ownerTerminalAcceptance(t, ctx, path, password, v, server)
 	ownerConnectionAcceptance(t, ctx, path, password, server)
+	ownerCommandAcceptance(t, ctx, path, password, server)
 }

@@ -2,9 +2,11 @@
 package ownertui
 
 import (
+	"errors"
 	"sort"
 	"strconv"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -162,4 +164,109 @@ func (m *Model) back() {
 		m.cursor = 0
 	}
 	m.reselect = false
+}
+
+func (m *Model) Select(serverName, accountName string) error {
+	if serverName == "" {
+		if accountName != "" {
+			return errors.New("account selection requires a named server")
+		}
+		return nil
+	}
+	metadata, err := m.backend.Metadata()
+	if err != nil {
+		return errors.New("cannot load named server metadata")
+	}
+	for _, server := range metadata.Servers {
+		if server.Name != serverName {
+			continue
+		}
+		at := location{screen: serverScreen, server: server.ID}
+		stack := []location{{screen: databaseScreen}, {screen: serversScreen}}
+		if accountName != "" {
+			found := false
+			for _, account := range server.Accounts {
+				if account.Name == accountName {
+					found = true
+				}
+			}
+			if !found {
+				return errors.New("selected named SSH account does not exist")
+			}
+			stack = append(stack, at)
+			at.screen, at.account = accountScreen, accountName
+		}
+		m.metadata, m.at, m.stack, m.cursor = metadata, at, stack, 0
+		return nil
+	}
+	return errors.New("selected named server does not exist")
+}
+
+// ConfigureCommand opens the same form as the menu, with metadata-only prefills.
+func (m *Model) ConfigureCommand(request ownercommand.Request) error {
+	spec, ok := ownercommand.Lookup(request.Action)
+	if !ok || m.command != nil {
+		return errForm
+	}
+	metadata, err := m.backend.Metadata()
+	if err != nil {
+		return err
+	}
+	m.metadata, m.status, m.imp, m.ready = metadata, m.backend.Status(), m.backend.ImportStatus(), true
+	account := ""
+	if spec.Scope == "account" || request.Scope == "account" {
+		account = request.Account
+	}
+	if err := m.Select(request.Server, account); err != nil {
+		return err
+	}
+	if spec.Scope == "secrets" || spec.Scope == "secret" || request.Scope == "global" {
+		m.at.screen = secretsScreen
+	}
+	if spec.Scope == "secret" {
+		for id, secret := range m.metadata.Secrets {
+			if secret.Name == request.Secret && secret.ServerID == m.at.server {
+				m.at.screen, m.at.secret = secretScreen, id
+			}
+		}
+		if m.at.secret == "" {
+			return errors.New("selected named secret does not exist in this scope")
+		}
+	}
+	m.openForm(request.Action)
+	if m.form == nil {
+		return errForm
+	}
+	allowed := make(map[string]bool)
+	for _, label := range spec.Options {
+		allowed[label] = true
+	}
+	for label, value := range request.Fields {
+		if !allowed[label] {
+			m.ClearInput()
+			return errForm
+		}
+		found := false
+		for i := range m.form.fields {
+			field := &m.form.fields[i]
+			if field.label != label {
+				continue
+			}
+			if len(value) > field.limit || (field.secret && (label != "Credential" || request.Fields["Authentication"] != "key")) {
+				m.ClearInput()
+				return errForm
+			}
+			clear(field.value)
+			field.value, field.supplied, found = []byte(value), true, true
+		}
+		if !found {
+			m.ClearInput()
+			return errForm
+		}
+	}
+	if m.form.fields[0].supplied {
+		m.form.move(1)
+	}
+	m.command = &ownercommand.State{Request: request}
+	return nil
 }

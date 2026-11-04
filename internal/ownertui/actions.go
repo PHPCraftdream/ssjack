@@ -2,51 +2,15 @@ package ownertui
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
-
-func (m *Model) Select(serverName, accountName string) error {
-	if serverName == "" {
-		if accountName != "" {
-			return errors.New("account selection requires a named server")
-		}
-		return nil
-	}
-	metadata, err := m.backend.Metadata()
-	if err != nil {
-		return errors.New("cannot load named server metadata")
-	}
-	for _, server := range metadata.Servers {
-		if server.Name != serverName {
-			continue
-		}
-		at := location{screen: serverScreen, server: server.ID}
-		stack := []location{{screen: databaseScreen}, {screen: serversScreen}}
-		if accountName != "" {
-			found := false
-			for _, account := range server.Accounts {
-				if account.Name == accountName {
-					found = true
-				}
-			}
-			if !found {
-				return errors.New("selected named SSH account does not exist")
-			}
-			stack = append(stack, at)
-			at.screen, at.account = accountScreen, accountName
-		}
-		m.metadata, m.at, m.stack, m.cursor = metadata, at, stack, 0
-		return nil
-	}
-	return errors.New("selected named server does not exist")
-}
 
 func (m *Model) describe() string {
 	at := m.at
@@ -271,6 +235,10 @@ func (m *Model) activate(selected item, enter bool) tea.Cmd {
 		// Preview rows are read-only.
 	case "import-cancel":
 		m.back()
+		if m.command != nil {
+			m.command.Err = ownercommand.ErrCancelled
+			return tea.Quit
+		}
 	case "":
 		m.push(selected.target)
 	default:
@@ -292,5 +260,40 @@ func (m *Model) requestClose() tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
 		defer cancel()
 		return closeMsg{err: m.backend.Close(ctx)}
+	}
+}
+
+func (m *Model) CommandResult() error { return m.command.Result() }
+
+func (m *Model) commandDone(message operationMsg) tea.Cmd {
+	if message.err != nil {
+		m.command.Err = ownercommand.ErrOperation
+		return tea.Quit
+	}
+	if message.action == "import" {
+		m.importDone(message.action, nil)
+		if m.imp.Phase != ownerdb.ImportStaged {
+			m.command.Err = ownercommand.ErrOperation
+			return tea.Quit
+		}
+		return nil
+	}
+	if message.action == "command-finish" {
+		m.command.Finished = true
+		return tea.Quit
+	}
+	m.working = true
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Minute)
+		defer cancel()
+		err := m.backend.Flush(ctx)
+		status, imported := m.backend.Status(), m.backend.ImportStatus()
+		if err == nil && (status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Pending || status.Busy) {
+			err = ownercommand.ErrOperation
+		}
+		if err == nil && (message.action == "import-confirm" || m.command.Request.Fields["Action"] == "resume-import") && imported.Phase != ownerdb.ImportComplete {
+			err = ownercommand.ErrOperation
+		}
+		return operationMsg{action: "command-finish", err: err}
 	}
 }

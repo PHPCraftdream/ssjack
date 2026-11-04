@@ -12,6 +12,10 @@ conflicts are also checked before unlock; actual directory names are resolved on
 after authentication. Directory payload schema v2 is required; `vault init`
 creates it directly. Legacy profile databases are not converted by this editor.
 
+For a single parameterized action, use [`ssjack owner ACTION`](../OWNER-CLI.md).
+It opens these same forms with supplied metadata read-only, prompts for secrets
+and exits after persistence instead of returning to the picker.
+
 The database password is requested once. The existing owner coordinator retains
 its authenticated session in RAM and serializes encrypted persistence. The root
 screen is a connection picker: first one entry per named SSH account whose usage

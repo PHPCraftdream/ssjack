@@ -83,6 +83,25 @@ competing reader; Windows VT consoles may require restarting ssjack after SSH.
 
 See [the menu guide](docs/application-store/OWNER-TUI.md) for exact fields and limits.
 
+## Run one owner action with parameters
+
+Use `owner ACTION` instead of navigating the menu. Metadata may be supplied as
+parameters; the database unlock happens once, then missing fields and secrets
+are entered in the same Bubble Tea forms. Supplied fields are read-only. Apply,
+import preview and exact confirmations remain explicit; success waits for saving.
+
+```sh
+ssjack owner add-server --name production --address host.example:22 --login deploy --auth password
+ssjack owner edit-proxy --server production --type socks5 --address proxy.example:1080
+ssjack owner add-secret --scope global --name token
+ssjack owner export --scope server --server production --destination owner.zip
+ssjack owner import --file owner.zip
+```
+
+Passwords, values and confirmations have no argv/environment options. Each command
+exits after one action; `--interactive` retains a session for multiple operations
+and RAM-only import recovery. See [all owner actions and scope rules](docs/OWNER-CLI.md).
+
 ## Current database format
 
 `vault init` creates directory payload schema v2 directly. The first server keeps

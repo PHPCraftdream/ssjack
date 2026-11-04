@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -47,6 +48,7 @@ type closeMsg struct{ err error }
 type tickMsg time.Time
 
 type Model struct {
+	command  *ownercommand.State
 	ctx      context.Context
 	backend  backend
 	metadata vault.DirectoryMetadata
@@ -69,7 +71,7 @@ type Model struct {
 	connection *Connection
 }
 
-func New(ctx context.Context, manager *ownerdb.Manager) *Model {
+func New(ctx context.Context, manager backend) *Model {
 	return &Model{ctx: ctx, backend: manager, at: location{screen: databaseScreen}}
 }
 
@@ -108,6 +110,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case operationMsg:
 		m.epoch++
 		m.working = false
+		if m.command != nil {
+			return m, m.commandDone(msg)
+		}
 		if strings.HasPrefix(msg.action, "import") {
 			m.importDone(msg.action, msg.err)
 			return m, nil
@@ -148,6 +153,11 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	name := key.String()
+	if m.command != nil && (name == "ctrl+c" || name == "esc" || name == "escape" || (name == "left" && m.form == nil) || (name == "enter" && m.form != nil && m.form.focus == len(m.form.fields)+1)) {
+		m.back()
+		m.command.Err = ownercommand.ErrCancelled
+		return m, tea.Quit
+	}
 	if name == "ctrl+c" {
 		if m.form != nil || m.at.screen == importScreen {
 			m.back()

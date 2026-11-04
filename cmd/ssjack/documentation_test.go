@@ -16,7 +16,7 @@ func TestCurrentOperatorDocumentationLinksResolve(t *testing.T) {
 	}
 	links := regexp.MustCompile(`\[[^\]]*\]\(([^\s()]+)\)`)
 	for _, name := range []string{
-		"README.md", "SSJACK.md", "docs/README.md", "docs/VAULT.md", "docs/INSTALL.md", "docs/PROXY.md",
+		"README.md", "SSJACK.md", "docs/README.md", "docs/VAULT.md", "docs/INSTALL.md", "docs/PROXY.md", "docs/OWNER-CLI.md",
 		"docs/application-store/NAMED-DIRECTORY.md", "docs/application-store/TEXT-ADAPTER.md",
 		"docs/application-store/TEXT-REVERSE-COPY.md", "docs/application-store/TEXT-STREAMING.md",
 		"docs/application-store/TEXT-STREAM-HTTP.md", "docs/declarative/README.md",

@@ -14,11 +14,12 @@ import (
 )
 
 type field struct {
-	label  string
-	help   string
-	value  []byte
-	secret bool
-	limit  int
+	label    string
+	help     string
+	value    []byte
+	secret   bool
+	supplied bool
+	limit    int
 }
 
 type form struct {
@@ -39,11 +40,16 @@ func (f *form) clear() {
 
 func (f *form) move(delta int) {
 	count := len(f.fields) + 2
-	f.focus = (f.focus + delta + count) % count
+	for {
+		f.focus = (f.focus + delta + count) % count
+		if f.focus >= len(f.fields) || !f.fields[f.focus].supplied {
+			break
+		}
+	}
 }
 
 func (f *form) insert(text string) {
-	if f.focus >= len(f.fields) || !utf8.ValidString(text) || strings.ContainsAny(text, "\x00\r\n\x1b") {
+	if f.focus >= len(f.fields) || f.fields[f.focus].supplied || !utf8.ValidString(text) || strings.ContainsAny(text, "\x00\r\n\x1b") {
 		return
 	}
 	current := &f.fields[f.focus]
@@ -60,7 +66,7 @@ func (f *form) insert(text string) {
 }
 
 func (f *form) backspace() {
-	if f.focus >= len(f.fields) {
+	if f.focus >= len(f.fields) || f.fields[f.focus].supplied {
 		return
 	}
 	current := &f.fields[f.focus]
@@ -80,6 +86,9 @@ func (f *form) display(index int) string {
 			return "<hidden; empty>"
 		}
 		return "<hidden; entered>"
+	}
+	if current.supplied {
+		return escaped(string(current.value)) + " (parameter; read-only)"
 	}
 	return escaped(string(current.value))
 }
