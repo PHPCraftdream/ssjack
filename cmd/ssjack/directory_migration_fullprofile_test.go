@@ -73,19 +73,19 @@ func TestDirectoryMigrationCLIFullProfile(t *testing.T) {
 		t.Fatal("migration CLI fixture must start in the legacy schema")
 	}
 	v.Targets["key-account"] = vault.Target{Address: "example.invalid:22", User: "first", Usage: "human", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(host))}}
-	v.Targets["password-account"] = vault.Target{Address: "example.invalid:22", User: "second", Usage: "human", Password: []byte("synthetic migration SSH password"), HostKeys: []string{string(ssh.MarshalAuthorizedKey(host))}}
+	v.Targets["second-key-account"] = vault.Target{Address: "example.invalid:22", User: "second", Usage: "human", PrivateKey: pem.EncodeToMemory(block), HostKeys: []string{string(ssh.MarshalAuthorizedKey(host))}}
 	password := []byte("synthetic migration database password")
 	defer clear(password)
 	parent := t.TempDir()
 	source, destination := filepath.Join(parent, "original.ktav"), filepath.Join(parent, "directory.ktav")
 	if err := vault.CreateWithRecords(ctx, source, v, password); err != nil {
-		t.Fatal("create production-profile legacy fixture")
+		t.Fatalf("create production-profile legacy fixture: %v", err)
 	}
 	original, err := os.ReadFile(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrationTerminal(t, ctx, source, destination, password, true, v.Targets["password-account"].Password)
+	migrationTerminal(t, ctx, source, destination, password, true, v.Targets["key-account"].PrivateKey, v.Targets["second-key-account"].PrivateKey)
 	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
 		t.Fatal("cancelled migration published a replacement")
 	}
@@ -93,7 +93,7 @@ func TestDirectoryMigrationCLIFullProfile(t *testing.T) {
 	if err != nil || !bytes.Equal(original, unchanged) {
 		t.Fatal("cancelled migration changed its rollback source")
 	}
-	migrationTerminal(t, ctx, source, destination, password, false, v.Targets["password-account"].Password)
+	migrationTerminal(t, ctx, source, destination, password, false, v.Targets["key-account"].PrivateKey, v.Targets["second-key-account"].PrivateKey)
 	migrated, err := vault.Load(destination, password)
 	if err != nil {
 		t.Fatal("reload migrated CLI fixture with the original password")
