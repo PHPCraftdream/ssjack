@@ -5,6 +5,7 @@ package appstoreentry
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -109,9 +110,23 @@ func TestNativeInstallationRefusesUnprotectedAndReplacedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	beforeDev, beforeIno, err := store.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
 	moved := path + "-old"
 	if err := os.Rename(path, moved); err != nil {
-		t.Fatal(err)
+		if runtime.GOOS != "windows" || !errors.Is(err, os.ErrPermission) {
+			t.Fatal(err)
+		}
+		dev, ino, checked := store.Identity()
+		if checked != nil || dev != beforeDev || ino != beforeIno {
+			t.Fatal("kernel-blocked replacement changed native root identity")
+		}
+		if _, err := os.Lstat(moved); !os.IsNotExist(err) {
+			t.Fatal("blocked replacement published another root")
+		}
+		return
 	}
 	root, err := ownerfs.MakeRoot(path)
 	if err != nil {

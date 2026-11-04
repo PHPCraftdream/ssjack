@@ -130,7 +130,7 @@ func TestNativeProtectedRootIdentityLockAndExclusivePublication(t *testing.T) {
 }
 
 func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
-	root, _ := rootFixture(t)
+	root, path := rootFixture(t)
 	file, err := root.Temporary()
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +140,7 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 	if err != nil || metadata.Links != 0 || metadata.Size != 0 || metadata.Directory {
 		t.Fatal("native spool is not an owned anonymous empty file")
 	}
+	assertSpoolUnreachable(t, path)
 	if err := root.Entries(func(name string) error {
 		if strings.HasPrefix(name, ".spool-") {
 			return ErrInvalid
@@ -158,6 +159,28 @@ func TestNativeAnonymousSpoolHasNoNameBeforeUse(t *testing.T) {
 	metadata, err = Stat(file, true)
 	if err != nil || metadata.Size != int64(len(value)) {
 		t.Fatal("native spool lost its data or anonymity")
+	}
+	assertSpoolUnreachable(t, path)
+}
+
+func assertSpoolUnreachable(t *testing.T, path string) {
+	t.Helper()
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".spool-") {
+			continue
+		}
+		file, err := os.Open(filepath.Join(path, entry.Name()))
+		if err == nil {
+			file.Close()
+			t.Fatal("anonymous ciphertext is reachable through a filesystem name")
+		}
+		if !os.IsNotExist(err) && !os.IsPermission(err) && !errors.Is(mapError(err), ErrMissing) {
+			t.Fatalf("unexpected unlinked spool lookup result: %v", err)
+		}
 	}
 }
 

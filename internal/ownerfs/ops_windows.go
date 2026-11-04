@@ -181,6 +181,28 @@ func entries(root *os.File, visit func(string) error) error {
 			if count > 1<<20 || !atom(entry.Name()) {
 				return ErrInvalid
 			}
+			var current *os.File
+			var checked error
+			if entry.IsDir() {
+				current, checked = relative(root, entry.Name(), true, false, false)
+			} else {
+				current, checked = openFile(root, entry.Name(), false, false)
+			}
+			// NTFS may enumerate an unlinked delete-pending tombstone.
+			if errors.Is(checked, ErrMissing) {
+				continue
+			}
+			if checked != nil {
+				return checked
+			}
+			_, checked = stat(current, false)
+			closed := current.Close()
+			if checked != nil {
+				return checked
+			}
+			if closed != nil {
+				return ErrUnavailable
+			}
 			if err := visit(entry.Name()); err != nil {
 				return err
 			}

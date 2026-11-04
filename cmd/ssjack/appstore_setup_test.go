@@ -5,17 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/ownerfs"
 )
 
 func TestAppstoreSetupRejectsMissingOrUnsafeDirectoryBeforePrompt(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		if appstoreentry.Supported() {
-			t.Fatal("expected appstore unsupported outside Linux")
-		}
+	if !appstoreentry.Supported() {
 		calls := 0
 		old := appstoreReadInput
 		appstoreReadInput = func(string, bool) ([]byte, error) { calls++; return []byte("secret"), nil }
@@ -62,13 +59,10 @@ func TestAppstoreSetupRejectsMissingOrUnsafeDirectoryBeforePrompt(t *testing.T) 
 }
 
 func TestAppstoreSetupCancellationStopsBeforeInstallation(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux-specific directory safety")
+	if !appstoreentry.Supported() {
+		t.Skip("protected store unavailable on this platform")
 	}
-	dir := filepath.Join(t.TempDir(), "store")
-	if err := os.Mkdir(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
+	dir := protectedStoreTestDirectory(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	code, err := runAppstoreSetup(ctx, dir)
@@ -85,10 +79,7 @@ func TestAppstoreSetupCancellationStopsBeforeInstallation(t *testing.T) {
 }
 
 func TestAppstorePutMissingInstallationFailsWithoutSecret(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		if appstoreentry.Supported() {
-			t.Fatal("expected appstore unsupported outside Linux")
-		}
+	if !appstoreentry.Supported() {
 		calls := 0
 		old := appstoreReadInput
 		appstoreReadInput = func(string, bool) ([]byte, error) { calls++; return []byte("secret"), nil }
@@ -99,12 +90,22 @@ func TestAppstorePutMissingInstallationFailsWithoutSecret(t *testing.T) {
 		}
 		return
 	}
-	dir := filepath.Join(t.TempDir(), "store")
-	if err := os.Mkdir(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
+	dir := protectedStoreTestDirectory(t)
 	code, err := run(context.Background(), []string{"appstore", "put", dir})
 	if code == 0 || !errors.Is(err, errAppstore) {
 		t.Fatalf("missing installation: %d %v", code, err)
 	}
+}
+
+func protectedStoreTestDirectory(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "store")
+	root, err := ownerfs.MakeRoot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

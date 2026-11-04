@@ -25,8 +25,10 @@ reparse points, object type or permissions refuse.
 - Installation ownership and data transactions use separate lock names. A store
   holding its installation lock must still be able to execute one data transaction.
 - Temporary files are created empty and detached before callers can write any
-  ciphertext. Failure to obtain an anonymous-before-use handle refuses; there is
-  no named ciphertext-spool fallback and never plaintext staging.
+  ciphertext. NTFS may still enumerate an unlinked delete-pending metadata
+  tombstone; its name must not be openable, before or after ciphertext writes.
+  Failure to obtain an anonymous-before-use handle refuses; there is no named
+  ciphertext-spool fallback and never plaintext staging.
 
 Windows data handles use write-through and explicit file flushing. This is not
 an assertion that Windows supplies a POSIX directory-fsync primitive. Namespace
