@@ -23,7 +23,7 @@ func TestWindowsPipeAndLifetimeClaimHaveProtectedCurrentUserACLs(t *testing.T) {
 	}
 	sid := user.User.Sid.String()
 	for _, claim := range []bool{false, true} {
-		handle, kind := pipe.handle, windows.SE_FILE_OBJECT
+		handle, kind := pipe.handle, windows.SE_OBJECT_TYPE(windows.SE_FILE_OBJECT)
 		if claim {
 			handle, kind = pipe.claim, windows.SE_KERNEL_OBJECT
 		}

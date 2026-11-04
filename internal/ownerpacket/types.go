@@ -84,7 +84,7 @@ func (c *Command) Clear() {
 type Account struct {
 	Name, Profile, User, Authentication, Usage string
 }
-type Server struct {
+type ServerMetadata struct {
 	ID, Name, Address string
 	Fingerprints      []string
 	Accounts          []Account
@@ -93,7 +93,7 @@ type Server struct {
 type Binding struct{ Name, ServerID, Ref string }
 type Store struct{ Directory, StoreID, PendingID, PendingPhase string }
 type Metadata struct {
-	Servers    []Server
+	Servers    []ServerMetadata
 	Secrets    map[string]Binding
 	OwnerStore *Store
 }
@@ -109,7 +109,7 @@ type ImportSecret struct {
 }
 type Preview struct {
 	Encrypted bool
-	Servers   []Server
+	Servers   []ServerMetadata
 	Secrets   []ImportSecret
 	Conflicts []Conflict
 }
@@ -222,7 +222,7 @@ func (r Reply) valid() bool {
 	if r.Import.Published < 0 || r.Import.Total < 0 || r.Import.Total > 128 || r.Import.Published > r.Import.Total {
 		return false
 	}
-	for _, servers := range [][]Server{r.Metadata.Servers, r.Import.Preview.Servers} {
+	for _, servers := range [][]ServerMetadata{r.Metadata.Servers, r.Import.Preview.Servers} {
 		accounts := 0
 		for _, server := range servers {
 			accounts += len(server.Accounts)
