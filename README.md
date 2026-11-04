@@ -24,7 +24,7 @@ has separate, finite authorization; unrestricted SSH output is **not** secret-sa
 
 | Area | Available behavior |
 | --- | --- |
-| Encrypted directory | Named servers with stable IDs; multiple named SSH accounts per server; key **or** login/password authentication; verified host-key pins and per-account usage/policy. |
+| Encrypted directory | Named servers with stable IDs; multiple named SSH accounts per server; key **or** login/password authentication; verified host-key pins, shared SOCKS5/HTTP CONNECT proxy settings and per-account usage/policy. |
 | Interactive terminal | Explicit `--interactive` Bubble Tea connection picker, manual credential entry, server/account edits, global/server-local secrets, exports, imports, pending-change recovery. One database unlock per owner session. |
 | Connection choice | No automatic connection, even for one point. Enter selects human SSH; management stays reachable in an empty database. Named startup selectors are also available. |
 | Persistence | Validated RAM edits, ordered encrypted background saves, visible save/error state, explicit retry/recovery, fresh nonces and unchanged data-encryption layers. |
@@ -65,7 +65,8 @@ only the public key and installation instructions are printed after save.
 In the menu:
 
 - Press **Enter** on a connection point to connect; showing or focusing one never connects.
-- Open **Servers** to add/edit a server or add/edit its SSH accounts.
+- Open **Servers** to add/edit a server or its SSH accounts. **[Edit SSH proxy]**
+  sets shared Direct/SOCKS5/HTTP CONNECT routing; see [proxy settings and wire-auth limits](docs/PROXY.md).
 - For password authentication, enter the password in the hidden credential field.
   For key authentication, select an existing private-key file; direct multiline
   private-key paste is not implemented.

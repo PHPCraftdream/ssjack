@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"sort"
+
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
 // ErrImportConflict is fixed text; conflict details come from ImportConflicts.
@@ -109,7 +111,7 @@ func (s *Session) ImportConflicts(i *OwnerImport) ([]ImportConflict, error) {
 
 // sameImportTarget compares every Target field; nil and empty lists are equal.
 func sameImportTarget(a, b Target) bool {
-	return a.Address == b.Address && a.User == b.User && a.Usage == b.Usage &&
+	return a.Address == b.Address && a.User == b.User && a.Usage == b.Usage && sshproxy.Equal(a.Proxy, b.Proxy) &&
 		bytes.Equal(a.PrivateKey, b.PrivateKey) && bytes.Equal(a.Password, b.Password) &&
 		slices.Equal(a.HostKeys, b.HostKeys) && slices.Equal(a.SSHPolicy.HostKeys, b.SSHPolicy.HostKeys) &&
 		slices.Equal(a.SSHPolicy.KeyExchanges, b.SSHPolicy.KeyExchanges) &&

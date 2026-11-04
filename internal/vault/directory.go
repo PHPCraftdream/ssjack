@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
 // Server IDs survive renames; accounts refer to existing credential records.
@@ -56,8 +57,8 @@ func (v *Vault) validateDirectory() error {
 				return errors.New("invalid or multiply assigned server account")
 			}
 			credentials[profile] = true
-			if first != nil && (first.Address != target.Address || !sameHostKeys(first.HostKeys, target.HostKeys)) {
-				return errors.New("server accounts must share address and verified host keys")
+			if first != nil && (first.Address != target.Address || !sameHostKeys(first.HostKeys, target.HostKeys) || !sshproxy.Equal(first.Proxy, target.Proxy)) {
+				return errors.New("server accounts must share address, verified host keys and proxy settings")
 			}
 			copy := target
 			first = &copy

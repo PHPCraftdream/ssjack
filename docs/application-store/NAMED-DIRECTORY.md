@@ -19,7 +19,9 @@ format. Container encryption and production key derivation remain unchanged.
 
 - Servers have stable random IDs, unique names, and named accounts referring to
   credential record IDs. Every credential belongs to exactly one account.
-- Accounts of a server share its endpoint and verified host-key set. Different
+- Accounts of a server share its endpoint, verified host-key set and optional
+  [SSH proxy route](../PROXY.md). Proxy credentials are encrypted with the selected
+  account records, inherited by new accounts and never returned in metadata. Different
   logins can have different credentials, usage restrictions, and SSH policies.
 - Names use the existing case-sensitive 1–64 character ASCII name rules.
 - Renaming a server does not change its ID or the scope of its secrets.

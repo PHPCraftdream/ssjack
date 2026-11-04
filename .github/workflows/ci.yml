@@ -222,7 +222,7 @@ jobs:
         run: |
           set -o pipefail
           go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestDirectoryMigrationCLIFullProfile)$' -count=1 -timeout 1200s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
-          for name in TestVaultDirectoryMigrationFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI TestDirectoryMigrationCLIFullProfile; do
+          for name in TestVaultDirectoryMigrationFullProfile TestVaultProxyFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI TestDirectoryMigrationCLIFullProfile; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done
 

@@ -52,6 +52,7 @@ func ownerConnectionAcceptance(t *testing.T, ctx context.Context, path string, p
 	marker := "m" + hex.EncodeToString(token[:])
 	loopback := startLoopbackSSH(t, signer.PublicKey(), connectPassword, marker)
 	retargetConnections(t, ctx, path, password, server, loopback)
+	proxy := ownerProxyTerminalAcceptance(t, ctx, path, password, server, loopback.address())
 
 	executable, err := os.Executable()
 	if err != nil {
@@ -77,6 +78,10 @@ func ownerConnectionAcceptance(t *testing.T, ctx context.Context, path string, p
 	if got, want := loopback.authentications(), []string{"first|publickey", "second|password"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("authentications changed after the singleton run: %q", got)
 	}
+	if accepted, forwarded := proxy.Counts(); accepted != 2 || forwarded != 2 {
+		t.Fatal("owner SSH connections bypassed the configured proxy or singleton auto-connected")
+	}
+	proxy.Close()
 	// Join the server explicitly: accept loop and every handler must be gone.
 	stopped := make(chan struct{})
 	go func() { loopback.stop(); close(stopped) }()

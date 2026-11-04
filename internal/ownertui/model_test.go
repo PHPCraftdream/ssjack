@@ -2,23 +2,20 @@ package ownertui
 
 import (
 	"bytes"
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
+	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	tea "charm.land/bubbletea/v2"
-
-	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
-	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
-	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 type fakeBackend struct {
-	// The embedded nil backend panics on the methods no test reaches (Link, Reconcile, drafts, RetryDatabase).
-	backend
+	backend                             // Unused fake methods intentionally panic.
 	metadata                            vault.DirectoryMetadata
 	status                              ownerdb.Status
 	closeErr                            error
@@ -28,24 +25,20 @@ type fakeBackend struct {
 	calls                               []string // import calls in order
 	args                                []string // InspectImport's path and password, in call order
 	edits, submissions, closes, exports int
-	// mu guards the import state: Program tests call from several goroutines.
-	mu sync.Mutex
-	// on holds hooks run under mu after a call is recorded, so Program tests change the status from the backend's goroutine, never the test's.
-	on map[string]func(*fakeBackend)
+	mu                                  sync.Mutex // Guards import state and hooks in Program tests.
+	on                                  map[string]func(*fakeBackend)
 }
 
 func (b *fakeBackend) Metadata() (vault.DirectoryMetadata, error) { return b.metadata, nil }
 func (b *fakeBackend) Status() ownerdb.Status                     { return b.status }
 func (b *fakeBackend) Edit(func(*vault.Vault) error) error        { b.edits++; return nil }
 func (b *fakeBackend) Submit(change vault.OwnerChange) error {
-	b.submissions++
-	b.change = change
+	b.submissions, b.change = b.submissions+1, change
 	b.change.Value = append([]byte(nil), change.Value...)
 	return nil
 }
 func (b *fakeBackend) Export(request ownerdb.ExportRequest) error {
-	b.exports++
-	b.exportRequest = request
+	b.exports, b.exportRequest = b.exports+1, request
 	return nil
 }
 func (b *fakeBackend) Flush(context.Context) error { return nil }
@@ -74,7 +67,6 @@ func testModel(b *fakeBackend) *Model {
 	return &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
 }
 func zeroed(b []byte) bool { return bytes.Equal(b, make([]byte, len(b))) }
-
 func check(t *testing.T, bad bool, msg any) {
 	t.Helper()
 	if bad {
@@ -88,7 +80,6 @@ func fill(m *Model, texts ...string) {
 	}
 }
 func open(m *Model, action string, texts ...string) { m.openForm(action); fill(m, texts...) }
-
 func TestTeaFormsKeepSecretsOwnedAndHiddenRefreshAndCloseStaySafeAndDirectoryFormsKeepAccounts(t *testing.T) {
 	b := &fakeBackend{}
 	m := testModel(b)
@@ -154,8 +145,26 @@ func TestTeaFormsKeepSecretsOwnedAndHiddenRefreshAndCloseStaySafeAndDirectoryFor
 	must(t, editServer(v, id, "changed:2222", ""))
 	check(t, v.Targets[first].Address != "changed:2222" || v.Targets[second].Address != "changed:2222" || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second", "server edit lost account metadata or credentials")
 	m.back()
+	m.at = location{screen: serverScreen, server: id}
+	open(m, "edit-proxy", "socks5", "proxy.invalid:1080", "operator", "synthetic-proxy-private")
+	owned = m.form.fields[3].value
+	check(t, !m.form.fields[3].secret || strings.Contains(m.View().Content, "synthetic-proxy-private") || !strings.Contains(m.form.scopeLabel, "not encrypted"), "proxy form exposed authentication or omitted the wire warning")
+	m.back()
+	check(t, !zeroed(owned) || v.Targets[first].Proxy != nil, "cancelled proxy form retained credentials or changed the route")
+	open(m, "edit-proxy", "socks5", "proxy.invalid:1080", "operator", "synthetic-proxy-private")
+	must(t, editDirectory(v, m.form))
+	check(t, v.Targets[first].Proxy.Type != "socks5" || v.Targets[second].Proxy.Address != "proxy.invalid:1080", "proxy form did not update all server accounts")
+	m.back()
+	open(m, "edit-proxy", "socks5", "proxy.invalid:1080", "operator", "")
+	must(t, editDirectory(v, m.form))
+	check(t, string(v.Targets[first].Proxy.Password) != "synthetic-proxy-private", "blank proxy password lost an unchanged credential")
+	m.form.fields[1].value = []byte("other.invalid:1080")
+	check(t, editDirectory(v, m.form) == nil || v.Targets[first].Proxy.Address != "proxy.invalid:1080", "proxy form silently sent an old password to a new endpoint")
+	m.form.fields[0].value = []byte("direct")
+	must(t, editDirectory(v, m.form))
+	check(t, v.Targets[first].Proxy != nil || v.Targets[second].Proxy != nil, "direct mode left another account proxied")
+	m.back()
 }
-
 func TestNavigationKeepsServerSecretScopesSeparateAndNamedStartupStaysScoped(t *testing.T) {
 	metadata := vault.DirectoryMetadata{Secrets: map[string]vault.SecretBinding{
 		"global": {Name: "token", Ref: "global-reference"},
@@ -199,8 +208,6 @@ func (b *terminalBuffer) String() string {
 	return b.Buffer.String()
 }
 
-// waitOutput polls the rendered output: keys are dropped while a command runs, so the next key may only follow the visible result.
-// The fixed failure message keeps rendered bytes out of the log.
 func waitOutput(t *testing.T, out *terminalBuffer, text string) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), text); time.Sleep(5 * time.Millisecond) {
@@ -208,8 +215,6 @@ func waitOutput(t *testing.T, out *terminalBuffer, text string) {
 	}
 }
 
-// startProgram runs a real Bubble Tea program on a fake terminal; wait returns the output after a clean exit.
-// Touch the model and backend state only after wait: the program goroutine owns them.
 func startProgram(t *testing.T, b *fakeBackend) (*Model, *tea.Program, *terminalBuffer, func() string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
@@ -226,13 +231,11 @@ func send(p *tea.Program, msgs ...tea.Msg) {
 		p.Send(msg)
 	}
 }
-
 func downTo(p *tea.Program, b *fakeBackend, action string) {
 	for i := 0; navigation(location{screen: databaseScreen}, b.metadata)[i].action != action; i++ {
 		p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 }
-
 func TestBubbleTeaProgramNavigatesCancelsClosesAndKeepsSingleConnection(t *testing.T) {
 	backend := &fakeBackend{}
 	model, program, _, wait := startProgram(t, backend)
@@ -250,7 +253,7 @@ func TestBubbleTeaProgramNavigatesCancelsClosesAndKeepsSingleConnection(t *testi
 	check(t, ok || backend.closes != 1 || !strings.Contains(output, escaped("only")), "a single connection point was activated, or exit did not close once")
 }
 
-const archivePassword = "synthetic-archive-password"
+const archivePassword = "synthetic-archive-password" // Wait for stable rendered output before sending more keys.
 
 func importBackend(inspected ownerdb.ImportStatus) *fakeBackend {
 	return &fakeBackend{on: map[string]func(*fakeBackend){
@@ -261,7 +264,6 @@ func importBackend(inspected ownerdb.ImportStatus) *fakeBackend {
 		"abort": func(f *fakeBackend) { f.imp = ownerdb.ImportStatus{} },
 	}}
 }
-
 func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, func() string) {
 	_, program, out, wait := startProgram(t, b)
 	downTo(program, b, "import")
@@ -269,7 +271,6 @@ func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, fu
 	return program, out, wait
 }
 
-// The renderer diffs cells, so waits use text that shares no column with the row it replaces.
 func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {
 	b := importBackend(stagedBackend().imp)
 	program, out, wait := importFlow(t, b)
@@ -282,7 +283,6 @@ func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {
 	output := wait()
 	check(t, strings.Join(b.calls, ",") != "inspect,confirm" || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword || b.closes != 1 || strings.Contains(output, archivePassword), "program flow lost input, did not inspect, confirm and close once, or exposed the archive password")
 }
-
 func TestBubbleTeaProgramShowsFixedMessageForWrongPasswordAndEscapeAbortsOnce(t *testing.T) {
 	b := importBackend(ownerdb.ImportStatus{Err: ownerarchive.ErrAuthentication})
 	program, out, wait := importFlow(t, b)

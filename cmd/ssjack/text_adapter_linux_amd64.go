@@ -27,6 +27,9 @@ import (
 
 // credentialIdentity hashes stable public credential identity, never vault bytes.
 func credentialIdentity(profile string, target vault.Target) (string, error) {
+	if target.Proxy != nil {
+		return "", errors.New("proxied credentials require a private owner binding")
+	}
 	key, err := ssh.ParsePrivateKey(target.PrivateKey)
 	if err != nil {
 		return "", errors.New("invalid credential key")
@@ -86,7 +89,9 @@ func textCredentialFromVault(v *vault.Vault, profile string) (remote.StreamRunne
 		return nil, "", "", err
 	}
 	var digest string
-	if len(target.Password) != 0 {
+	if target.Proxy != nil {
+		digest, err = v.ProxyCredentialIdentity(selected)
+	} else if len(target.Password) != 0 {
 		digest, err = v.PasswordCredentialIdentity(selected)
 	} else {
 		digest, err = credentialIdentity(selected, target)

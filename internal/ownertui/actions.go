@@ -62,6 +62,7 @@ func (m *Model) describe() string {
 			continue
 		}
 		label = "Server " + escaped(server.Name) + " / " + escaped(server.Address)
+		label += "\n" + proxySummary(server.Proxy)
 		for _, fingerprint := range server.Fingerprints {
 			label += "\nHost key: " + escaped(fingerprint)
 		}
@@ -121,6 +122,8 @@ func (m *Model) openForm(action string) {
 			input("Address", "Explicit host:port, applied to every account on this server.", 1024, false, address),
 			input("Replacement host keys", "Blank keeps verified keys; otherwise bare verified public keys separated by |.", 16384, false, ""),
 		}
+	case "edit-proxy":
+		m.prepareProxyForm(f)
 	case "rename-server":
 		f.fields = []field{input("Server name", "Stable identity and secret scopes are preserved.", 64, false, "")}
 	case "export":
@@ -187,7 +190,7 @@ func (m *Model) perform(f *form) error {
 		return m.performImport(f)
 	case "link":
 		return m.backend.Link(value(0), f.fields[1].value)
-	case "add-server", "add-account", "edit-account", "rename-server", "edit-server":
+	case "add-server", "add-account", "edit-account", "rename-server", "edit-server", "edit-proxy":
 		return m.backend.Edit(func(v *vault.Vault) error { return editDirectory(v, f) })
 	case "pending":
 		return m.performPending(value(0))

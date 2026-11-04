@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
 // ErrImportInvalid is deliberately generic: it never carries archive content.
@@ -24,6 +25,7 @@ type ImportServer struct {
 	ID, Name, Address string
 	Fingerprints      []string
 	Accounts          []ImportAccount
+	Proxy             sshproxy.Metadata
 }
 
 // ImportSecret describes one value by metadata and length only.
@@ -133,6 +135,7 @@ func (i *OwnerImport) Preview() ImportPreview {
 			target := i.targets[profile]
 			if entry.Address == "" {
 				entry.Address = target.Address
+				entry.Proxy = target.Proxy.Metadata()
 				for _, encoded := range target.HostKeys {
 					if key, err := ParseHostKey([]byte(encoded)); err == nil {
 						entry.Fingerprints = append(entry.Fingerprints, ssh.FingerprintSHA256(key))
@@ -192,6 +195,7 @@ func (i *OwnerImport) Close() {
 	for id, target := range i.targets {
 		clear(target.PrivateKey)
 		clear(target.Password)
+		target.Proxy.Clear()
 		delete(i.targets, id)
 	}
 	for _, secret := range i.secrets {

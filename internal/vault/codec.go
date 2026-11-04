@@ -25,6 +25,13 @@ func marshal(v *Vault) ([]byte, error) {
 		if len(target.Password) != 0 {
 			record["password"] = target.Password
 		}
+		if route := target.Proxy; route != nil {
+			proxy := map[string]any{"type": route.Type, "address": route.Address}
+			if route.Username != "" {
+				proxy["username"], proxy["password"] = route.Username, route.Password
+			}
+			record["proxy"] = proxy
+		}
 		records[name] = record
 	}
 	root := map[string]any{"version": v.Version, "targets": records}
@@ -66,14 +73,19 @@ func unmarshal(data []byte) (*Vault, error) {
 	}
 	for _, value := range targets {
 		target, ok := value.(map[string]any)
-		if !ok || len(target) < 4 || len(target) > 7 {
+		if !ok || len(target) < 4 || len(target) > 8 {
 			return nil, errors.New("invalid vault target fields")
 		}
 		for field := range target {
 			switch field {
-			case "address", "user", "private_key", "password", "host_keys", "usage", "ssh_policy":
+			case "address", "user", "private_key", "password", "host_keys", "usage", "ssh_policy", "proxy":
 			default:
 				return nil, errors.New("unknown vault target field")
+			}
+		}
+		if value, exists := target["proxy"]; exists {
+			if len(root) == 2 || validateProxyFields(value) != nil {
+				return nil, errors.New("invalid proxy fields or database version")
 			}
 		}
 		if value, exists := target["ssh_policy"]; exists {

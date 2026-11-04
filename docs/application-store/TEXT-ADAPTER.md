@@ -20,9 +20,11 @@ ssjack --vault DATABASE --server production --account automation text-adapter id
 ```
 
 Identity inspection unlocks the database in a non-root terminal outside a broker
-session and prints only the selected opaque credential binding. Keys bind the
-public SSH identity; password accounts use a domain-separated private keyed
-binding, not a public password hash. A change to credentials/connection identity
+session and prints only the selected opaque credential binding. Direct key accounts bind the
+public SSH identity; password or proxied accounts use a domain-separated private
+keyed binding, not a public password hash. The proxied binding includes the exact
+server route and private authentication, so route/auth changes require matching
+new approval. See [proxy settings](../PROXY.md). A change to credentials/connection identity
 requires an appropriate new grant; an ID is not authorization.
 
 Root independently verifies and confirms the finite exact grant interactively:

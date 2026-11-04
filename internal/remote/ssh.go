@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -24,8 +23,7 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 	if err != nil {
 		return nil, nil, err
 	}
-	dialer := net.Dialer{Timeout: 10 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	conn, err := sshauth.DialContext(ctx, address, config)
 	if err != nil {
 		return nil, nil, sshStageError(ctx, "failed to connect to the SSH target")
 	}

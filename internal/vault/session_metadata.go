@@ -5,6 +5,8 @@ import (
 	"sort"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
 type AccountMetadata struct {
@@ -21,6 +23,7 @@ type ServerMetadata struct {
 	Address      string
 	Fingerprints []string
 	Accounts     []AccountMetadata
+	Proxy        sshproxy.Metadata
 }
 
 type OwnerStoreMetadata struct {
@@ -49,6 +52,7 @@ func (s *Session) Metadata() (DirectoryMetadata, error) {
 		for name, profile := range server.Accounts {
 			target := s.state.Targets[profile]
 			metadata.Address = target.Address
+			metadata.Proxy = target.Proxy.Metadata()
 			if len(metadata.Fingerprints) == 0 {
 				for _, encoded := range target.HostKeys {
 					key, err := ParseHostKey([]byte(encoded))
@@ -100,6 +104,7 @@ func (s *Session) HumanSSH(serverID, account string) (*ssh.ClientConfig, string,
 	target := ownTarget(s.state.Targets[profile])
 	defer clear(target.PrivateKey)
 	defer clear(target.Password)
+	defer target.Proxy.Clear()
 	if err := target.RequireUsage("human"); err != nil {
 		return nil, "", err
 	}

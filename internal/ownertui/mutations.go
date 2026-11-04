@@ -13,6 +13,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -107,6 +108,9 @@ func (m *Model) performPending(action string) error {
 
 func editDirectory(v *vault.Vault, f *form) error {
 	text := func(index int) string { return string(f.fields[index].value) }
+	if f.action == "edit-proxy" {
+		return editProxy(v, f)
+	}
 	if f.action == "edit-server" {
 		return editServer(v, f.origin.server, text(0), text(1))
 	}
@@ -169,6 +173,36 @@ func editDirectory(v *vault.Vault, f *form) error {
 		return err
 	}
 	return v.SetAccount(f.origin.server, account, target)
+}
+
+func editProxy(v *vault.Vault, f *form) error {
+	if len(f.fields) != 4 {
+		return errForm
+	}
+	kind := string(f.fields[0].value)
+	if kind == "direct" {
+		return v.SetServerProxy(f.origin.server, nil)
+	}
+	route := &sshproxy.Config{Type: kind, Address: string(f.fields[1].value), Username: string(f.fields[2].value), Password: append([]byte(nil), f.fields[3].value...)}
+	defer route.Clear()
+	if route.Username != "" && len(route.Password) == 0 {
+		server, exists := v.Servers[f.origin.server]
+		if !exists {
+			return errForm
+		}
+		for _, profile := range server.Accounts {
+			previous := v.Targets[profile].Proxy
+			if previous == nil || previous.Type != route.Type || previous.Address != route.Address || previous.Username != route.Username {
+				return errForm
+			}
+			route.Password = append([]byte(nil), previous.Password...)
+			break
+		}
+	}
+	if route.Validate() != nil || route.Type == "" {
+		return errForm
+	}
+	return v.SetServerProxy(f.origin.server, route)
 }
 
 func editServer(v *vault.Vault, id, address, replacement string) error {

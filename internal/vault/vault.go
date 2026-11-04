@@ -13,18 +13,20 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 type Target struct {
-	Address    string    `json:"address"`
-	User       string    `json:"user"`
-	PrivateKey []byte    `json:"private_key"`
-	Password   []byte    `json:"password,omitempty"`
-	HostKeys   []string  `json:"host_keys"`
-	Usage      string    `json:"usage,omitempty"`
-	SSHPolicy  SSHPolicy `json:"ssh_policy,omitempty"`
+	Address    string           `json:"address"`
+	User       string           `json:"user"`
+	PrivateKey []byte           `json:"private_key"`
+	Password   []byte           `json:"password,omitempty"`
+	HostKeys   []string         `json:"host_keys"`
+	Usage      string           `json:"usage,omitempty"`
+	SSHPolicy  SSHPolicy        `json:"ssh_policy,omitempty"`
+	Proxy      *sshproxy.Config `json:"proxy,omitempty"`
 }
 
 type Vault struct {
@@ -51,6 +53,7 @@ func (v *Vault) Close() {
 	for name, target := range v.Targets {
 		clear(target.PrivateKey)
 		clear(target.Password)
+		target.Proxy.Clear()
 		delete(v.Targets, name)
 	}
 	clear(v.Servers)
@@ -114,6 +117,9 @@ func ParseHostKey(data []byte) (ssh.PublicKey, error) {
 }
 
 func (t Target) Validate() error {
+	if t.Proxy != nil && (t.Proxy.Type == "" || t.Proxy.Validate() != nil || sshproxy.ValidateTarget(t.Address) != nil) {
+		return sshproxy.ErrConfig
+	}
 	if err := t.SSHPolicy.Validate(); err != nil {
 		return err
 	}
@@ -186,6 +192,13 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 		}
 		authentication = sshauth.PublicKey(signer)
 	}
+	if t.Proxy != nil {
+		var err error
+		authentication, err = sshauth.WithProxy(authentication, t.Proxy)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var pins [][]byte
 	for _, encoded := range t.HostKeys {
 		key, err := ParseHostKey([]byte(encoded))
@@ -235,6 +248,9 @@ func (v *Vault) validate() error {
 	for name, target := range v.Targets {
 		if v.Version == 1 && len(target.Password) != 0 {
 			return errors.New("password authentication requires database version 2")
+		}
+		if v.Version == 1 && target.Proxy != nil {
+			return errors.New("proxy settings require database version 2")
 		}
 		if err := ValidateName(name); err != nil {
 			return err

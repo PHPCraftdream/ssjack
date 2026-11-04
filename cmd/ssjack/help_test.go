@@ -71,7 +71,7 @@ func TestHelpAndVersionNeverOpenVault(t *testing.T) {
 
 func TestOwnerAndTextHelpStateActualBoundaries(t *testing.T) {
 	for topic, fragments := range map[string][]string{
-		"--interactive":                {"even for one point", "key-file", "hidden-password", "EXPORT PLAINTEXT", "IMPORT", "RAM-only", "Windows"},
+		"--interactive":                {"even for one point", "key-file", "hidden-password", "EXPORT PLAINTEXT", "IMPORT", "RAM-only", "Windows", "SOCKS5", "HTTP CONNECT", "no environment proxy", "unencrypted"},
 		"--server":                     {"conflicts with -p", "exactly one account", "never connect automatically"},
 		"text-adapter":                 {"Linux/amd64", "separate registry", "unknown", "not adoption"},
 		"text-adapter serve-stream":    {"--stream-references PATH", "never both", "EOF", "no raw tools"},

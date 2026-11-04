@@ -11,6 +11,7 @@ opening a database; global flags precede commands.
 | --- | --- | --- |
 | Choose a human SSH connection, even a single one | `ssjack --interactive` | [Owner menu](application-store/OWNER-TUI.md) |
 | Manually add/edit servers, accounts and passwords | Servers → Add server / server → Add SSH account | [Directory model](application-store/NAMED-DIRECTORY.md) |
+| Route a server through SOCKS5 / HTTP CONNECT | Servers → SERVER → Edit SSH proxy | [Proxy configuration and wire-auth limits](PROXY.md) |
 | Select a named SSH account without menus | `--server NAME --account NAME ssh`, `check`, `rotate`, `run` | [Named startup](application-store/NAMED-STARTUP.md) |
 | Use a stable credential-record ID | `-p PROFILE` / `--profile PROFILE` (default `main`) | [Credentials](VAULT.md#default-profile-selection) |
 | Convert an old encrypted profile database | `vault migrate-directory NEW_FILE` | [Migration and path activation](VAULT.md#named-directory-migration) |

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -57,6 +58,13 @@ func (m *Model) connectable(target location) bool {
 	return false
 }
 
+func proxySummary(proxy sshproxy.Metadata) string {
+	if proxy.Type == "" {
+		return "Proxy: direct"
+	}
+	return "Proxy: " + escaped(proxy.Type) + " / " + escaped(proxy.Address) + " / login " + escaped(proxy.Username) + " / authenticated=" + strconv.FormatBool(proxy.Authenticated)
+}
+
 func escaped(value string) string { return strconv.Quote(value) }
 
 func humanUsage(usage string) bool { return usage == "" || usage == "both" || usage == "human" }
@@ -69,6 +77,9 @@ func connectionItems(metadata vault.DirectoryMetadata) []item {
 		for _, account := range server.Accounts {
 			if humanUsage(account.Usage) {
 				label := "Connect: " + escaped(server.Name) + " / " + escaped(server.Address) + " / login " + escaped(account.User) + " / account " + escaped(account.Name) + " / " + escaped(account.Authentication)
+				if server.Proxy.Type != "" {
+					label += " / " + proxySummary(server.Proxy)
+				}
 				result = append(result, item{label: label, target: location{server: server.ID, account: account.Name}, action: "connect"})
 			}
 		}
@@ -98,7 +109,7 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 				}
 			}
 		}
-		return append(result, item{label: "Export server credentials and values", action: "export"})
+		return append(result, item{label: "[Edit SSH proxy]", action: "edit-proxy"}, item{label: "Export server credentials and values", action: "export"})
 	case accountScreen:
 		result := []item{{label: "[Edit SSH account]", action: "edit-account"}, {label: "Export account and server secrets", action: "export"}}
 		for _, server := range metadata.Servers {

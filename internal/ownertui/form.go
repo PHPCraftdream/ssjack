@@ -133,6 +133,9 @@ func importItems(st ownerdb.ImportStatus) []item {
 			keys = append(keys, "(none)")
 		}
 		info("Server " + escaped(server.Name) + " / " + escaped(server.Address) + " / host key " + strings.Join(keys, ", "))
+		if server.Proxy.Type != "" {
+			info("  " + proxySummary(server.Proxy))
+		}
 		for _, a := range server.Accounts {
 			info("  Account " + escaped(a.Name) + " / login " + escaped(a.User) + " / " + escaped(a.Authentication) + " / usage " + escaped(a.Usage))
 		}
@@ -145,6 +148,22 @@ func importItems(st ownerdb.ImportStatus) []item {
 		info("Secret " + escaped(secret.Name) + " / scope: " + scope + " / " + strconv.Itoa(secret.Length) + " bytes")
 	}
 	return result
+}
+
+func (m *Model) prepareProxyForm(f *form) {
+	kind, address, user := "direct", "", ""
+	for _, server := range m.metadata.Servers {
+		if server.ID == f.origin.server && server.Proxy.Type != "" {
+			kind, address, user = server.Proxy.Type, server.Proxy.Address, server.Proxy.Username
+		}
+	}
+	f.scopeLabel = "All SSH accounts on this server. Proxy authentication is not encrypted on the proxy hop; trust the proxy/network. SSH host-key pinning remains mandatory."
+	f.fields = []field{
+		input("Proxy type", "direct (removes saved proxy credentials), socks5 or http (CONNECT). No direct fallback.", 16, false, kind),
+		input("Proxy address", "host:port only; no URL or embedded credentials. Target DNS is resolved by the proxy.", 1024, false, address),
+		input("Proxy login", "Optional; clear the login to disable proxy authentication.", 255, false, user),
+		input("Proxy password", "Blank keeps it only when type, address and login are unchanged; otherwise re-enter it.", 1024, true, ""),
+	}
 }
 
 func (m *Model) prepareImportForm(f *form) bool {

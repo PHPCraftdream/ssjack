@@ -27,6 +27,17 @@ are visible; passwords, private-key paths entered as credentials, store unlock
 material, and secret values are masked. Terminal-control characters in metadata
 are quoted. Raw backend error strings are not rendered.
 
+## Server proxy settings
+
+Servers → SERVER → **[Edit SSH proxy]** selects `direct`, `socks5` or `http`
+(HTTP CONNECT), proxy `host:port`, optional login and masked password. It applies
+to every account; new accounts inherit it. Cancel clears input without mutation.
+Blank password preserves only an unchanged type/address/login; endpoint changes
+require re-entry. `direct` removes the saved route and credentials. No environment
+proxy, redirect or direct fallback is used. Proxy-hop authentication is unencrypted;
+SSH inside the tunnel still requires verified destination pins and the selected
+SSH credential. See [proxy guide](../PROXY.md) for bounds, grants and session lifetime.
+
 ## Human SSH connection
 
 A connection starts only when the owner presses Enter on a connection entry, or on

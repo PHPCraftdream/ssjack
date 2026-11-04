@@ -1,6 +1,10 @@
 package vault
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+)
 
 func (v *Vault) directoryCopy() (*Vault, error) {
 	if err := v.validate(); err != nil {
@@ -35,6 +39,7 @@ func (v *Vault) applyDirectory(copy *Vault) error {
 }
 
 func ownTarget(target Target) Target {
+	target.Proxy = sshproxy.Clone(target.Proxy)
 	target.PrivateKey = append([]byte(nil), target.PrivateKey...)
 	target.Password = append([]byte(nil), target.Password...)
 	target.HostKeys = append([]string(nil), target.HostKeys...)
@@ -70,6 +75,7 @@ func (v *Vault) AddServer(name, account string, target Target) (string, error) {
 	if err := v.applyDirectory(copy); err != nil {
 		clear(owned.PrivateKey)
 		clear(owned.Password)
+		owned.Proxy.Clear()
 		return "", err
 	}
 	return id, nil
@@ -83,6 +89,14 @@ func (v *Vault) SetAccount(serverID, name string, target Target) error {
 	server, exists := copy.Servers[serverID]
 	if !exists {
 		return errors.New("server does not exist")
+	}
+	for _, selected := range server.Accounts {
+		route := copy.Targets[selected].Proxy
+		if target.Proxy != nil && !sshproxy.Equal(target.Proxy, route) {
+			return errors.New("proxy settings belong to the server, not an SSH account")
+		}
+		target.Proxy = route
+		break
 	}
 	profile, exists := server.Accounts[name]
 	var previous Target
@@ -102,10 +116,12 @@ func (v *Vault) SetAccount(serverID, name string, target Target) error {
 	if err := v.applyDirectory(copy); err != nil {
 		clear(owned.PrivateKey)
 		clear(owned.Password)
+		owned.Proxy.Clear()
 		return err
 	}
 	clear(previous.PrivateKey)
 	clear(previous.Password)
+	previous.Proxy.Clear()
 	return nil
 }
 

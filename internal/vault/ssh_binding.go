@@ -21,6 +21,9 @@ func (v *Vault) PasswordCredentialIdentity(profile string) (string, error) {
 	if !exists || len(target.Password) == 0 {
 		return "", errors.New("selected password credential does not exist")
 	}
+	if target.Proxy != nil {
+		return v.ProxyCredentialIdentity(profile)
+	}
 	canonical, err := passwordIdentityMetadata(profile, target)
 	if err != nil {
 		return "", err
