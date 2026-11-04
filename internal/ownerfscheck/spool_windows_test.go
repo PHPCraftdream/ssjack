@@ -2,6 +2,7 @@ package ownerfscheck
 
 import (
 	"errors"
+	"fmt"
 
 	"golang.org/x/sys/windows"
 )
@@ -22,5 +23,5 @@ func inaccessible(path string) error {
 	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) || errors.Is(err, windows.ERROR_DELETE_PENDING) {
 		return nil
 	}
-	return errors.New("native anonymous spool lookup did not prove pathname absence")
+	return fmt.Errorf("native anonymous spool lookup did not prove pathname absence: %w", err)
 }
