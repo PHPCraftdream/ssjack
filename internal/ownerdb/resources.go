@@ -183,3 +183,112 @@ func (m *Manager) RetryDatabase() error {
 	m.signal()
 	return nil
 }
+
+// importConflicts must be called with m.mu held; the staged plan is read-only
+// while any other goroutine may be reading it.
+func (m *Manager) importConflicts() ([]vault.ImportConflict, error) {
+	conflicts, err := m.db.ImportConflicts(m.imp.staged)
+	if err != nil {
+		return nil, errImportEvaluate
+	}
+	if m.imp.staged.SecretCount() > 0 && !appstoreentry.Supported() {
+		conflicts = append(conflicts, vault.ImportConflict{Kind: "runtime-unsupported", Subject: "linked values require the supported Linux owner runtime"})
+	}
+	return conflicts, nil
+}
+
+// ImportStatus is cheap and safe to poll; failures leave counts at zero.
+func (m *Manager) ImportStatus() ImportStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := &m.imp
+	status := ImportStatus{Phase: s.phase, Err: s.err, DirectoryApplied: s.effects}
+	if s.phase == ImportIdle || s.phase == ImportInspecting {
+		return status
+	}
+	status.Preview, status.Total = clonePreview(s.preview), len(s.preview.Secrets)
+	// Only receipts count: a colliding foreign alias is never Published.
+	if m.db != nil && len(s.published) > 0 {
+		if metadata, err := m.db.Metadata(); err == nil {
+			for _, secret := range s.preview.Secrets {
+				ref, receipted := s.published[secret.AliasID]
+				binding, exists := metadata.Secrets[secret.AliasID]
+				if receipted && exists && binding.Ref == ref && binding.Name == secret.Name && binding.ServerID == secret.ServerID {
+					status.Published++
+				}
+			}
+		}
+	}
+	if s.phase == ImportStaged && s.staged != nil {
+		conflicts, err := m.importConflicts()
+		if err != nil {
+			conflicts = []vault.ImportConflict{{Kind: "destination-unavailable", Subject: "destination cannot be evaluated"}}
+		}
+		status.Conflicts = conflicts
+	}
+	return status
+}
+
+// ConfirmImport only queues the apply job; the TUI polls ImportStatus. The
+// job re-checks conflicts authoritatively inside the directory merge.
+func (m *Manager) ConfirmImport() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportStaged || m.imp.staged == nil {
+		return ErrPending
+	}
+	conflicts, err := m.importConflicts()
+	if err != nil {
+		return err
+	}
+	if len(conflicts) != 0 {
+		return vault.ErrImportConflict
+	}
+	m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
+	m.busy = true
+	m.jobs <- ":import-apply"
+	m.signal()
+	return nil
+}
+
+// ResumeImport continues a partial import after any pending owner intent was
+// resolved through ResumeDraft, Reconcile or CancelDraft. It is also the
+// recovery path out of an import-originated m.err.
+func (m *Manager) ResumeImport() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportPartial || m.imp.staged == nil {
+		return ErrPending
+	}
+	m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
+	m.busy = true
+	m.jobs <- ":import-resume"
+	m.signal()
+	return nil
+}
+
+// AbortImport discards the plan. A partial import keeps whatever was already
+// applied to the destination; only the retained RAM values are dropped. A
+// running job is cancelled and settles the final state itself.
+func (m *Manager) AbortImport() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch m.imp.phase {
+	case ImportInspecting, ImportApplying:
+		m.imp.aborted = true
+		if m.imp.cancel != nil {
+			m.imp.cancel()
+		}
+	case ImportStaged, ImportComplete, ImportPartial:
+		if m.busy {
+			return ErrPending // a job is still settling its final state
+		}
+		if m.imp.phase == ImportPartial && m.imp.errOwned && m.pending == nil {
+			m.err, m.imp.errOwned = nil, false
+		}
+		m.imp.reset()
+		m.imp.phase, m.imp.err = ImportIdle, nil
+		m.signal()
+	}
+	return nil
+}

@@ -20,7 +20,7 @@ permits human use (`both` or `human`), labelled with the escaped server name,
 address, login, account name and authentication kind; agent-only accounts are not
 listed. With no such account (including an empty database) a non-actionable
 `(no SSH connections available)` entry is shown and only reports a message. The
-management items follow unchanged: servers, global secrets, export, store linking,
+management items follow unchanged: servers, global secrets, export, import, store linking,
 pending change and exit. The management screens cover their named SSH accounts,
 server-scoped secrets and explicit pending-operation controls. Names and public metadata
 are visible; passwords, private-key paths entered as credentials, store unlock
@@ -76,7 +76,8 @@ an existing account. Existing account names are not renamed through this form.
 Secret scope is selected through the tree, not inferred through fallback. Removal
 requires the explicit `REMOVE` confirmation. Linked value operations retain the
 coordinator's durable encrypted intent and exact versioned-reference semantics.
-Pending controls accept `retry-db`, `reconcile`, `resume-draft`, and `cancel-draft`;
+Pending controls accept `retry-db`, `reconcile`, `resume-draft`, `cancel-draft`,
+`resume-import` and `abort-import`;
 opening the editor never automatically replays an interrupted operation.
 
 Persistence status distinguishes saving, saved, errors, and pending owner decisions.
@@ -87,10 +88,66 @@ error if unresolved state remains. This is not a process-crash durability guaran
 for unsaved input. There is no implicit discard action. The owner leaves through
 the Exit item or Ctrl+C; ending an SSH session returns to the picker.
 
+## Owner import
+
+The root item `Import credentials and values` (after Export) imports an owner
+export archive into the open database. Nothing is applied until an explicit
+confirmation.
+
+1. The form has `Archive file` and `Archive password`. The password is masked and
+   may differ from the database password: it is the password the archive was
+   exported with. Leave it empty for a plaintext archive. Apply waits for the
+   inspection (an encrypted archive costs one unlock (four sequential Argon2id derivations)); the archive file is only
+   read and the database is not touched.
+2. A wrong password, modified or invalid archive shows a fixed message (`wrong
+   archive password or modified archive`, or `not a valid ssjack owner export`)
+   and nothing is staged. Raw errors are never shown.
+3. A readable archive opens the preview screen. It shows only metadata: archive
+   kind, counts, each server with address and host-key fingerprints, each account
+   with login, authentication kind and usage, and each secret with its name,
+   scope (`global` or `server NAME`) and byte length. Secret values, passwords
+   and private keys are never displayed.
+4. If the whole plan conflicts with the destination (see the coordinator
+   document), the preview lists every conflict, offers no confirm item and
+   states that there is no overwrite and no merge. Otherwise `[Confirm import…]`
+   opens a form that requires the exact text `IMPORT`; any other text refuses.
+5. Confirming only queues the background apply and returns to the root screen,
+   where a status line reports `applying — published N of M secrets`, then
+   `Import complete`.
+
+Cancel semantics: Escape, Left, Ctrl+C or `[Cancel import]` on the preview
+discards the staged material (the manager clears it); Escape on a form cancels it
+without calling the backend. Staged material exists only in RAM and is lost on
+exit. A staged but unapplied plan is reported on the root screen (for example
+after a confirmation that failed without effects). Choosing `Import credentials
+and values` again then reopens the retained preview without a second read or
+unlock and without the form; Escape there still discards the plan, as does
+`Pending change` → `abort-import`.
+
+While an import is inspecting or applying, choosing Import only shows `An import
+is already running; wait for it to finish.` When one is incomplete it shows
+`An import is incomplete: use Pending change → resume-import or abort-import.`
+Neither opens a form. Idle and complete states open the form as usual.
+
+If the apply stops after changing the destination, the status line reads
+`Import INCOMPLETE` with the published count and whether the directory part was
+applied. Resolve any pending owner change first (`resume-draft`, `reconcile` or
+`cancel-draft`), then use `Pending change` → `resume-import` to publish the
+remaining values, or `abort-import` to drop the retained values. Abort keeps what
+was already published or applied; it never rolls back. The remaining values of a
+partial plan exist only in this process's memory: they are lost if ssjack exits,
+and only the per-secret durable intents already queued persist. An import is
+complete only after every value is published.
+
 ## Verification paths
 
 Fast CI drives Bubble Tea messages and the actual framework event loop/renderer
-with synthetic input. Full-profile Linux acceptance additionally drives the CLI
+with synthetic input. The `internal/ownertui` Program tests (including the import
+flow: form, preview, `IMPORT` confirmation, wrong-password message, Escape abort)
+run a real `tea.Program` on an in-memory output with a fake backend. They test the
+model's event loop and rendering only and are not terminal acceptance. Real-terminal
+import acceptance is the tmux driver `scripts/ci/owner_import.py` in the
+full-profile CI job. Full-profile Linux acceptance additionally drives the CLI
 through a real pseudo-terminal and a production-encrypted synthetic database:
 unlock, rename, cancel a credential form, exit, and reopen to verify persistence
 and preservation of both SSH accounts. The driver never prints its terminal

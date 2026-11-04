@@ -24,11 +24,17 @@ type backend interface {
 	Export(ownerdb.ExportRequest) error
 	Flush(context.Context) error
 	Close(context.Context) error
+	InspectImport(string, []byte) error
+	ImportStatus() ownerdb.ImportStatus
+	ConfirmImport() error
+	ResumeImport() error
+	AbortImport() error
 }
 
 type refreshMsg struct {
 	metadata vault.DirectoryMetadata
 	status   ownerdb.Status
+	imports  ownerdb.ImportStatus
 	err      error
 }
 
@@ -53,6 +59,7 @@ type Model struct {
 	quitting bool
 	height   int
 	ready    bool
+	imp      ownerdb.ImportStatus // latest import status; metadata only
 	// reselect blocks activation after a refresh changed the focused item.
 	reselect bool
 
@@ -73,7 +80,7 @@ func nextTick() tea.Cmd {
 func (m *Model) refresh() tea.Cmd {
 	return func() tea.Msg {
 		metadata, err := m.backend.Metadata()
-		return refreshMsg{metadata: metadata, status: m.backend.Status(), err: err}
+		return refreshMsg{metadata: metadata, status: m.backend.Status(), imports: m.backend.ImportStatus(), err: err}
 	}
 }
 
@@ -86,7 +93,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refresh()
 	case refreshMsg:
 		if msg.err == nil {
-			m.applyMetadata(msg.metadata)
+			m.applyMetadata(msg.metadata, msg.imports)
 			m.status, m.ready = msg.status, true
 		} else {
 			m.message = "Cannot refresh database metadata."
@@ -94,6 +101,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nextTick()
 	case operationMsg:
 		m.working = false
+		if strings.HasPrefix(msg.action, "import") {
+			m.importDone(msg.action, msg.err)
+			return m, nil
+		}
 		if msg.action == "export" {
 			m.message = "Export written to the selected new file."
 			if msg.err != nil {
@@ -131,6 +142,9 @@ func (m *Model) push(target location) {
 }
 
 func (m *Model) back() {
+	if m.at.screen == importScreen {
+		m.abortImport() // leaving the preview always drops the staged material
+	}
 	if m.form != nil {
 		m.form.clear()
 		m.form = nil
@@ -149,7 +163,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	name := key.String()
 	if name == "ctrl+c" {
-		if m.form != nil {
+		if m.form != nil || m.at.screen == importScreen {
 			m.back()
 			return m, nil
 		}
@@ -178,7 +192,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	items := navigation(m.at, m.metadata)
+	items := m.items()
 	if len(items) == 0 {
 		m.cursor = 0
 	} else if m.cursor >= len(items) {
@@ -240,7 +254,7 @@ func (m *Model) View() tea.View {
 			out.WriteString(marker + label + "\n")
 		}
 	} else {
-		items := navigation(m.at, m.metadata)
+		items := m.items()
 		rows := m.height - 12 - strings.Count(description, "\n")
 		if rows < 3 {
 			rows = 3
@@ -270,6 +284,9 @@ func (m *Model) View() tea.View {
 		out.WriteString("Persistence: pending owner decision; no automatic replay\n")
 	default:
 		out.WriteString("Persistence: saved\n")
+	}
+	if line := m.importLine(); line != "" {
+		out.WriteString(line + "\n")
 	}
 	if m.working {
 		out.WriteString("Working; please wait.\n")

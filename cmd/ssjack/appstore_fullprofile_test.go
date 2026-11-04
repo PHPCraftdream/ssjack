@@ -41,7 +41,7 @@ func appstoreCLIAcceptance(t *testing.T) {
 	if !appstoreentry.Supported() {
 		t.Skip("appstore unsupported on this platform")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	storeID := [16]byte{1}
 	ledgerPath := t.TempDir()

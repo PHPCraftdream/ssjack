@@ -4,9 +4,9 @@ Usage: owner_connect.py single|multi EXECUTABLE DATABASE MARKER; stdin carries
 the database secret on line one and the synthetic SSH password on line two
 (leak checks only). Root order (servers, then accounts, sorted by name):
   multi:  0 main/first (key)  1 second (password)  2 wrong-pin/intruder  3 Servers
-          4 Global secrets  5 Export  6 Link  7 Pending  8 Exit
-  single: 0 main/first  1 Servers  2 Global secrets  3 Export  4 Link  5 Pending
-          6 Exit (the Go side made every other account agent-only)
+          4 Global secrets  5 Export  6 Import  7 Link  8 Pending  9 Exit
+  single: 0 main/first  1 Servers  2 Global secrets  3 Export  4 Import  5 Link
+          6 Pending  7 Exit (the Go side made every other account agent-only)
 The agent-only account "agentonly" is never listed. No sleeps: screen polling
 plus barrier(), which orders a control-mode response after earlier output.
 """
@@ -62,7 +62,7 @@ def main():
     mode, executable, database, marker = sys.argv[1:]
     if mode not in ("single", "multi"):
         raise RuntimeError("unknown driver mode")
-    exit_index = 8 if mode == "multi" else 6
+    exit_index = 9 if mode == "multi" else 7
     password = sys.stdin.buffer.readline(16386).rstrip(b"\n")
     ssh_password = sys.stdin.buffer.readline(4098).rstrip(b"\n")
     if not password or len(password) > 16384 or not ssh_password or not re.fullmatch(r"[0-9a-z]{1,64}", marker):

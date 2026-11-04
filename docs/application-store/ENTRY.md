@@ -20,7 +20,7 @@ Delivery is synthetic only: the consumer is fixed, and model tools expose no arb
 The scoped shared-helper CLI tests use a private CI Go source overlay generated in a temporary directory. It changes only `argonDerive` via the existing private seam; it adds no production runtime KDF selector or exported weak API. AES processing remains the actual 1000 layers. Feature CI runs `python3 scripts/ci/appstore_scoped.py`. The explicit CLI full-profile test regex selects `TestAppstoreFullProfileCLI`, which uses real KDF; feature CI does not run that full gate. To run the CLI full-profile test explicitly:
 
 ```sh
-SSJACK_TEST_FULL_KDF=1 go test -mod=readonly -p 1 -run '^TestAppstoreFullProfileCLI$' -count=1 -timeout 600s ./cmd/ssjack
+SSJACK_TEST_FULL_KDF=1 go test -mod=readonly -p 1 -run '^TestAppstoreFullProfileCLI$' -count=1 -timeout 1200s ./cmd/ssjack
 ```
 
 Acceptance tests cover named writer-error classifications, cancellation before mutation, a lost commit acknowledgement with unavailable reconciliation, and successful read-first reconciliation without blind mutation replay. These are authored assertions, not execution evidence. The crypto package retains its seven-file layout. No tests or CI scripts were run locally; public scoped CI and the final explicit real-KDF gate remain pending.

@@ -39,6 +39,7 @@ type Manager struct {
 	closed        bool
 	closing       bool
 	err           error
+	imp           importState
 	jobs          chan string
 	changed       chan struct{}
 	done          chan struct{}
@@ -125,10 +126,12 @@ func (m *Manager) HumanSSH(serverID, account string) (*ssh.ClientConfig, string,
 }
 
 // Edit is a trusted owner form callback, not a public model-facing getter.
+// While an import is applying or partial it is refused: an edit to an imported
+// account or alias between a failure and resume would otherwise go unnoticed.
 func (m *Manager) Edit(edit func(*vault.Vault) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || edit == nil {
+	if m.closed || m.closing || edit == nil || m.imp.owns() {
 		return ErrPending
 	}
 	return m.db.Apply(func(v *vault.Vault) error {
@@ -154,7 +157,7 @@ func (m *Manager) Submit(change vault.OwnerChange) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.link == nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.link == nil || m.imp.owns() {
 		return ErrPending
 	}
 	var pending *vault.OwnerIntent
@@ -249,6 +252,9 @@ func (m *Manager) stop() {
 	}
 	m.closed = true
 	m.cancel()
+	if m.imp.cancel != nil {
+		m.imp.cancel()
+	}
 	m.signal()
 	m.mu.Unlock()
 	<-m.done
@@ -258,4 +264,9 @@ func (m *Manager) stop() {
 	if m.pending != nil {
 		clear(m.pending.Change.Value)
 	}
+	// Staged import material is RAM-only and is discarded on exit.
+	m.mu.Lock()
+	m.imp.reset()
+	m.imp.phase = ImportIdle
+	m.mu.Unlock()
 }

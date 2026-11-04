@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -17,9 +19,15 @@ func (m *Manager) run() {
 		case <-m.ctx.Done():
 			return
 		case id := <-m.jobs:
-			ctx, cancel := context.WithTimeout(m.ctx, time.Minute)
+			ctx, cancel := m.jobContext(id)
 			var err error
 			switch id {
+			case ":import-inspect":
+				err = m.inspectImport(ctx)
+			case ":import-apply":
+				err = m.importArchive(ctx, false)
+			case ":import-resume":
+				err = m.importArchive(ctx, true)
 			case ":export":
 				m.mu.Lock()
 				request := m.exportRequest
@@ -58,6 +66,8 @@ func (m *Manager) run() {
 			cancel()
 			m.mu.Lock()
 			m.busy, m.err = false, err
+			m.imp.cancel = nil
+			m.imp.errOwned = err != nil && strings.HasPrefix(id, ":import-")
 			if id == ":export" {
 				m.exportRequest = nil
 			}
@@ -65,6 +75,69 @@ func (m *Manager) run() {
 			m.mu.Unlock()
 		}
 	}
+}
+
+// jobContext bounds a job; import jobs also publish their cancel func so
+// AbortImport can stop them before the next secret.
+func (m *Manager) jobContext(id string) (context.Context, context.CancelFunc) {
+	timeout := time.Minute
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch id {
+	case ":import-inspect":
+		timeout = 5 * time.Minute
+	case ":import-apply", ":import-resume":
+		timeout = min(time.Duration(1+m.imp.staged.SecretCount())*time.Minute, 130*time.Minute)
+	}
+	ctx, cancel := context.WithTimeout(m.ctx, timeout)
+	if strings.HasPrefix(id, ":import-") {
+		m.imp.cancel = cancel
+	}
+	return ctx, cancel
+}
+
+// importStopped reports an operator abort before a context timeout.
+func (m *Manager) importStopped(ctx context.Context) error {
+	m.mu.Lock()
+	aborted := m.imp.aborted
+	m.mu.Unlock()
+	if aborted {
+		return ErrImportAborted
+	}
+	return ctx.Err()
+}
+
+// safeImportError maps everything to fixed text that cannot hold archive content.
+func safeImportError(err error) error {
+	switch {
+	case errors.Is(err, ownerarchive.ErrAuthentication):
+		return ownerarchive.ErrAuthentication
+	case errors.Is(err, ownerarchive.ErrArchive), errors.Is(err, vault.ErrImportInvalid):
+		return ownerarchive.ErrArchive
+	case errors.Is(err, vault.ErrImportConflict):
+		return vault.ErrImportConflict
+	case errors.Is(err, vault.ErrImportChanged):
+		return vault.ErrImportChanged
+	case errors.Is(err, errImportEntries):
+		return errImportEntries
+	case errors.Is(err, ErrImportAborted):
+		return ErrImportAborted
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return errImportInterrupted
+	case errors.Is(err, ErrPending):
+		return ErrPending
+	}
+	return errImportFailed
+}
+
+func clonePreview(p vault.ImportPreview) vault.ImportPreview {
+	out := vault.ImportPreview{Encrypted: p.Encrypted, Servers: make([]vault.ImportServer, 0, len(p.Servers)), Secrets: append([]vault.ImportSecret{}, p.Secrets...), Conflicts: append([]vault.ImportConflict{}, p.Conflicts...)}
+	for _, server := range p.Servers {
+		server.Fingerprints = append([]string{}, server.Fingerprints...)
+		server.Accounts = append([]vault.ImportAccount(nil), server.Accounts...)
+		out.Servers = append(out.Servers, server)
+	}
+	return out
 }
 
 func (m *Manager) process(ctx context.Context, id string) error {

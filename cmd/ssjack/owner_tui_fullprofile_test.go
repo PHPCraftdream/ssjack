@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -25,7 +26,13 @@ func TestOwnerInteractivePTYChild(t *testing.T) {
 			break
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	// The import terminal flow pays several production-KDF passes; it asks for a
+	// longer bound explicitly, every other caller keeps one minute.
+	limit := time.Minute
+	if seconds, err := strconv.Atoi(os.Getenv("SSJACK_OWNER_TUI_CHILD_SECONDS")); err == nil && seconds > 0 && seconds <= 600 {
+		limit = time.Duration(seconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	code, err := run(ctx, args)
 	if code != 0 || err != nil {

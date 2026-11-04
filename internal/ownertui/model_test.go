@@ -3,8 +3,6 @@ package ownertui
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"strings"
 	"sync"
@@ -12,22 +10,28 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 type fakeBackend struct {
-	metadata      vault.DirectoryMetadata
-	status        ownerdb.Status
-	edits         int
-	submissions   int
-	closes        int
-	closeErr      error
-	change        vault.OwnerChange
-	exports       int
-	exportRequest ownerdb.ExportRequest
+	// The embedded nil backend panics on the methods no test reaches (Link, Reconcile, drafts, RetryDatabase).
+	backend
+	metadata                            vault.DirectoryMetadata
+	status                              ownerdb.Status
+	closeErr                            error
+	change                              vault.OwnerChange
+	exportRequest                       ownerdb.ExportRequest
+	imp                                 ownerdb.ImportStatus
+	calls                               []string // import calls in order
+	args                                []string // InspectImport's path and password, in call order
+	edits, submissions, closes, exports int
+	// mu guards the import state: Program tests call from several goroutines.
+	mu sync.Mutex
+	// on holds hooks run under mu after a call is recorded, so Program tests change the status from the backend's goroutine, never the test's.
+	on map[string]func(*fakeBackend)
 }
 
 func (b *fakeBackend) Metadata() (vault.DirectoryMetadata, error) { return b.metadata, nil }
@@ -39,11 +43,6 @@ func (b *fakeBackend) Submit(change vault.OwnerChange) error {
 	b.change.Value = append([]byte(nil), change.Value...)
 	return nil
 }
-func (b *fakeBackend) Link(string, []byte) error { return nil }
-func (b *fakeBackend) Reconcile() error          { return nil }
-func (b *fakeBackend) ResumeDraft() error        { return nil }
-func (b *fakeBackend) CancelDraft() error        { return nil }
-func (b *fakeBackend) RetryDatabase() error      { return nil }
 func (b *fakeBackend) Export(request ownerdb.ExportRequest) error {
 	b.exports++
 	b.exportRequest = request
@@ -51,162 +50,137 @@ func (b *fakeBackend) Export(request ownerdb.ExportRequest) error {
 }
 func (b *fakeBackend) Flush(context.Context) error { return nil }
 func (b *fakeBackend) Close(context.Context) error { b.closes++; return b.closeErr }
-
+func (b *fakeBackend) InspectImport(path string, password []byte) error {
+	return b.record("inspect", path, string(password)) // copy now: the form wipes its buffer
+}
+func (b *fakeBackend) ImportStatus() ownerdb.ImportStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.imp
+}
+func (b *fakeBackend) ConfirmImport() error { return b.record("confirm") }
+func (b *fakeBackend) ResumeImport() error  { return b.record("resume") }
+func (b *fakeBackend) AbortImport() error   { return b.record("abort") }
+func (b *fakeBackend) record(name string, args ...string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls, b.args = append(b.calls, name), append(b.args, args...)
+	if hook := b.on[name]; hook != nil {
+		hook(b)
+	}
+	return nil
+}
 func testModel(b *fakeBackend) *Model {
 	return &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
 }
+func zeroed(b []byte) bool { return bytes.Equal(b, make([]byte, len(b))) }
 
-func TestTeaModelCancelsWithoutBackendMutation(t *testing.T) {
+func check(t *testing.T, bad bool, msg any) {
+	t.Helper()
+	if bad {
+		t.Fatal(msg)
+	}
+}
+func must(t *testing.T, err error) { t.Helper(); check(t, err != nil, err) }
+func fill(m *Model, texts ...string) {
+	for i, text := range texts {
+		m.form.fields[i].value = []byte(text)
+	}
+}
+func open(m *Model, action string, texts ...string) { m.openForm(action); fill(m, texts...) }
+
+func TestTeaFormsKeepSecretsOwnedAndHiddenRefreshAndCloseStaySafeAndDirectoryFormsKeepAccounts(t *testing.T) {
 	b := &fakeBackend{}
 	m := testModel(b)
-	m.openForm("add-secret")
-	m.form.fields[1].value = []byte("synthetic-hidden")
+	open(m, "add-secret", "", "synthetic-hidden")
 	owned := m.form.fields[1].value
 	m.Update(tea.KeyPressMsg{Code: 27})
-	if m.form != nil || b.edits != 0 || b.submissions != 0 || m.at.screen != databaseScreen {
-		t.Fatal("Escape did not cancel the form without effects")
-	}
-	for _, c := range owned {
-		if c != 0 {
-			t.Fatal("cancel retained secret bytes")
-		}
-	}
-}
-
-func TestTeaApplyOwnsInputUntilCommandCompletes(t *testing.T) {
-	b := &fakeBackend{}
-	m := testModel(b)
-	m.openForm("add-secret")
-	m.form.fields[0].value = []byte("token")
-	m.form.fields[1].value = []byte("synthetic-hidden")
-	owned := m.form.fields[1].value
+	check(t, m.form != nil || b.edits != 0 || b.submissions != 0 || m.at.screen != databaseScreen || !zeroed(owned), "Escape did not cancel the form without effects, or cancel retained secret bytes")
+	open(m, "add-secret", "token", "synthetic-hidden")
+	owned = m.form.fields[1].value
 	m.form.focus = len(m.form.fields)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 13})
-	if cmd == nil || b.submissions != 0 || !m.working || m.form != nil {
-		t.Fatal("Apply executed synchronously or retained an editable form")
-	}
+	check(t, cmd == nil || b.submissions != 0 || !m.working || m.form != nil, "Apply executed synchronously or retained an editable form")
 	m.Update(cmd())
-	if b.submissions != 1 || string(b.change.Value) != "synthetic-hidden" || m.working {
-		t.Fatal("Apply lost input or did not complete")
-	}
-	for _, c := range owned {
-		if c != 0 {
-			t.Fatal("applied form retained secret bytes")
-		}
-	}
-}
-
-func TestTeaRenderNeverIncludesPrivateValuesOrRawError(t *testing.T) {
-	b := &fakeBackend{status: ownerdb.Status{Err: errors.New("synthetic-error-secret")}}
-	m := testModel(b)
+	check(t, b.submissions != 1 || string(b.change.Value) != "synthetic-hidden" || m.working || !zeroed(owned), "Apply lost input, did not complete or retained secret bytes")
+	b = &fakeBackend{status: ownerdb.Status{Err: errors.New("synthetic-error-secret")}}
+	m = testModel(b)
 	m.status = b.status
-	m.openForm("add-secret")
-	m.form.fields[1].value = []byte("synthetic-hidden")
+	open(m, "add-secret", "", "synthetic-hidden")
 	view := m.View().Content
-	for _, private := range []string{"synthetic-hidden", "synthetic-error-secret"} {
-		if strings.Contains(view, private) {
-			t.Fatal("view exposed private data")
-		}
-	}
-	if !strings.Contains(view, "ERROR") || !strings.Contains(view, "[Cancel]") {
-		t.Fatal("view omitted actionable status or cancellation")
-	}
-}
-
-func TestTeaCloseFailureDoesNotQuitOrDiscard(t *testing.T) {
-	b := &fakeBackend{closeErr: errors.New("unsaved")}
-	m := testModel(b)
-	cmd := m.requestClose()
+	check(t, strings.Contains(view, "synthetic-hidden") || strings.Contains(view, "synthetic-error-secret") || !strings.Contains(view, "ERROR") || !strings.Contains(view, "[Cancel]"), "view exposed private data or omitted actionable status or cancellation")
+	m.form.focus, m.form.fields[1].value = 1, nil
+	m.Update(tea.PasteMsg{Content: "synthetic-paste"})
+	check(t, string(m.form.fields[1].value) != "synthetic-paste" || strings.Contains(m.View().Content, "synthetic-paste"), "paste was lost or exposed")
+	m.Update(tea.PasteMsg{Content: "\x1b[31m"})
+	check(t, string(m.form.fields[1].value) != "synthetic-paste", "paste accepted terminal control input")
+	m.back()
+	m = testModel(&fakeBackend{})
+	_, cmd = m.Update(tickMsg{})
+	check(t, cmd == nil, "status refresh chain stopped")
 	_, next := m.Update(cmd())
-	if next != nil || b.closes != 1 || m.working || !strings.Contains(m.message, "Exit stopped") {
-		t.Fatal("failed persistence allowed exit")
-	}
-}
-
-func TestDirectoryFormsPreserveAccountsAndRequireNewAuthMaterial(t *testing.T) {
-	public, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := ssh.NewPublicKey(public)
-	if err != nil {
-		t.Fatal(err)
-	}
+	check(t, next == nil, "refresh did not schedule its successor")
+	_, extra := m.Update(operationMsg{})
+	check(t, extra != nil, "operation completion started a duplicate polling chain")
+	b = &fakeBackend{closeErr: errors.New("unsaved")}
+	m = testModel(b)
+	cmd = m.requestClose()
+	_, next = m.Update(cmd())
+	check(t, next != nil || b.closes != 1 || m.working || !strings.Contains(m.message, "Exit stopped"), "failed persistence allowed exit")
 	v := vault.New()
 	defer v.Close()
-	if err := v.UpgradeDirectory(); err != nil {
-		t.Fatal(err)
-	}
-	m := testModel(&fakeBackend{})
-	m.openForm("add-server")
-	for i, text := range []string{"production", "localhost:22", "main", "first", "password", "synthetic-first", "both", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))} {
-		m.form.fields[i].value = []byte(text)
-	}
-	if err := editDirectory(v, m.form); err != nil {
-		t.Fatal(err)
-	}
+	must(t, v.UpgradeDirectory())
+	m = testModel(&fakeBackend{})
+	open(m, "add-server", "production", "localhost:22", "main", "first", "password", "synthetic-first", "both", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAA"+strings.Repeat("A", 40)) // a syntactically valid all-zero ed25519 host key
+	must(t, editDirectory(v, m.form))
 	m.back()
 	id, err := v.ServerID("production")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	m.at = location{screen: serverScreen, server: id}
-	m.openForm("add-account")
-	for i, text := range []string{"second", "another", "password", "synthetic-second", "human"} {
-		m.form.fields[i].value = []byte(text)
-	}
-	if err := editDirectory(v, m.form); err != nil {
-		t.Fatal(err)
-	}
-	if err := editDirectory(v, m.form); err == nil {
-		t.Fatal("add silently overwrote an account")
-	}
+	open(m, "add-account", "second", "another", "password", "synthetic-second", "human")
+	must(t, editDirectory(v, m.form))
+	check(t, editDirectory(v, m.form) == nil, "add silently overwrote an account")
 	m.back()
 	first, _ := v.AccountProfile(id, "main")
 	second, _ := v.AccountProfile(id, "second")
-	if first == second || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second" {
-		t.Fatal("account form lost or shared another account's credentials")
-	}
+	check(t, first == second || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second", "account form lost or shared another account's credentials")
 	m.at = location{screen: accountScreen, server: id, account: "second"}
-	m.openForm("edit-account")
-	for i, text := range []string{"second", "changed", "password", "", "human"} {
-		m.form.fields[i].value = []byte(text)
-	}
-	if err := editDirectory(v, m.form); err != nil {
-		t.Fatal(err)
-	}
-	if string(v.Targets[second].Password) != "synthetic-second" || v.Targets[second].User != "changed" {
-		t.Fatal("blank credential did not preserve selected account")
-	}
+	open(m, "edit-account", "second", "changed", "password", "", "human")
+	must(t, editDirectory(v, m.form))
+	check(t, string(v.Targets[second].Password) != "synthetic-second" || v.Targets[second].User != "changed", "blank credential did not preserve selected account")
 	m.form.fields[2].value = []byte("key")
-	if err := editDirectory(v, m.form); err == nil {
-		t.Fatal("authentication switch reused the wrong credential kind")
-	}
-	if err := editServer(v, id, "changed:2222", "invalid pin"); err == nil || v.Targets[first].Address != "localhost:22" || v.Targets[second].Address != "localhost:22" {
-		t.Fatal("invalid server edit partially changed accounts")
-	}
-	if err := editServer(v, id, "changed:2222", ""); err != nil {
-		t.Fatal(err)
-	}
-	if v.Targets[first].Address != "changed:2222" || v.Targets[second].Address != "changed:2222" || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second" {
-		t.Fatal("server edit lost account metadata or credentials")
-	}
+	check(t, editDirectory(v, m.form) == nil, "authentication switch reused the wrong credential kind")
+	check(t, editServer(v, id, "changed:2222", "invalid pin") == nil || v.Targets[first].Address != "localhost:22" || v.Targets[second].Address != "localhost:22", "invalid server edit partially changed accounts")
+	must(t, editServer(v, id, "changed:2222", ""))
+	check(t, v.Targets[first].Address != "changed:2222" || v.Targets[second].Address != "changed:2222" || string(v.Targets[first].Password) != "synthetic-first" || string(v.Targets[second].Password) != "synthetic-second", "server edit lost account metadata or credentials")
 	m.back()
 }
 
-func TestPasteUsesMaskedBoundedFormInput(t *testing.T) {
-	m := testModel(&fakeBackend{})
-	m.openForm("add-secret")
-	m.form.focus = 1
-	m.Update(tea.PasteMsg{Content: "synthetic-paste"})
-	if string(m.form.fields[1].value) != "synthetic-paste" || strings.Contains(m.View().Content, "synthetic-paste") {
-		t.Fatal("paste was lost or exposed")
+func TestNavigationKeepsServerSecretScopesSeparateAndNamedStartupStaysScoped(t *testing.T) {
+	metadata := vault.DirectoryMetadata{Secrets: map[string]vault.SecretBinding{
+		"global": {Name: "token", Ref: "global-reference"},
+		"first":  {Name: "token", ServerID: "first-server", Ref: "first-reference"},
+		"second": {Name: "token", ServerID: "second-server", Ref: "second-reference"},
+	}}
+	for scope, want := range map[string]string{"": "global", "first-server": "first", "second-server": "second"} {
+		items := navigation(location{screen: secretsScreen, server: scope}, metadata)
+		count := map[bool]int{true: 3, false: 2}[scope == ""]
+		check(t, len(items) != count || items[1].target.secret != want || items[1].target.server != scope, "navigation selected another server's secret or a global fallback")
 	}
-	m.Update(tea.PasteMsg{Content: "\x1b[31m"})
-	if string(m.form.fields[1].value) != "synthetic-paste" {
-		t.Fatal("paste accepted terminal control input")
-	}
+	b := &fakeBackend{metadata: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{
+		{ID: "first", Name: "production", Accounts: []vault.AccountMetadata{{Name: "deploy"}, {Name: "maintenance"}}},
+		{ID: "second", Name: "other", Accounts: []vault.AccountMetadata{{Name: "deploy"}}},
+	}}}
+	m := testModel(b)
+	must(t, m.Select("production", "maintenance"))
+	check(t, m.at.server != "first" || m.at.account != "maintenance" || m.at.screen != accountScreen, "startup selection crossed the server/account scope")
 	m.back()
+	check(t, m.at.screen != serverScreen || m.at.server != "first", "selected account lost its parent server")
+	m.back()
+	m.back()
+	before := m.at
+	check(t, m.Select("missing", "deploy") == nil || m.at != before || m.Select("production", "missing") == nil || m.at != before, "unknown startup server or account silently fell back")
+	check(t, m.Select("production", "") != nil || m.at.screen != serverScreen || b.edits != 0 || b.submissions != 0 || b.closes != 0, "interactive server selection did not expose its explicit account list, or startup selection performed a mutation")
 }
 
 type terminalBuffer struct {
@@ -219,82 +193,108 @@ func (b *terminalBuffer) Write(p []byte) (int, error) {
 	defer b.mu.Unlock()
 	return b.Buffer.Write(p)
 }
+func (b *terminalBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
 
-func TestBubbleTeaProgramNavigatesCancelsAndCloses(t *testing.T) {
+// waitOutput polls the rendered output: keys are dropped while a command runs, so the next key may only follow the visible result.
+// The fixed failure message keeps rendered bytes out of the log.
+func waitOutput(t *testing.T, out *terminalBuffer, text string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), text); time.Sleep(5 * time.Millisecond) {
+		check(t, time.Now().After(deadline), "timed out waiting for expected terminal output")
+	}
+}
+
+// startProgram runs a real Bubble Tea program on a fake terminal; wait returns the output after a clean exit.
+// Touch the model and backend state only after wait: the program goroutine owns them.
+func startProgram(t *testing.T, b *fakeBackend) (*Model, *tea.Program, *terminalBuffer, func() string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
+	model := testModel(b)
+	model.ctx = ctx
+	output := &terminalBuffer{}
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	done := make(chan error, 1)
+	go func() { _, err := program.Run(); done <- err }()
+	return model, program, output, func() string { must(t, <-done); return output.String() }
+}
+func send(p *tea.Program, msgs ...tea.Msg) {
+	for _, msg := range msgs {
+		p.Send(msg)
+	}
+}
+
+func downTo(p *tea.Program, b *fakeBackend, action string) {
+	for i := 0; navigation(location{screen: databaseScreen}, b.metadata)[i].action != action; i++ {
+		p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+}
+
+func TestBubbleTeaProgramNavigatesCancelsClosesAndKeepsSingleConnection(t *testing.T) {
 	backend := &fakeBackend{}
-	model := testModel(backend)
-	model.ctx = ctx
-	var output terminalBuffer
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
-	done := make(chan error, 1)
-	go func() { _, err := program.Run(); done <- err }()
-	// Empty root: placeholder, Servers, then Global secrets.
-	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, program, _, wait := startProgram(t, backend)
+	send(program, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: 13}, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "token"}, tea.KeyPressMsg{Code: 9}, tea.PasteMsg{Content: "synthetic-terminal-private"}, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 27})
+	downTo(program, backend, "exit")
 	program.Send(tea.KeyPressMsg{Code: 13})
-	program.Send(tea.KeyPressMsg{Code: 13})
-	program.Send(tea.PasteMsg{Content: "token"})
-	program.Send(tea.KeyPressMsg{Code: 9})
-	program.Send(tea.PasteMsg{Content: "synthetic-terminal-private"})
-	program.Send(tea.KeyPressMsg{Code: 27})
-	program.Send(tea.KeyPressMsg{Code: 27})
-	for _, item := range navigation(location{screen: databaseScreen}, backend.metadata) {
-		if item.action == "exit" {
-			break
-		}
-		program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	}
-	program.Send(tea.KeyPressMsg{Code: 13})
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if backend.closes != 1 || backend.edits != 0 || backend.submissions != 0 || model.form != nil {
-		t.Fatal("program did not cancel input and close without mutation")
-	}
-	output.mu.Lock()
-	defer output.mu.Unlock()
-	if !strings.Contains(output.Buffer.String(), "owner database") || strings.Contains(output.Buffer.String(), "synthetic-terminal-private") {
-		t.Fatal("terminal renderer omitted the interface or exposed input")
-	}
+	output := wait()
+	check(t, backend.closes != 1 || backend.edits != 0 || backend.submissions != 0 || model.form != nil, "program did not cancel input and close without mutation")
+	check(t, !strings.Contains(output, "owner database") || strings.Contains(output, "synthetic-terminal-private"), "terminal renderer omitted the interface or exposed input")
+	backend = &fakeBackend{metadata: points("only")}
+	model, program, _, wait = startProgram(t, backend)
+	send(program, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyUp}, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	output = wait()
+	_, ok := model.TakeConnection()
+	check(t, ok || backend.closes != 1 || !strings.Contains(output, escaped("only")), "a single connection point was activated, or exit did not close once")
 }
 
-func TestBubbleTeaProgramKeepsSingleConnectionUntilExplicitExit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	backend := &fakeBackend{metadata: points("only")}
-	model := testModel(backend)
-	model.ctx = ctx
-	var output terminalBuffer
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
-	done := make(chan error, 1)
-	go func() { _, err := program.Run(); done <- err }()
-	program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyUp})
+const archivePassword = "synthetic-archive-password"
+
+func importBackend(inspected ownerdb.ImportStatus) *fakeBackend {
+	return &fakeBackend{on: map[string]func(*fakeBackend){
+		"inspect": func(f *fakeBackend) { f.imp = inspected },
+		"confirm": func(f *fakeBackend) {
+			f.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
+		},
+		"abort": func(f *fakeBackend) { f.imp = ownerdb.ImportStatus{} },
+	}}
+}
+
+func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, func() string) {
+	_, program, out, wait := startProgram(t, b)
+	downTo(program, b, "import")
+	send(program, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "synthetic-archive.zip"}, tea.KeyPressMsg{Code: 9}, tea.PasteMsg{Content: archivePassword}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
+	return program, out, wait
+}
+
+// The renderer diffs cells, so waits use text that shares no column with the row it replaces.
+func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {
+	b := importBackend(stagedBackend().imp)
+	program, out, wait := importFlow(t, b)
+	waitOutput(t, out, "Import preview")
+	program.Send(tea.KeyPressMsg{Code: 13}) // cursor 0: [Confirm import…]
+	waitOutput(t, out, "Type IMPORT")
+	send(program, tea.PasteMsg{Content: "IMPORT"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
+	waitOutput(t, out, "were added")
 	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	output.mu.Lock()
-	defer output.mu.Unlock()
-	if _, ok := model.TakeConnection(); ok || backend.closes != 1 || !strings.Contains(output.Buffer.String(), escaped("only")) {
-		t.Fatal("a single connection point was activated, or exit did not close once")
-	}
+	output := wait()
+	check(t, strings.Join(b.calls, ",") != "inspect,confirm" || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword || b.closes != 1 || strings.Contains(output, archivePassword), "program flow lost input, did not inspect, confirm and close once, or exposed the archive password")
 }
 
-func TestTeaRefreshHasOneScheduledSuccessor(t *testing.T) {
-	m := testModel(&fakeBackend{})
-	_, cmd := m.Update(tickMsg{})
-	if cmd == nil {
-		t.Fatal("status refresh chain stopped")
-	}
-	_, next := m.Update(cmd())
-	if next == nil {
-		t.Fatal("refresh did not schedule its successor")
-	}
-	_, extra := m.Update(operationMsg{})
-	if extra != nil {
-		t.Fatal("operation completion started a duplicate polling chain")
-	}
+func TestBubbleTeaProgramShowsFixedMessageForWrongPasswordAndEscapeAbortsOnce(t *testing.T) {
+	b := importBackend(ownerdb.ImportStatus{Err: ownerarchive.ErrAuthentication})
+	program, out, wait := importFlow(t, b)
+	waitOutput(t, out, "wrong archive password")
+	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	output := wait()
+	check(t, strings.Join(b.calls, ",") != "inspect" || strings.Contains(output, "Import preview"), "failed inspection staged a preview or called more")
+	check(t, strings.Contains(output, archivePassword) || strings.Contains(output, ownerarchive.ErrAuthentication.Error()), "output exposed the password or the raw error")
+	b = importBackend(stagedBackend().imp)
+	program, out, wait = importFlow(t, b)
+	waitOutput(t, out, "Import preview")
+	send(program, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	wait()
+	check(t, strings.Join(b.calls, ",") != "inspect,abort", "Escape on the preview did not abort exactly once without confirming")
 }

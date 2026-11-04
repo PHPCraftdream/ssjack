@@ -193,3 +193,65 @@ func TestDirectoryPasswordRoundtripAndCleanup(t *testing.T) {
 		t.Fatal("password memory was not cleared")
 	}
 }
+
+// TestEmptyDirectoryRoundtrip proves a version 2 database with zero servers,
+// credentials and secrets survives the codec: Ktav writes "{}" and decoding must
+// yield non-nil empty maps, which validate requires for version 2.
+func TestEmptyDirectoryRoundtrip(t *testing.T) {
+	v := New()
+	defer v.Close()
+	if err := v.UpgradeDirectory(); err != nil {
+		t.Fatal(err)
+	}
+	link := OwnerStore{Directory: t.TempDir(), StoreID: ownerID(1), Master: []byte("synthetic empty master")}
+	for _, linked := range []bool{false, true} {
+		if linked {
+			if err := v.LinkOwnerStore(link); err != nil {
+				t.Fatal(err)
+			}
+		}
+		encoded, err := marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := unmarshal(encoded)
+		clear(encoded)
+		if err != nil {
+			t.Fatal("empty version 2 database did not decode")
+		}
+		if decoded.Version != 2 || decoded.Targets == nil || decoded.Servers == nil || decoded.Secrets == nil ||
+			len(decoded.Targets) != 0 || len(decoded.Servers) != 0 || len(decoded.Secrets) != 0 {
+			decoded.Close()
+			t.Fatal("empty version 2 database lost its non-nil empty maps")
+		}
+		if err := decoded.validate(); err != nil {
+			decoded.Close()
+			t.Fatal(err)
+		}
+		if linked && (decoded.OwnerStore == nil || decoded.OwnerStore.Directory != link.Directory || decoded.OwnerStore.StoreID != link.StoreID) {
+			decoded.Close()
+			t.Fatal("empty linked database lost its owner store link")
+		}
+		decoded.Close()
+	}
+}
+
+// TestEmptyVersionOneKeepsNilDirectory keeps the version 1 contract: no
+// directory maps may appear when decoding a database without them.
+func TestEmptyVersionOneKeepsNilDirectory(t *testing.T) {
+	v := New()
+	defer v.Close()
+	encoded, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := unmarshal(encoded)
+	clear(encoded)
+	if err != nil {
+		t.Fatal("empty version 1 database did not decode")
+	}
+	defer decoded.Close()
+	if decoded.Version != 1 || decoded.Targets == nil || decoded.Servers != nil || decoded.Secrets != nil {
+		t.Fatal("version 1 decoding gained directory maps")
+	}
+}

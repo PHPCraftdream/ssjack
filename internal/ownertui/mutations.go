@@ -86,6 +86,25 @@ func (m *Model) performExport(f *form) error {
 	return m.backend.Flush(ctx)
 }
 
+// performPending dispatches one explicit owner decision; there is no automatic replay.
+func (m *Model) performPending(action string) error {
+	switch action {
+	case "retry-db":
+		return m.backend.RetryDatabase()
+	case "reconcile":
+		return m.backend.Reconcile()
+	case "resume-draft":
+		return m.backend.ResumeDraft()
+	case "cancel-draft":
+		return m.backend.CancelDraft()
+	case "resume-import":
+		return m.backend.ResumeImport()
+	case "abort-import":
+		return m.backend.AbortImport()
+	}
+	return errForm
+}
+
 func editDirectory(v *vault.Vault, f *form) error {
 	text := func(index int) string { return string(f.fields[index].value) }
 	if f.action == "edit-server" {

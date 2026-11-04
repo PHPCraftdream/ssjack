@@ -9,6 +9,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -147,4 +148,142 @@ func (m *Manager) applyValue(change vault.OwnerChange) (string, error) {
 		return "", errors.New("unsupported owner value change")
 	}
 	return hex.EncodeToString(object[:]), err
+}
+
+type ImportPhase string
+
+const (
+	ImportIdle       ImportPhase = ""
+	ImportInspecting ImportPhase = "inspecting"
+	ImportStaged     ImportPhase = "staged"
+	ImportApplying   ImportPhase = "applying"
+	ImportPartial    ImportPhase = "partial"
+	ImportComplete   ImportPhase = "complete"
+)
+
+// ImportStatus carries metadata only: never values, credentials or passwords.
+type ImportStatus struct {
+	Phase            ImportPhase
+	Preview          vault.ImportPreview
+	Conflicts        []vault.ImportConflict
+	Published, Total int
+	DirectoryApplied bool
+	Err              error
+}
+
+var (
+	ErrImportAborted     = errors.New("owner import was aborted")
+	errImportFailed      = errors.New("owner import failed")
+	errImportInterrupted = errors.New("owner import timed out or was interrupted")
+	errImportEvaluate    = errors.New("owner import cannot be evaluated against the destination")
+)
+
+// importState is guarded by Manager.mu. The staged OwnerImport is closed only
+// by the worker (completion) or by operator calls while no import job runs.
+// published maps alias ID to the exact destination ref this import recorded as
+// its receipt; inflight is the alias whose owner intent was staged by this
+// import and not yet receipted. Only these prove an alias is import-owned.
+type importState struct {
+	phase     ImportPhase
+	staged    *vault.OwnerImport
+	preview   vault.ImportPreview
+	err       error
+	path      string
+	password  []byte
+	cancel    context.CancelFunc
+	aborted   bool
+	effects   bool
+	published map[string]string
+	inflight  string
+	errOwned  bool // m.err was set by an import job
+}
+
+// reset discards every secret-bearing buffer and the plan metadata.
+func (s *importState) reset() {
+	s.staged.Close()
+	clear(s.password)
+	s.staged, s.password, s.preview, s.path, s.effects = nil, nil, vault.ImportPreview{}, "", false
+	s.published, s.inflight = nil, ""
+}
+
+// owns reports that the import controls the destination: between the
+// directory merge and completion no other edit may touch imported entries.
+func (s *importState) owns() bool {
+	return s.phase == ImportApplying || s.phase == ImportPartial
+}
+
+// receipt records the exact ref published for an alias and ends its flight.
+func (s *importState) receipt(alias, ref string) {
+	if s.published == nil {
+		s.published = make(map[string]string)
+	}
+	s.published[alias] = ref
+	if s.inflight == alias {
+		s.inflight = ""
+	}
+}
+
+// InspectImport reads the archive on the owner worker; the destination is
+// never touched. The outcome lives only in ImportStatus, never in m.err.
+func (m *Manager) InspectImport(path string, password []byte) error {
+	if path == "" || len(path) > 4096 || strings.ContainsAny(path, "\x00\r\n") || len(password) > 16384 {
+		return errors.New("invalid owner import path or password")
+	}
+	owned := append([]byte(nil), password...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch m.imp.phase {
+	case ImportInspecting, ImportStaged, ImportApplying, ImportPartial:
+		clear(owned)
+		return ErrPending
+	}
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil {
+		clear(owned)
+		return ErrPending
+	}
+	m.imp.reset()
+	m.imp.phase, m.imp.err, m.imp.aborted = ImportInspecting, nil, false
+	m.imp.path, m.imp.password = path, owned
+	m.busy = true
+	m.jobs <- ":import-inspect"
+	m.signal()
+	return nil
+}
+
+// inspectImport always returns nil so a bad archive or password cannot wedge
+// the manager behind m.err.
+func (m *Manager) inspectImport(ctx context.Context) error {
+	m.mu.Lock()
+	path, password := m.imp.path, m.imp.password
+	m.imp.path, m.imp.password = "", nil
+	m.mu.Unlock()
+	defer clear(password)
+	staged, err := m.readImport(ctx, path, password)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil && m.imp.aborted {
+		staged.Close()
+		staged, err = nil, ErrImportAborted
+	}
+	if err != nil {
+		m.imp.phase, m.imp.err = ImportIdle, safeImportError(err)
+		return nil
+	}
+	m.imp.staged, m.imp.preview, m.imp.phase, m.imp.err = staged, staged.Preview(), ImportStaged, nil
+	return nil
+}
+
+func (m *Manager) readImport(ctx context.Context, path string, password []byte) (*vault.OwnerImport, error) {
+	if err := m.importStopped(ctx); err != nil {
+		return nil, err
+	}
+	if err := syncDatabase(ctx, m.path, m.db); err != nil {
+		return nil, err
+	}
+	opened, err := ownerarchive.ReadFile(ctx, path, password)
+	if err != nil {
+		return nil, err
+	}
+	defer opened.Close()
+	return vault.ParseOwnerImport(opened)
 }

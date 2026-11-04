@@ -115,10 +115,14 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 	if err := manager.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Archives are made while the source session is open; the import runs after
+	// Close because a linked installation admits one owner session at a time.
+	archives := ownerImportArchives(t, ctx, manager, server, alias)
 	ownerExportAcceptance(t, ctx, manager, path, password, server, alias, v.Targets["legacy"])
 	if err := manager.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	ownerImportAcceptance(t, ctx, storeDirectory, master, password, archives, v)
 	loaded, err := vault.Load(path, password)
 	if err != nil {
 		t.Fatal(err)

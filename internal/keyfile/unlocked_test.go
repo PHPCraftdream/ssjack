@@ -162,3 +162,55 @@ func TestMasterKeyHoldsProcessKDFAdmission(t *testing.T) {
 		release()
 	}
 }
+
+func TestUnlockedOpenAuthenticatesOwnContainersOnly(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		calls := 0
+		derive := func(password, salt []byte) []byte { calls++; return testDerive(password, salt) }
+		u, err := newUnlocked([]byte("secret"), version, derive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer u.Close()
+		other, err := newUnlocked([]byte("secret"), version, testDerive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		payloads := [][]byte{[]byte("first payload"), {0x01, 'a', 0, 255}}
+		for _, want := range payloads {
+			sealed, err := u.Seal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := u.Open(sealed)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("v%d open round trip: %v", version, err)
+			}
+			clear(got)
+			tampered := append([]byte(nil), sealed...)
+			tampered[len(tampered)/2] ^= 1
+			if _, err := u.Open(tampered); err == nil {
+				t.Fatal("tampered container accepted")
+			}
+			foreign, err := other.Seal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := u.Open(foreign); err == nil {
+				t.Fatal("container from another unlock accepted")
+			}
+		}
+		if calls != 4 {
+			t.Fatalf("Open ran the KDF: %d", calls)
+		}
+		sealed, err := u.Seal([]byte("late"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Close()
+		if _, err := u.Open(sealed); err == nil {
+			t.Fatal("closed context opened data")
+		}
+	}
+}

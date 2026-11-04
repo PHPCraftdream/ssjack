@@ -19,6 +19,7 @@ const (
 	secretScreen
 	formScreen
 	confirmScreen
+	importScreen
 )
 
 type location struct {
@@ -81,7 +82,7 @@ func connectionItems(metadata vault.DirectoryMetadata) []item {
 func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	switch at.screen {
 	case databaseScreen:
-		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}...)
+		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Import credentials and values", action: "import"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}...)
 	case serversScreen:
 		result := []item{{label: "[Add server]", action: "add-server"}}
 		for _, server := range metadata.Servers {

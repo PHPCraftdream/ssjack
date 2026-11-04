@@ -25,6 +25,33 @@ func ownerDescriptor() (*windows.SECURITY_DESCRIPTOR, string, error) {
 	return descriptor, sid, nil
 }
 
+// openArchive opens an existing disk file for reading. The reparse point is
+// opened itself (not followed) and then refused, and the type is checked on the
+// open handle, so symlinks, pipes, devices, directories and swapped paths fail.
+func openArchive(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, ErrArchive
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return nil, ErrArchive
+	}
+	var info windows.ByHandleFileInformation
+	kind, typeErr := windows.GetFileType(handle)
+	if typeErr != nil || kind != windows.FILE_TYPE_DISK || windows.GetFileInformationByHandle(handle, &info) != nil ||
+		info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
+		windows.CloseHandle(handle)
+		return nil, ErrArchive
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		windows.CloseHandle(handle)
+		return nil, ErrArchive
+	}
+	return file, nil
+}
+
 func newPrivateFile(destination string) (*os.File, error) {
 	descriptor, _, err := ownerDescriptor()
 	if err != nil {

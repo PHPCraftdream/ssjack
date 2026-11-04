@@ -34,12 +34,42 @@ extra, duplicate or oversized inputs. It owns copies of its inputs and clears
 owned buffers on close, best-effort within the trusted Go runtime. No claim of
 complete application RAM erasure is made.
 
-A future reader must authenticate the manifest first, reject duplicate/unlisted ZIP
-entries, verify each exact name/length/digest and authenticate each individual
-container with the selected database password. It must enforce the same bounds
-and require all selected values; extracting files is not authenticated import or
-restoration. Reader/import integration and wrong-password production acceptance
-are not yet implemented by this core.
+## Reader
+
+`ownerarchive.ReadFile` (and `Read` for bytes already in memory) is the only
+reader. It authenticates before it trusts and never extracts or stages files:
+
+- The path is opened exactly once: with a no-follow, nonblocking descriptor on
+  Unix, or a reparse-point-aware, disk-file-only handle on Windows. The type is
+  checked on that open handle, so a FIFO, device, symlink, directory or a file
+  replaced after any earlier check is refused without blocking. It must be a
+  regular file of at most 40 MiB, read fully into one exact-size RAM buffer.
+  `Read` enforces the same 40 MiB bound for data already in memory.
+- At most 130 ZIP entries (128 values plus database and manifest), `Store`
+  method only, no duplicates, no encrypted-ZIP flags. Names are a whitelist:
+  the manifest, the database and `secrets/ALIAS_ID.bin` (plus `.ktav` when
+  sealed); a plaintext and a sealed manifest together are refused. Each entry's
+  declared size is bounded before it is opened.
+- The manifest is parsed strictly (no unknown or duplicate keys) and must
+  re-encode to exactly the same bytes. Every listed record's name, length and
+  SHA-256 digest is verified over the stored entry bytes **before** that entry is
+  decrypted. The database entry must list exactly the manifest's aliases, and
+  every alias value must be present.
+- Encrypted archives cost one unlock (four sequential Argon2id derivations): the manifest is unlocked with
+  `keyfile.Unlock`, and the returned `Unlocked.Open` opens every other entry
+  under that same key. A plaintext archive ignores any password.
+- An archived database containing `owner_store` is refused. Archived secret
+  references are parsed only to check the inventory.
+
+Errors are classified. `ErrAuthentication` means a wrong password, modified
+ciphertext or a digest/length mismatch of an encrypted entry. `ErrArchive` means a
+structurally invalid, unsupported or over-bound archive (including a plaintext
+digest mismatch). Neither carries archive content. `Opened` owns authenticated
+copies until `Close`, which clears them.
+
+Owner import builds on this reader; see
+[owner coordinator](OWNER-COORDINATOR.md#owner-import) and
+[owner terminal editor](OWNER-TUI.md#owner-import).
 
 ## Deliberate plaintext artifact
 
@@ -89,5 +119,7 @@ future latest-state freshness.
 
 Full CI helpers cover actual sealed credentials, wrong-password rejection and
 private app-store value collection, plus plaintext export and overwrite refusal.
-The reader/import interface remains unfinished. Existing keyfile tools can decode each authenticated container; the
-actual Ktav directory entry retains the ordinary v2 database shape.
+Production-profile acceptance also imports both archive kinds into fresh
+databases (see the coordinator document). Existing keyfile tools can still decode
+each authenticated container; the Ktav directory entry retains the ordinary v2
+database shape.

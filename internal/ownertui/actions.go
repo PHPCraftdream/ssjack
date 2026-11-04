@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -51,6 +52,9 @@ func (m *Model) describe() string {
 	at := m.at
 	if m.form != nil {
 		at = m.form.origin
+	}
+	if at.screen == importScreen {
+		return "Import preview — nothing is applied until you confirm"
 	}
 	label := "Database / Global scope"
 	for _, server := range m.metadata.Servers {
@@ -141,7 +145,11 @@ func (m *Model) openForm(action string) {
 	case "remove-secret":
 		f.fields = []field{input("Confirmation", "Type REMOVE to remove the selected named secret.", 16, false, "")}
 	case "pending":
-		f.fields = []field{input("Action", "retry-db, reconcile, resume-draft or cancel-draft; no automatic replay.", 32, false, "")}
+		f.fields = []field{input("Action", "retry-db, reconcile, resume-draft, cancel-draft, resume-import or abort-import; no automatic replay.", 32, false, "")}
+	case "import", "import-confirm":
+		if !m.prepareImportForm(f) {
+			return
+		}
 	default:
 		m.message = "Unsupported owner action."
 		return
@@ -175,22 +183,14 @@ func (m *Model) perform(f *form) error {
 	switch f.action {
 	case "export":
 		return m.performExport(f)
+	case "import", "import-confirm":
+		return m.performImport(f)
 	case "link":
 		return m.backend.Link(value(0), f.fields[1].value)
 	case "add-server", "add-account", "edit-account", "rename-server", "edit-server":
 		return m.backend.Edit(func(v *vault.Vault) error { return editDirectory(v, f) })
 	case "pending":
-		switch value(0) {
-		case "retry-db":
-			return m.backend.RetryDatabase()
-		case "reconcile":
-			return m.backend.Reconcile()
-		case "resume-draft":
-			return m.backend.ResumeDraft()
-		case "cancel-draft":
-			return m.backend.CancelDraft()
-		}
-		return errForm
+		return m.performPending(value(0))
 	case "add-secret", "edit-secret", "remove-secret":
 		return m.submitSecret(f)
 	}
@@ -226,17 +226,17 @@ func (m *Model) Connected(code int, err error) {
 // item (label included) is gone, the cursor resets and Enter is blocked until
 // the owner moves deliberately. Nothing is flagged before the first list was
 // shown or while a form is open.
-func (m *Model) applyMetadata(next vault.DirectoryMetadata) {
-	old := navigation(m.at, m.metadata)
+func (m *Model) applyMetadata(next vault.DirectoryMetadata, imports ownerdb.ImportStatus) {
+	old := m.items()
 	focused, tracked := item{}, m.form == nil && m.ready && m.cursor >= 0 && m.cursor < len(old)
 	if tracked {
 		focused = old[m.cursor]
 	}
-	m.metadata = next
+	m.metadata, m.imp = next, imports
 	if !tracked {
 		return
 	}
-	for i, candidate := range navigation(m.at, next) {
+	for i, candidate := range m.items() {
 		if candidate == focused {
 			m.cursor = i
 			return
@@ -263,6 +263,10 @@ func (m *Model) activate(selected item, enter bool) tea.Cmd {
 		return tea.Quit
 	case "none":
 		m.message = "No SSH connection is available; add a server account that permits human use."
+	case "info":
+		// Preview rows are read-only.
+	case "import-cancel":
+		m.back()
 	case "":
 		m.push(selected.target)
 	default:
