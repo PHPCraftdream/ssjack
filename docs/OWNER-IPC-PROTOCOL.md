@@ -10,9 +10,9 @@ The coordinator foundation adds atomic expected-revision admission, a metadata
 snapshot tied to one revision, authenticated vault adoption without another KDF,
 and narrow owner packet capabilities. Directory forms share one typed mutation
 implementation. A form may pin its displayed revision through a scoped backend;
-this does not itself provide the remote backend or RPC service. Dispatcher,
-helper/keeper lifecycle, single-writer exclusion and cross-process integration
-remain unfinished.
+the typed remote backend now maps these operations to the closed packet union.
+This does not itself provide a running RPC service. Dispatcher, helper/keeper
+lifecycle, single-writer exclusion and cross-process integration remain unfinished.
 
 The local owner backend now pins every form operation to its displayed revision.
 Metadata, database status, import counts and saved ciphertext evidence are read
@@ -24,8 +24,8 @@ not increment that revision or run another KDF. Callbacks cannot re-enter the va
 session. Directory edits refuse while the owner worker is busy, so a queued export,
 link or import cannot silently adopt intervening connection edits.
 
-These local paths are prerequisites for RPC dispatch, not an implemented remote
-backend, endpoint lifecycle or complete exclusion of legacy command writers.
+These local paths and the typed remote backend are prerequisites for RPC dispatch,
+not accepted endpoint lifecycle or complete exclusion of legacy command writers.
 
 ## Keeper authentication lifetime
 
@@ -134,6 +134,25 @@ flush. Replies contain only directory/import metadata and persistence evidence;
 there is no stored-secret or master getter. Mutating requests carry an expected
 revision, whose atomic admission must be enforced by the integrated coordinator.
 A successful receipt is not application adoption or an environment reload.
+
+## Typed remote forms
+
+`ownerbackend.Remote` implements the shared form backend over an authenticated RPC
+client. It reads each form snapshot atomically and requires an immutable
+`AtRevision` scope for mutations; it never fetches a newer revision to substitute
+for a stale form. Directory changes use the existing typed dispatch seam. Arbitrary
+Go edit callbacks refuse without execution or serialization.
+
+Owner-selected archive/store/key-file paths are made absolute in the helper before
+sending, not interpreted relative to the keeper's working directory. Empty paths
+refuse. Password bytes are never path-normalized. Keeper-side protected file and
+operation validation still applies; absolute paths are not authorization.
+
+Closing a remote form first requests flush, then detaches only its client peer.
+A failed flush does not claim saved success or close the keeper. The helper must
+also close its client on abandoned/error exits before closing its own unlock.
+Routing and shared-form tests do not establish live keeper attachment or import
+plan ownership; those remain integration requirements.
 
 ## Bounded RPC exchange
 

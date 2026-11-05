@@ -18,6 +18,7 @@ import (
 type clientProbe struct {
 	commands, replies, closes int
 	badReply                  bool
+	errorCode                 string
 }
 
 func (p *clientProbe) AcceptHello([]byte) ([]byte, error) { return []byte("auth"), nil }
@@ -33,7 +34,7 @@ func (p *clientProbe) OpenReply([]byte) (ownerpacket.Reply, error) {
 	if p.badReply {
 		return ownerpacket.Reply{}, ownerpacket.ErrAuthentication
 	}
-	return ownerpacket.Reply{Status: ownerpacket.Status{Revision: 9}}, nil
+	return ownerpacket.Reply{ErrorCode: p.errorCode, Status: ownerpacket.Status{Revision: 9}}, nil
 }
 
 type exchangeConnection struct {
@@ -101,6 +102,20 @@ func TestClientNeverReplaysAnUncertainExchange(t *testing.T) {
 				t.Fatal("client failed to close owned connection and peer exactly once")
 			}
 		})
+	}
+}
+
+func TestExecuteProjectsOneReplyAndPreservesFixedRefusals(t *testing.T) {
+	for _, code := range []string{"", "stale", "pending", "uncertain"} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		p := &clientProbe{errorCode: code}
+		c := newClient(&exchangeConnection{input: frames("reply")}, p)
+		snapshot, err := c.Execute(ctx, ownerpacket.Command{Operation: "snapshot"})
+		c.Close()
+		cancel()
+		if snapshot.Status.Database.Revision != 9 || !errors.Is(err, codeError(code)) || p.commands != 1 || p.replies != 1 {
+			t.Fatal("RPC execution changed its atomic snapshot, refusal or message count")
+		}
 	}
 }
 

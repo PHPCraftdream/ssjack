@@ -2,6 +2,7 @@
 package ownerrpc
 
 import (
+	"context"
 	"errors"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
@@ -9,6 +10,15 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
+
+// Execute returns one authenticated atomic snapshot and a fixed operation error.
+func (c *Client) Execute(ctx context.Context, command ownerpacket.Command) (ownerdb.Snapshot, error) {
+	reply, err := c.Call(ctx, command)
+	if err != nil {
+		return ownerdb.Snapshot{}, err
+	}
+	return decodeSnapshot(reply)
+}
 
 var errOperation = errors.New("owner operation failed; inspect state before retrying")
 var errDatabase = errors.New("owner database persistence failed")
