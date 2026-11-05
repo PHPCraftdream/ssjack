@@ -105,6 +105,30 @@ func TestClientNeverReplaysAnUncertainExchange(t *testing.T) {
 	}
 }
 
+type endingHandler struct {
+	connection *exchangeConnection
+	bounded    bool
+}
+
+func (h *endingHandler) Dispatch(context.Context, *ownerpacket.Command) ownerpacket.Reply {
+	return ownerpacket.Reply{}
+}
+func (h *endingHandler) EndLease(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	h.bounded = ok && ctx.Err() == nil && time.Until(deadline) > 0 && time.Until(deadline) <= time.Minute && h.connection.closes == 1
+	return errors.New("synthetic-private-lease-diagnostic")
+}
+
+func TestServePeerEndsLeaseAfterIOWithAnIndependentBound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	connection := &exchangeConnection{input: frames()}
+	handler := &endingHandler{connection: connection}
+	if err := ServePeer(ctx, connection, nil, handler); !errors.Is(err, ownerpacket.ErrUncertain) || !handler.bounded {
+		t.Fatal("peer release ignored failure, leaked diagnostics or reused cancelled context before I/O closure")
+	}
+}
+
 func TestExecuteProjectsOneReplyAndPreservesFixedRefusals(t *testing.T) {
 	for _, code := range []string{"", "stale", "pending", "uncertain"} {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

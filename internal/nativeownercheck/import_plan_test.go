@@ -98,11 +98,20 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	if completed.Import.Phase != ownerdb.ImportComplete || completed.Import.PlanID != second.Import.PlanID {
 		t.Fatal("current plan confirmation did not complete its exact plan")
 	}
+	if err := manager.ReleaseImportPlan(completed.Import.PlanID); !errors.Is(err, ownerdb.ErrPending) {
+		t.Fatal("helper cleanup discarded effectful import state")
+	}
+	retained, err := manager.Snapshot()
+	must(t, err)
+	if !reflect.DeepEqual(retained, completed) {
+		t.Fatal("helper cleanup changed effectful import recovery state")
+	}
 	must(t, manager.AbortImportPlanAt(completed.Status.Database.Revision, completed.Import.PlanID))
 	cleared, err := manager.Snapshot()
 	must(t, err)
 	if cleared.Import.PlanID != 0 || cleared.Import.Phase != ownerdb.ImportIdle {
 		t.Fatal("discarded RAM plan retained an active identity")
 	}
+	t.Run("manager-rpc", func(t *testing.T) { verifyManagerRPC(t, ctx, path, password, firstPath, manager) })
 	must(t, manager.Close(ctx))
 }

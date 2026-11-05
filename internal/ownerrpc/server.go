@@ -26,7 +26,16 @@ type serverPeer interface {
 
 // ServePeer consumes the connection and packet peer, never the parent unlock.
 // The caller must join it before closing the borrowed database context.
-func ServePeer(ctx context.Context, connection ownerlocal.Connection, peer *ownerpacket.Server, handler Handler) error {
+func ServePeer(ctx context.Context, connection ownerlocal.Connection, peer *ownerpacket.Server, handler Handler) (result error) {
+	if lease, ok := handler.(interface{ EndLease(context.Context) error }); ok {
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if err := lease.EndLease(cleanup); err != nil {
+				result = ownerpacket.ErrUncertain
+			}
+		}()
+	}
 	if connection == nil || peer == nil || handler == nil {
 		if connection != nil {
 			connection.Close()

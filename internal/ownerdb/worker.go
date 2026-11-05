@@ -98,6 +98,16 @@ func (m *Manager) jobContext(id string) (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
+// ReleaseImportPlan drops only no-effect RAM state owned by a departing helper.
+func (m *Manager) ReleaseImportPlan(plan uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if plan == 0 || plan != m.imp.planID || m.imp.effects || m.imp.phase == ImportPartial {
+		return ErrPending
+	}
+	return m.abortImportLocked()
+}
+
 // importStopped reports an operator abort before a context timeout.
 func (m *Manager) importStopped(ctx context.Context) error {
 	m.mu.Lock()

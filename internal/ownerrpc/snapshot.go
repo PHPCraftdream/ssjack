@@ -89,6 +89,9 @@ func cloneMCP(m mcpdirectory.Metadata) mcpdirectory.Metadata {
 	return out
 }
 
+// SnapshotReply copies caller-owned metadata into a closed reply, never a getter.
+func SnapshotReply(s ownerdb.Snapshot, err error) ownerpacket.Reply { return encodeSnapshot(s, err) }
+
 func encodeSnapshot(s ownerdb.Snapshot, err error) ownerpacket.Reply {
 	r := ownerpacket.Reply{ErrorCode: errorCode(err)}
 	r.Status = ownerpacket.Status{

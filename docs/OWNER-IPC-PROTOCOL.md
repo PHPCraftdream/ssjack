@@ -11,8 +11,9 @@ snapshot tied to one revision, authenticated vault adoption without another KDF,
 and narrow owner packet capabilities. Directory forms share one typed mutation
 implementation. A form may pin its displayed revision through a scoped backend;
 the typed remote backend now maps these operations to the closed packet union.
-This does not itself provide a running RPC service. Dispatcher, helper/keeper
-lifecycle, single-writer exclusion and cross-process integration remain unfinished.
+Manager dispatch is now composed as an internal library, not a running keeper RPC
+service. Helper/keeper lifecycle, single-writer exclusion and cross-process startup
+integration remain unfinished.
 
 The local owner backend now pins every form operation to its displayed revision.
 Metadata, database status, import counts and saved ciphertext evidence are read
@@ -165,8 +166,8 @@ form. Leaving a preview also targets its displayed revision and plan.
 
 The closed protocol requires a nonzero `plan` only for confirm/resume/abort import
 decisions and returns `PlanID` in import metadata. Plan identity is neither a grant
-nor authentication: authenticated helper/lease ownership and disconnect cleanup
-still need integration. The fields are RAM/protocol metadata, not a vault schema
+nor authentication. The helper ownership described below does not replace packet
+authentication, keeper lifecycle or legacy-writer exclusion. The fields are RAM/protocol metadata, not a vault schema
 change. Native production acceptance replaces plan A with B at the same database
 revision and requires stale A decisions to leave the full snapshot unchanged.
 
@@ -185,11 +186,43 @@ active exchange before releasing the packet capability. Callers must join the
 server peer before closing its parent database context. The server clears decoded
 private command buffers after every dispatched outcome, including failed replies.
 
-This layer accepts only the closed command/reply types. Its trusted handler still
-needs Manager admission, helper/import-plan ownership and lifecycle integration;
-it is not a running keeper service or authorization to expose a generic callback
-through MCP. Native acceptance uses a synthetic handler, actual OS transport and
-independently unlocked production contexts; it does not prove Manager dispatch.
+This layer accepts only the closed command/reply types. `ownerdispatch` supplies
+Manager admission and helper/import-plan ownership as described below. This is not
+a running keeper service or authorization to expose a generic callback through
+MCP. The low-level native exchange fixture uses a synthetic handler; a separate
+native Manager fixture composes actual dispatch and shared forms.
+
+## Manager dispatch and helper ownership
+
+One `ownerdispatch.Dispatcher` belongs to one retained Manager. Each packet
+connection gets a fresh bounded peer handler; creating a handler does not prove
+authentication. Only the mutually authenticated `ServePeer` path may expose it.
+Commands are validated against the closed union, serialized with cancellable
+admission, and routed to the Manager's revision/plan-aware APIs. Replies use one
+post-operation atomic snapshot and fixed error codes; there is no stored-value or
+master getter and no automatic replay.
+
+A live helper owns the import it inspected. Another helper may read metadata or
+wait for persistence, but cannot confirm, abort or mutate that plan or its directory
+merely because it knows the PlanID. A disconnected partial plan can be reclaimed
+only after a fresh matching metadata snapshot and an explicit import/recovery
+decision. Reading a snapshot or attaching a new helper never resumes work by itself.
+These are concurrency/lifecycle safeguards, not multi-owner RBAC: the database
+password still owns all database contents.
+
+`ServePeer` closes and joins packet I/O, then ends an owned handler lease with an
+independent bounded context. Manager cleanup atomically cancels or drops only
+matching no-effect RAM state. It refuses to discard any effectful/partial plan;
+failed cleanup returns a fixed uncertain outcome rather than saved success. The
+remaining plan and durable intent stay available for explicit recovery. Neither
+helper detach nor lease release closes the keeper or its parent key context.
+
+Native Manager acceptance uses two independently unlocked helpers, real OS
+transport and production crypto. It proves live-plan exclusion, no-effect disconnect
+cleanup, an actual shared owner form editing/saving through RPC, stale-form refusal,
+private ciphertext persistence and the coordinator remaining available after helper
+detach. Keeper startup, process-level writer exclusion and SSH handoff remain a
+separate runtime integration gate.
 
 ## Native database publication
 

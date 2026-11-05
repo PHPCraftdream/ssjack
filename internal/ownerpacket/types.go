@@ -260,6 +260,8 @@ func (r Reply) valid() bool {
 	return r.Status.SavedRevision <= r.Status.Revision
 }
 
+func (c Command) Valid() bool { return c.valid() }
+
 func (c DirectoryChange) Valid() bool {
 	revision := uint64(0)
 	return (Command{Operation: "directory", Revision: &revision, Directory: &c}).valid()
