@@ -9,6 +9,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -279,15 +280,4 @@ func (m *Manager) abortImportLocked() error {
 	return nil
 }
 
-func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent {
-	if pending == nil {
-		return nil
-	}
-	copy := *pending
-	copy.Change.Value = append([]byte{}, pending.Change.Value...)
-	copy.Versions = make(map[string]string, len(pending.Versions))
-	for object, version := range pending.Versions {
-		copy.Versions[object] = version
-	}
-	return &copy
-}
+func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent { return ownerclone.Intent(pending) }

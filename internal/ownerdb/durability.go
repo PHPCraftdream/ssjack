@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -280,12 +281,4 @@ func (m *Manager) MetadataSnapshot() (vault.DirectoryMetadata, vault.SessionStat
 	return m.db.MetadataSnapshot()
 }
 
-func clonePreview(p vault.ImportPreview) vault.ImportPreview {
-	out := vault.ImportPreview{Encrypted: p.Encrypted, Servers: make([]vault.ImportServer, 0, len(p.Servers)), Secrets: append([]vault.ImportSecret{}, p.Secrets...), Conflicts: append([]vault.ImportConflict{}, p.Conflicts...)}
-	for _, server := range p.Servers {
-		server.Fingerprints = append([]string{}, server.Fingerprints...)
-		server.Accounts = append([]vault.ImportAccount(nil), server.Accounts...)
-		out.Servers = append(out.Servers, server)
-	}
-	return out
-}
+func clonePreview(p vault.ImportPreview) vault.ImportPreview { return ownerclone.Preview(p) }

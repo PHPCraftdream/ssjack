@@ -12,6 +12,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -88,24 +89,8 @@ func Adopt(ctx context.Context, path string, loaded *vault.Vault) (*Manager, err
 	return m, nil
 }
 
-func copyLink(link *vault.OwnerStore) *vault.OwnerStore {
-	if link == nil {
-		return nil
-	}
-	copy := *link
-	copy.Master = append([]byte(nil), link.Master...)
-	copy.Pending = copyIntent(link.Pending)
-	return &copy
-}
-
-func clearLink(link *vault.OwnerStore) {
-	if link != nil {
-		clear(link.Master)
-		if link.Pending != nil {
-			clear(link.Pending.Change.Value)
-		}
-	}
-}
+func copyLink(link *vault.OwnerStore) *vault.OwnerStore { return ownerclone.Link(link) }
+func clearLink(link *vault.OwnerStore)                  { ownerclone.ClearLink(link) }
 
 func (m *Manager) signal() {
 	close(m.changed)
