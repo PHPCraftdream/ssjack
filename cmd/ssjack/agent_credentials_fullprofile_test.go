@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -36,7 +37,9 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	public, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public())
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	defer clear(private)
+	public, err := ssh.NewPublicKey(private.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +51,17 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 	defer v.Close()
 	target := vault.Target{Address: server.address(), User: "second", Password: []byte(connectPassword), HostKeys: []string{string(ssh.MarshalAuthorizedKey(server.hostKey))}, Usage: "agent"}
 	defer clear(target.Password)
+	expectedAuthentication := "second|password"
+	if !directory {
+		block, err := ssh.MarshalPrivateKey(private, "synthetic keeper lifetime fixture")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(block.Bytes)
+		target.User, target.Password, target.PrivateKey = "first", nil, pem.EncodeToMemory(block)
+		defer clear(target.PrivateKey)
+		expectedAuthentication = "first|publickey"
+	}
 	selection, serverID := "main", ""
 	if directory {
 		serverID, err = v.AddServer("production", "main", target)
@@ -106,7 +120,7 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 	if _, err := credentials.runner(ctx, credentials.targets[0], "true", io.Discard, io.Discard); err == nil {
 		t.Fatal("shell-only fixture unexpectedly accepted exec")
 	}
-	if !reflect.DeepEqual(server.authentications(), []string{"second|password"}) {
+	if !reflect.DeepEqual(server.authentications(), []string{expectedAuthentication}) {
 		t.Fatal("keeper runner adopted later database edits or borrowed cleared credentials")
 	}
 	code := 0
@@ -134,7 +148,7 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 		if err != nil || loaded.Targets[profile].User != "edited" || loaded.Targets[profile].Usage != "human" {
 			t.Fatal("retained owner changes did not survive keeper shutdown")
 		}
-	} else if loaded.Targets["main"].User != "second" {
+	} else if loaded.Targets["main"].User != "first" {
 		t.Fatal("legacy read-only startup changed its record")
 	}
 }
