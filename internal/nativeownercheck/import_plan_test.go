@@ -3,8 +3,10 @@ package nativeownercheck
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 
 	"github.com/ktav-lang/golang/pure"
@@ -13,6 +15,30 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
+
+func inspectPlanPreflight(t *testing.T, ctx context.Context, database, archive string) {
+	t.Helper()
+	opened, readErr := ownerarchive.ReadFile(ctx, archive, nil)
+	parsed := false
+	if readErr == nil {
+		plan, parseErr := vault.ParseOwnerImport(opened)
+		parsed = parseErr == nil
+		if plan != nil {
+			plan.Close()
+		}
+		opened.Close()
+	}
+	parent, openErr := os.Open(filepath.Dir(database))
+	var syncErr error
+	if openErr == nil {
+		syncErr = parent.Sync()
+		parent.Close()
+	}
+	var openCode, syncCode syscall.Errno
+	errors.As(openErr, &openCode)
+	errors.As(syncErr, &syncCode)
+	t.Logf("import preflight archive_read=%t archive_parse=%t parent_open=%t parent_sync=%t open_errno=%d sync_errno=%d", readErr == nil, parsed, openErr == nil, openErr == nil && syncErr == nil, uint64(openCode), uint64(syncCode))
+}
 
 func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	t.Helper()
@@ -41,6 +67,8 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	first, err := manager.Snapshot()
 	must(t, err)
 	if first.Import.Phase != ownerdb.ImportStaged || first.Import.PlanID == 0 || first.Status.Database.Revision != before.Status.Database.Revision {
+		t.Logf("inspection phase=%q plan=%d revision=%d expected=%d failed=%t", first.Import.Phase, first.Import.PlanID, first.Status.Database.Revision, before.Status.Database.Revision, first.Import.Err != nil)
+		inspectPlanPreflight(t, ctx, path, firstPath)
 		t.Fatal("first inspection lacked a RAM plan identity or changed the database")
 	}
 	must(t, manager.AbortImportPlanAt(first.Status.Database.Revision, first.Import.PlanID))
