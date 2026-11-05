@@ -10,6 +10,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/owneredit"
+	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -20,6 +21,9 @@ func (m *Model) describe() string {
 	}
 	if at.screen == importScreen {
 		return "Import preview — nothing is applied until you confirm"
+	}
+	if at.screen >= mcpDirectoryScreen && at.screen <= mcpAccountScreen {
+		return ownermcp.Describe(at.server, at.account, m.metadata.RemoteMCP)
 	}
 	label := "Database / Global scope"
 	for _, server := range m.metadata.Servers {
@@ -119,8 +123,13 @@ func (m *Model) openForm(action string) {
 			return
 		}
 	default:
-		m.message = "Unsupported owner action."
-		return
+		for _, descriptor := range ownermcp.Fields(action, m.at.server, m.at.account, m.metadata.RemoteMCP) {
+			f.fields = append(f.fields, input(descriptor.Label, descriptor.Help, descriptor.Limit, descriptor.Secret, descriptor.Value))
+		}
+		if len(f.fields) == 0 {
+			m.message = "Unsupported owner action."
+			return
+		}
 	}
 	m.push(location{screen: formScreen})
 	m.form = f
@@ -144,7 +153,8 @@ func (m *Model) perform(f *form) error {
 		return m.performImport(f)
 	case "link":
 		return m.backend.Link(value(0), f.fields[1].value)
-	case "add-server", "add-account", "edit-account", "rename-server", "edit-server", "edit-proxy":
+	case "add-server", "add-account", "edit-account", "rename-server", "edit-server", "edit-proxy",
+		"add-mcp-server", "edit-mcp-server", "remove-mcp-server", "add-mcp-account", "edit-mcp-account", "rename-mcp-account", "remove-mcp-account", "edit-mcp-header":
 		return owneredit.Dispatch(m.backend, directoryChange(f))
 	case "pending":
 		return m.performPending(value(0))

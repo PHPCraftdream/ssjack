@@ -85,7 +85,7 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 			return ErrArguments
 		}
 	}
-	needsServer := spec.Scope == "server" || spec.Scope == "account"
+	needsServer := spec.Scope == "server" || spec.Scope == "account" || spec.Scope == "mcp-server" || spec.Scope == "mcp-account"
 	if spec.Scope == "secrets" || spec.Scope == "secret" {
 		if r.Scope != "global" && r.Scope != "server" {
 			return ErrArguments
@@ -105,8 +105,8 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 	if needsServer != (r.Server != "") {
 		return ErrArguments
 	}
-	needsAccount := spec.Scope == "account" || (spec.Scope == "export" && r.Scope == "account")
-	allowsAccount := needsAccount || spec.Action == "add-account" || spec.Action == "add-server"
+	needsAccount := spec.Scope == "account" || spec.Scope == "mcp-account" || (spec.Scope == "export" && r.Scope == "account")
+	allowsAccount := needsAccount || spec.Action == "add-account" || spec.Action == "add-server" || spec.Action == "add-mcp-account"
 	if (needsAccount && r.Account == "") || (!allowsAccount && r.Account != "") {
 		return ErrArguments
 	}
@@ -118,6 +118,20 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 	}
 	if format, ok := r.Fields["Format"]; ok && format != "encrypted" && format != "plaintext" {
 		return ErrArguments
+	}
+	if kind, ok := r.Fields["MCP authentication"]; ok && kind != "none" && kind != "bearer" && kind != "basic" {
+		return ErrArguments
+	}
+	for label, choices := range map[string][]string{"Enabled": {"true", "false"}, "Credential action": {"keep", "replace", "clear"}, "Header action": {"replace", "clear"}} {
+		if value, exists := r.Fields[label]; exists {
+			valid := false
+			for _, choice := range choices {
+				valid = valid || value == choice
+			}
+			if !valid {
+				return ErrArguments
+			}
+		}
 	}
 	if kind, ok := r.Fields["Proxy type"]; ok && kind != "direct" && kind != "socks5" && kind != "http" {
 		return ErrArguments

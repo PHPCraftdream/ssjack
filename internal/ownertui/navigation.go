@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
+	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -23,6 +24,9 @@ const (
 	formScreen
 	confirmScreen
 	importScreen
+	mcpDirectoryScreen
+	mcpServerScreen
+	mcpAccountScreen
 )
 
 type location struct {
@@ -95,7 +99,7 @@ func connectionItems(metadata vault.DirectoryMetadata) []item {
 func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	switch at.screen {
 	case databaseScreen:
-		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Import credentials and values", action: "import"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}...)
+		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Remote MCP servers", target: location{screen: mcpDirectoryScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Import credentials and values", action: "import"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}...)
 	case serversScreen:
 		result := []item{{label: "[Add server]", action: "add-server"}}
 		for _, server := range metadata.Servers {
@@ -141,6 +145,8 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 		return result
 	case secretScreen:
 		return []item{{label: "[Change secret value]", action: "edit-secret"}, {label: "[Remove secret]", action: "remove-secret"}}
+	case mcpDirectoryScreen, mcpServerScreen, mcpAccountScreen:
+		return mcpItems(at, metadata)
 	}
 	return nil
 }
@@ -217,7 +223,19 @@ func (m *Model) ConfigureCommand(request ownercommand.Request) error {
 	if spec.Scope == "account" || request.Scope == "account" {
 		account = request.Account
 	}
-	if err := m.Select(request.Server, account); err != nil {
+	if spec.Scope == "mcp-directory" || spec.Scope == "mcp-server" || spec.Scope == "mcp-account" {
+		m.at = location{screen: mcpDirectoryScreen}
+		if spec.Scope != "mcp-directory" {
+			server, selected, err := ownermcp.Select(metadata.RemoteMCP, request.Server, request.Account, spec.Scope == "mcp-account")
+			if err != nil {
+				return err
+			}
+			m.at = location{screen: mcpServerScreen, server: server, account: selected}
+			if selected != "" {
+				m.at.screen = mcpAccountScreen
+			}
+		}
+	} else if err := m.Select(request.Server, account); err != nil {
 		return err
 	}
 	if spec.Scope == "secrets" || spec.Scope == "secret" || request.Scope == "global" {

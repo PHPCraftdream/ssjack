@@ -12,6 +12,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -55,10 +56,15 @@ func fixture(t *testing.T) *backend {
 	v.Targets["production"] = vault.Target{Address: "example.invalid:22", User: "operator", Password: []byte("synthetic-existing-password"), HostKeys: []string{pin}, Usage: "both"}
 	v.Servers[server] = vault.Server{Name: "production", Accounts: map[string]string{"main": "production"}}
 	v.Secrets[alias] = vault.SecretBinding{Name: "token", Ref: string(encoded)}
+	v.RemoteMCP = mcpdirectory.New()
+	mcpServer, mcpAccount := strings.Repeat("03", 16), strings.Repeat("04", 16)
+	v.RemoteMCP.Servers[mcpServer] = mcpdirectory.Server{Name: "docs", URL: "https://docs.invalid/mcp", Enabled: true, Revision: 1}
+	v.RemoteMCP.Accounts[mcpAccount] = mcpdirectory.Account{ServerID: mcpServer, Name: "work", Enabled: true, Revision: 1, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: []byte("synthetic-existing-mcp-token")}}
 	t.Cleanup(v.Close)
 	return &backend{state: v, metadata: vault.DirectoryMetadata{
-		Servers: []vault.ServerMetadata{{ID: server, Name: "production", Address: "example.invalid:22", Accounts: []vault.AccountMetadata{{Name: "main", User: "operator", Authentication: "password", Usage: "both"}}}},
-		Secrets: map[string]vault.SecretBinding{alias: v.Secrets[alias]},
+		Servers:   []vault.ServerMetadata{{ID: server, Name: "production", Address: "example.invalid:22", Accounts: []vault.AccountMetadata{{Name: "main", User: "operator", Authentication: "password", Usage: "both"}}}},
+		Secrets:   map[string]vault.SecretBinding{alias: v.Secrets[alias]},
+		RemoteMCP: v.RemoteMCP.Metadata(),
 	}}
 }
 

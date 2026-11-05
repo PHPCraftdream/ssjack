@@ -11,6 +11,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/owneredit"
+	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -55,6 +56,7 @@ func (m *Model) prepareExportForm(f *form) error {
 		return errForm
 	}
 	f.exportScope = &selection
+	f.scopeLabel += "\nRemote MCP credentials and preferences are not included."
 	f.scopeLabel += "\nWARNING: plaintext exposes selected private keys, passwords and application values."
 	f.fields = []field{
 		input("Destination", "A new private ZIP file; no overwrite or plaintext staging.", 4096, false, ""),
@@ -145,6 +147,16 @@ func (m *Model) submitSecret(f *form) error {
 		change.Value = f.fields[1].value
 	}
 	return m.backend.Submit(change)
+}
+
+func mcpItems(at location, metadata vault.DirectoryMetadata) []item {
+	scope := map[screen]string{mcpDirectoryScreen: "mcp-directory", mcpServerScreen: "mcp-server", mcpAccountScreen: "mcp-account"}[at.screen]
+	screens := map[string]screen{"mcp-directory": mcpDirectoryScreen, "mcp-server": mcpServerScreen, "mcp-account": mcpAccountScreen}
+	var result []item
+	for _, entry := range ownermcp.Items(scope, at.server, at.account, metadata.RemoteMCP) {
+		result = append(result, item{label: entry.Label, action: entry.Action, target: location{screen: screens[entry.Scope], server: entry.ServerID, account: entry.AccountID}})
+	}
+	return result
 }
 
 func (m *Model) applyForm() tea.Cmd {

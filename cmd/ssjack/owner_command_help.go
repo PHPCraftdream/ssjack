@@ -24,6 +24,10 @@ func ownerHelpEntries() []commandHelp {
 			scope = "Requires --server NAME. --account NAME supplies the new account for add-account only."
 		case "account":
 			scope = "Requires --server NAME --account NAME."
+		case "mcp-server":
+			scope = "Requires --server NAME from the remote MCP directory, not SSH. For add-mcp-account, --account names the new MCP account."
+		case "mcp-account":
+			scope = "Requires --server NAME --account NAME from the remote MCP directory, not SSH."
 		case "secrets":
 			scope = "Requires --scope global, or --scope server --server NAME. No scope fallback."
 		case "secret":
@@ -32,6 +36,9 @@ func ownerHelpEntries() []commandHelp {
 			scope = "--scope all (default), global, server or account; server/account scopes require --server NAME, account also requires --account NAME. Server/account exports include server-local values, never global fallback. Plaintext requires EXPORT PLAINTEXT in the form."
 		}
 		details := boundary + " " + scope + " Metadata options: " + strings.Join(options, ", ") + "."
+		if strings.HasPrefix(spec.Scope, "mcp-") {
+			details += " MCP tokens/passwords/header values are hidden terminal-only input. Primary credential decisions are keep (unchanged authentication/username), replace (new secret), or clear (none with empty username/secret). Remove requires REMOVE. No network requests, session launch or active-session adoption. MCP records are not included in owner ZIP exports/imports yet."
+		}
 		if spec.Action == "import" {
 			details += " Archive password is hidden. Inspection always precedes metadata preview and exact IMPORT confirmation. A partial import is not success. Remaining plans are RAM-only; restart does not restore them."
 		}

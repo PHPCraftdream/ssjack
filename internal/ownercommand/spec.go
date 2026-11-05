@@ -28,7 +28,19 @@ func Specs() []Spec {
 		{"import", "database", map[string]string{"file": "Archive file"}},
 		{"link", "database", map[string]string{"directory": "Store directory"}},
 		{"pending", "database", map[string]string{"action": "Action"}},
+		{"add-mcp-server", "mcp-directory", map[string]string{"name": "MCP server name", "url": "HTTPS endpoint"}},
+		{"edit-mcp-server", "mcp-server", map[string]string{"name": "MCP server name", "url": "HTTPS endpoint", "enabled": "Enabled"}},
+		{"remove-mcp-server", "mcp-server", nil},
+		{"add-mcp-account", "mcp-server", mcpAccountOptions()},
+		{"edit-mcp-account", "mcp-account", mcpAccountOptions()},
+		{"rename-mcp-account", "mcp-account", map[string]string{"name": "MCP account name"}},
+		{"remove-mcp-account", "mcp-account", nil},
+		{"edit-mcp-header", "mcp-account", map[string]string{"header": "Header name", "header-action": "Header action"}},
 	}
+}
+
+func mcpAccountOptions() map[string]string {
+	return map[string]string{"account": "MCP account name", "enabled": "Enabled", "auth": "MCP authentication", "login": "MCP username", "credential-action": "Credential action"}
 }
 
 func Lookup(action string) (Spec, bool) {

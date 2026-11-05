@@ -20,7 +20,7 @@ func TestEveryMenuManagementActionHasACommandAndEveryCommandHasAForm(t *testing.
 		server, account string
 		path            []string
 	}
-	pages := []route{{}, {path: []string{"Servers"}}, {server: "production"}, {server: "production", account: "main"}, {path: []string{"Global secrets"}}, {path: []string{"Global secrets", "token"}}, {server: "production", path: []string{"Server secrets"}}}
+	pages := []route{{}, {path: []string{"Servers"}}, {server: "production"}, {server: "production", account: "main"}, {path: []string{"Global secrets"}}, {path: []string{"Global secrets", "token"}}, {server: "production", path: []string{"Server secrets"}}, {path: []string{"Remote MCP servers"}}, {path: []string{"Remote MCP servers", "docs"}}, {path: []string{"Remote MCP servers", "docs", "work"}}}
 	found := make(map[string]bool)
 	actionLine := regexp.MustCompile(`(?m)^"[a-z]+(?:-[a-z]+)*"$`)
 	for _, page := range pages {
@@ -58,6 +58,10 @@ func TestEveryMenuManagementActionHasACommandAndEveryCommandHasAForm(t *testing.
 			args = append(args, "--server", "production")
 		case "account":
 			args = append(args, "--server", "production", "--account", "main")
+		case "mcp-server":
+			args = append(args, "--server", "docs")
+		case "mcp-account":
+			args = append(args, "--server", "docs", "--account", "work")
 		case "secrets":
 			args = append(args, "--scope", "global")
 		case "secret":
@@ -88,6 +92,21 @@ func accounts(v *vault.Vault) map[string]map[string]vault.Target {
 	return result
 }
 
+func remoteEffects(v *vault.Vault) map[string]any {
+	if v.RemoteMCP == nil {
+		return nil
+	}
+	result := map[string]any{"last": v.RemoteMCP.Last}
+	for _, server := range v.RemoteMCP.Servers {
+		result["server/"+server.Name] = server
+	}
+	for _, account := range v.RemoteMCP.Accounts {
+		account.ServerID = v.RemoteMCP.Servers[account.ServerID].Name
+		result["account/"+account.ServerID+"/"+account.Name] = account
+	}
+	return result
+}
+
 func TestParameterizedCommandsAndMenuProduceIdenticalOwnerEffects(t *testing.T) {
 	cases := []struct {
 		args, path      []string
@@ -105,6 +124,14 @@ func TestParameterizedCommandsAndMenuProduceIdenticalOwnerEffects(t *testing.T) 
 		{[]string{"export", "--scope", "account", "--server", "production", "--account", "main", "--destination", "synthetic.zip", "--format", "plaintext"}, []string{"Export account and server secrets"}, "production", "main", map[string]string{"Confirmation": "EXPORT PLAINTEXT"}},
 		{[]string{"link", "--directory", "synthetic-store"}, []string{"Link secret store"}, "", "", map[string]string{"Store unlock secret": "synthetic-input-secret"}},
 		{[]string{"pending", "--action", "retry-db"}, []string{"Pending change"}, "", "", nil},
+		{[]string{"add-mcp-server", "--name", "extra", "--url", "https://extra.invalid/mcp"}, []string{"Remote MCP servers", "[Add MCP server]"}, "", "", nil},
+		{[]string{"edit-mcp-server", "--server", "docs", "--name", "renamed", "--url", "https://changed.invalid/mcp", "--enabled", "false"}, []string{"Remote MCP servers", "docs", "[Edit MCP server]"}, "", "", nil},
+		{[]string{"remove-mcp-server", "--server", "docs"}, []string{"Remote MCP servers", "docs", "[Remove MCP server]"}, "", "", map[string]string{"Confirmation": "REMOVE"}},
+		{[]string{"add-mcp-account", "--server", "docs", "--account", "second", "--auth", "basic", "--login", "operator", "--credential-action", "replace"}, []string{"Remote MCP servers", "docs", "[Add MCP account]"}, "", "", map[string]string{"MCP credential": "synthetic-input-secret"}},
+		{[]string{"edit-mcp-account", "--server", "docs", "--account", "work", "--auth", "basic", "--login", "operator", "--credential-action", "replace", "--enabled", "false"}, []string{"Remote MCP servers", "docs", "work", "[Edit MCP account]"}, "", "", map[string]string{"MCP credential": "synthetic-input-secret"}},
+		{[]string{"rename-mcp-account", "--server", "docs", "--account", "work", "--name", "renamed"}, []string{"Remote MCP servers", "docs", "work", "[Rename MCP account]"}, "", "", nil},
+		{[]string{"remove-mcp-account", "--server", "docs", "--account", "work"}, []string{"Remote MCP servers", "docs", "work", "[Remove MCP account]"}, "", "", map[string]string{"Confirmation": "REMOVE"}},
+		{[]string{"edit-mcp-header", "--server", "docs", "--account", "work", "--header", "X-Api-Key", "--header-action", "replace"}, []string{"Remote MCP servers", "docs", "work", "[Edit MCP credential header]"}, "", "", map[string]string{"Header credential": "synthetic-input-secret"}},
 	}
 	pin := fixture(t).state.Targets["production"].HostKeys[0]
 	cases = append(cases, struct {
@@ -139,7 +166,7 @@ func TestParameterizedCommandsAndMenuProduceIdenticalOwnerEffects(t *testing.T) 
 			if err := command.CommandResult(); err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(accounts(left.state), accounts(right.state)) || !reflect.DeepEqual(left.changes, right.changes) || !reflect.DeepEqual(left.exports, right.exports) || !reflect.DeepEqual(left.calls, right.calls) || left.linkedDirectory != right.linkedDirectory || !reflect.DeepEqual(left.linkedMaster, right.linkedMaster) {
+			if !reflect.DeepEqual(remoteEffects(left.state), remoteEffects(right.state)) || !reflect.DeepEqual(accounts(left.state), accounts(right.state)) || !reflect.DeepEqual(left.changes, right.changes) || !reflect.DeepEqual(left.exports, right.exports) || !reflect.DeepEqual(left.calls, right.calls) || left.linkedDirectory != right.linkedDirectory || !reflect.DeepEqual(left.linkedMaster, right.linkedMaster) {
 				t.Fatal("command and menu used different owner effects or scopes")
 			}
 		})

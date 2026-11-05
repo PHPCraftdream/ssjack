@@ -87,13 +87,13 @@ func press(m *Model, c rune) tea.Cmd { _, cmd := m.Update(tea.KeyPressMsg{Code: 
 func TestPickerListsEmptyHumanOnlyKeepsBackCtrlCEnterAndRefreshFocus(t *testing.T) {
 	empty := testModel(&fakeBackend{})
 	items := navigation(empty.at, empty.metadata)
-	check(t, len(items) != 8 || items[0].action != "none" || items[0].label != "(no SSH connections available)" || items[3].action != "export" || items[4].action != "import", "empty database lacks the placeholder, import or management items")
+	check(t, len(items) != 9 || items[0].action != "none" || items[0].label != "(no SSH connections available)" || items[3].target.screen != mcpDirectoryScreen || items[4].action != "export" || items[5].action != "import", "empty database lacks the placeholder, import or management items")
 	check(t, press(empty, 13) != nil || empty.connection != nil || empty.message == "" || empty.at.screen != databaseScreen, "placeholder was actionable")
 	press(empty, tea.KeyDown)
 	press(empty, 13)
 	check(t, empty.at.screen != serversScreen, "management was unreachable below the placeholder")
 	items = navigation(location{screen: databaseScreen}, pickerMetadata())
-	check(t, len(items) != 9 || items[0].action != "connect" || items[1].action != "connect" || items[2].label != "Servers" || items[5].action != "import" || items[8].action != "exit" ||
+	check(t, len(items) != 10 || items[0].action != "connect" || items[1].action != "connect" || items[2].label != "Servers" || items[4].target.screen != mcpDirectoryScreen || items[6].action != "import" || items[9].action != "exit" ||
 		items[0].target != (location{server: "s1", account: "deploy"}) || items[1].target != (location{server: "s2", account: "admin"}), "root did not list exactly the human-permitted connection points first")
 	label := items[0].label
 	check(t, strings.ContainsAny(label, "\x1b\n") || !strings.Contains(label, escaped("production")) || !strings.Contains(label, escaped("prod.example:22")) || !strings.Contains(label, `\x1b`) || !strings.Contains(label, "password"), "connection label did not identify the escaped server and account")

@@ -62,6 +62,44 @@ key authentication and conflicts with `--auth password`. Blank credentials on
 edit retain the existing matching credential kind, as in the menu. Proxy-password
 retention likewise requires unchanged type/address/login. See [proxy limits](PROXY.md).
 
+## Remote MCP management
+
+MCP actions use the same owner form and persistence path. Their `--server` and
+`--account` selectors name remote MCP records, **not SSH records**. Merely opening
+these pages or commands does not connect to the endpoint.
+
+| Action | Selection | Optional metadata parameters |
+| --- | --- | --- |
+| `add-mcp-server` | New MCP server | `--name`, `--url` (HTTPS only) |
+| `edit-mcp-server` | `--server NAME` | `--name`, `--url`, `--enabled true\|false` |
+| `remove-mcp-server` | `--server NAME` | Exact `REMOVE` in the form; also removes its accounts |
+| `add-mcp-account` | `--server NAME` | `--account`, `--auth none\|bearer\|basic`, `--login`, `--enabled`, `--credential-action` |
+| `edit-mcp-account` | `--server NAME --account NAME` | `--auth`, `--login`, `--enabled`, `--credential-action` |
+| `rename-mcp-account` | `--server NAME --account NAME` | `--name` |
+| `remove-mcp-account` | `--server NAME --account NAME` | Exact `REMOVE` in the form |
+| `edit-mcp-header` | `--server NAME --account NAME` | `--header`, `--header-action replace\|clear` |
+
+Primary `--credential-action` accepts `keep`, `replace` or `clear`. `keep` requires
+an existing account with unchanged authentication kind and username. `replace`
+requires a hidden token/password. `clear` requires `--auth none`, an empty username
+and an empty credential field. New public accounts default to `none`/`clear`.
+Hidden input never appears in argv, display metadata or help output. Header edits
+replace or clear one canonical custom credential header; at most four are allowed.
+Reserved Authorization, routing, framing and MCP headers cannot be overridden.
+
+Display-only renames preserve remembered choices. Endpoint/policy/credential edits
+invalidate prior preselection; active sessions do not silently adopt edits. The
+launch checkbox selector, actual remote bridge and MCP-specific ZIP export/import
+remain separate integration work. Existing exports/imports do **not** include MCP
+credentials or remembered choices.
+
+```sh
+ssjack owner add-mcp-server --name docs --url https://docs.example/mcp
+ssjack owner add-mcp-account --server docs --account work --auth bearer --credential-action replace
+ssjack owner edit-mcp-header --server docs --account work --header X-Api-Key --header-action replace
+ssjack owner rename-mcp-account --server docs --account work --name personal
+```
+
 ## Examples
 
 ```sh

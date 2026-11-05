@@ -150,7 +150,11 @@ func (c Command) valid() bool {
 		if bodies != 1 || c.Directory == nil {
 			return false
 		}
-		counts := map[string]int{"add-server": 8, "rename-server": 1, "edit-server": 2, "add-account": 5, "edit-account": 5, "edit-proxy": 4}
+		counts := map[string]int{
+			"add-server": 8, "rename-server": 1, "edit-server": 2, "add-account": 5, "edit-account": 5, "edit-proxy": 4,
+			"add-mcp-server": 2, "edit-mcp-server": 3, "remove-mcp-server": 1,
+			"add-mcp-account": 6, "edit-mcp-account": 6, "rename-mcp-account": 1, "remove-mcp-account": 1, "edit-mcp-header": 3,
+		}
 		count, ok := counts[c.Directory.Action]
 		if !ok || len(c.Directory.Fields) != count || len(c.Directory.ServerID) > 32 || len(c.Directory.Account) > 64 {
 			return false

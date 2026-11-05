@@ -13,6 +13,10 @@ func TestParseAcceptsMetadataAndExplicitScopes(t *testing.T) {
 		{"edit-secret", "--scope", "server", "--server", "production", "--secret", "token"},
 		{"export", "--scope", "global", "--destination", "synthetic.zip"},
 		{"export"}, {"import", "--file", "synthetic.zip"}, {"pending", "--action", "resume-import"},
+		{"add-mcp-server", "--name", "docs", "--url", "https://docs.invalid/mcp"},
+		{"add-mcp-account", "--server", "docs", "--account", "work", "--auth", "bearer", "--credential-action", "replace"},
+		{"edit-mcp-account", "--server", "docs", "--account", "work", "--auth", "basic", "--login", "operator", "--enabled", "false", "--credential-action", "keep"},
+		{"edit-mcp-header", "--server", "docs", "--account", "work", "--header", "X-Api-Key", "--header-action", "clear"},
 	} {
 		request, err := Parse(args, "", "")
 		if err != nil || request.Action != args[0] {
@@ -44,6 +48,13 @@ func TestParseRejectsAmbiguitySecretInputsAndConfirmationBypass(t *testing.T) {
 		{"add-server", "--name", "first", "--name", "second"},
 		{"add-server", "--name", "first\x1b[31m"},
 		{"import", "--file"}, {"import", "--file", strings.Repeat("x", 16385)},
+		{"edit-mcp-server"}, {"edit-mcp-account", "--server", "docs"},
+		{"add-mcp-account", "--server", "docs", "--auth", "oauth"},
+		{"edit-mcp-server", "--server", "docs", "--enabled", "yes"},
+		{"edit-mcp-account", "--server", "docs", "--account", "work", "--credential", "synthetic"},
+		{"edit-mcp-header", "--server", "docs", "--account", "work", "--header-value", "synthetic"},
+		{"edit-mcp-header", "--server", "docs", "--account", "work", "--header-action", "keep"},
+		{"remove-mcp-server", "--server", "docs", "--confirmation", "REMOVE"},
 	} {
 		_, err := Parse(args, "", "")
 		if !errors.Is(err, ErrArguments) {
@@ -66,7 +77,7 @@ func TestPublicOptionsCannotSupplySecretsOrApproval(t *testing.T) {
 		}
 		seen[spec.Action] = true
 		for option, label := range spec.Options {
-			if label == "Confirmation" || label == "Value" || label == "Archive password" || label == "Proxy password" || label == "Store unlock secret" || (label == "Credential" && option != "key-file") {
+			if label == "Confirmation" || label == "MCP credential" || label == "Header credential" || label == "Value" || label == "Archive password" || label == "Proxy password" || label == "Store unlock secret" || (label == "Credential" && option != "key-file") {
 				t.Fatalf("secret or approval has an argv option: %s", option)
 			}
 		}

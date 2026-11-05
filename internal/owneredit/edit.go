@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -29,6 +30,9 @@ func Dispatch(backend interface {
 func Apply(v *vault.Vault, f Change) error {
 	if !f.Valid() {
 		return ErrChange
+	}
+	if strings.Contains(f.Action, "-mcp-") {
+		return ownermcp.Apply(v, f)
 	}
 	text := func(index int) string { return string(f.Fields[index]) }
 	if f.Action == "edit-proxy" {

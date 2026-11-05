@@ -87,6 +87,54 @@ func TestCommandProgramLocksArgumentsPromptsSecretFlushesAndExits(t *testing.T) 
 		})
 	}
 }
+func TestMCPCommandProgramMasksPrivateInputAndWaitsForPersistence(t *testing.T) {
+	for _, action := range []string{"edit-mcp-account", "edit-mcp-header"} {
+		for _, mode := range []string{"success", "cancel", "flush-failure"} {
+			t.Run(action+"/"+mode, func(t *testing.T) {
+				b := fixture(t)
+				if mode == "flush-failure" {
+					b.flushErr = syntheticFailure
+				}
+				args := []string{action, "--server", "docs", "--account", "work"}
+				label := "Header credential"
+				if action == "edit-mcp-account" {
+					args = append(args, "--enabled", "true", "--auth", "bearer", "--login=", "--credential-action", "replace")
+					label = "MCP credential"
+				} else {
+					args = append(args, "--header", "X-Api-Key", "--header-action", "replace")
+				}
+				model, p, out, wait := program(t, b, args...)
+				waitFrame(t, out, "> "+label+":")
+				p.Send(tea.PasteMsg{Content: "synthetic-input-secret"})
+				if mode == "cancel" {
+					p.Send(tea.KeyPressMsg{Code: 27})
+				} else {
+					p.Send(tea.KeyPressMsg{Code: 9})
+					waitFrame(t, out, "> [Apply]")
+					p.Send(tea.KeyPressMsg{Code: 13})
+				}
+				wait()
+				account := b.state.RemoteMCP.Accounts[strings.Repeat("04", 16)]
+				if mode == "cancel" {
+					if !errors.Is(model.CommandResult(), ownercommand.ErrCancelled) || b.flushes != 0 || string(account.Auth.Secret) != "synthetic-existing-mcp-token" || len(account.Headers) != 0 {
+						t.Fatal("cancel applied private MCP input")
+					}
+					return
+				}
+				if b.flushes == 0 || (mode == "success") != (model.CommandResult() == nil) {
+					t.Fatal("MCP command did not wait for persistence or distinguish failure")
+				}
+				if action == "edit-mcp-account" && string(account.Auth.Secret) != "synthetic-input-secret" {
+					t.Fatal("MCP command lost private credential input")
+				}
+				if action == "edit-mcp-header" && (len(account.Headers) != 1 || string(account.Headers[0].Value) != "synthetic-input-secret") {
+					t.Fatal("MCP command lost private header input")
+				}
+			})
+		}
+	}
+}
+
 func TestCommandProgramImportStillRequiresPreviewAndExactConfirmation(t *testing.T) {
 	b := fixture(t)
 	model, p, out, wait := program(t, b, "import", "--file", "synthetic.zip")

@@ -1,9 +1,11 @@
 # Remote MCP directory — implementation in progress
 
-This is a database-layer candidate, not a claim that remote MCP connections,
-owner CLI/TUI management or harness selection already work. Those layers require
-separate integration and native acceptance. The existing `ssjack mcp` command
-continues to serve its current session protocol.
+Encrypted records and shared owner CLI/TUI management are implemented. Remote MCP
+connections and launch selection are not wired yet; those layers require separate
+integration and native acceptance. The existing `ssjack mcp` command continues to
+serve its current session protocol. MCP-specific owner archive export/import is
+also pending; existing ZIP exports/imports cover SSH credentials and application
+values, not the remote MCP directory.
 
 ## Encrypted records
 
@@ -32,6 +34,26 @@ layers and 64 KiB vault plaintext limit are unchanged. Record-count limits are
 upper bounds, not a promise that every maximum-sized credential fits at once.
 An oversized edit refuses before adopting the candidate or incrementing revision;
 its owned credential buffers are cleared. Go zeroization remains best effort.
+
+## Private owner mutation foundation
+
+The shared directory dispatcher admits closed MCP server/account/header changes.
+Primary credential decisions are explicit: `keep` requires the same authentication
+kind and username, `replace` requires newly entered private bytes, and `clear`
+requires `none` authentication with no username or supplied secret. New accounts
+cannot request `keep`. Display-only account renames use a separate operation so
+they do not invalidate remembered selections. Account policy or credential edits
+increment the account revision even when the primary credential is kept.
+
+Credential header edits explicitly replace or clear one canonical header; they
+preserve unrelated headers and the primary credential. Server removal removes its
+accounts and prunes remembered bindings. Account/server removal requires `REMOVE`.
+These mutations are private owner operations, not model-accessible tools. They do
+not perform network requests or change active sessions. The **Remote MCP servers**
+owner-menu page and `owner *-mcp-*` commands use the same form descriptors and typed
+dispatcher. Server/account names in these commands select the MCP directory, never
+the SSH directory. Secret and confirmation fields have no argument options. See
+[owner commands](OWNER-CLI.md) for selectors and examples.
 
 ## Remembered selection is not authorization
 
@@ -66,4 +88,8 @@ credential ownership and cleanup, metadata isolation, per-account selections,
 rename stability and stale/disabled/deleted choices. Vault tests cover owned
 metadata and atomic size refusal. The mandatory production directory test also
 checks encrypted MCP persistence and real-profile reload. These are not substitutes
-for pending CLI/TUI parity, cross-process runtime and native bridge acceptance.
+for cross-process runtime and native bridge acceptance. The owner parity suite
+includes all MCP management pages and compares private MCP effects as well as the
+existing SSH effects. Additional owner tests exercise cancel, rejected secret or
+confirmation prefills, stale displayed revisions and wrong removal confirmations.
+A passing action/form registry is not exhaustive coverage of every state or error.
