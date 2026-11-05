@@ -77,8 +77,14 @@ volume-GUID filename, not case folding; macOS resolves the native filename befor
 binding a context. This avoids merging distinct case-sensitive database names.
 
 - Windows uses a local Named Pipe with a protected current-user DACL, first-pipe
-  instance protection and remote-client refusal. A protected globally named
-  kernel event retains the endpoint ownership claim between peer connections;
+  instance protection and remote-client refusal. The first-instance flag is used
+  only for initial ownership; additional instances share a fixed 32-slot bound.
+  One successor is created while the current handle still pins the pipe name,
+  before handoff or cancelled-accept cleanup. At most 31 peers can be handed off
+  while preserving that successor slot. Successor creation failure stops admission
+  and retains the current handle/claim until explicit listener close; it never
+  silently joins a foreign endpoint. A protected globally named kernel event
+  retains the endpoint ownership claim between peer connections;
   it carries no request data or secret. OVERLAPPED operations pin native buffers,
   count and state until kernel completion. Cancellation is joined before unpin
   or owned-handle close.

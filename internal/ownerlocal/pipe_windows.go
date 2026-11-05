@@ -12,6 +12,7 @@ import (
 
 // Win32 CreateNamedPipe byte mode, duplex access, and local clients only.
 const pipeDuplex, pipeRejectRemote = 0x00000003, 0x00000008
+const maxPipeInstances = 32
 
 func normalize(path string) string {
 	name, err := windows.UTF16PtrFromString(path)
@@ -61,7 +62,7 @@ func pipeDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	return windows.SecurityDescriptorFromString("O:" + sid + "D:P(A;;GA;;;" + sid + ")")
 }
 
-func createPipe(path string) (windows.Handle, error) {
+func createPipe(path string, first bool) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return windows.InvalidHandle, ErrEndpoint
@@ -71,8 +72,11 @@ func createPipe(path string) (windows.Handle, error) {
 		return windows.InvalidHandle, ErrUnavailable
 	}
 	attributes := windows.SecurityAttributes{Length: uint32(reflect.TypeOf(windows.SecurityAttributes{}).Size()), SecurityDescriptor: descriptor}
-	handle, err := windows.CreateNamedPipe(name, pipeDuplex|windows.FILE_FLAG_FIRST_PIPE_INSTANCE|windows.FILE_FLAG_OVERLAPPED,
-		pipeRejectRemote, 1, 65536, 65536, 1000, &attributes)
+	mode := uint32(pipeDuplex | windows.FILE_FLAG_OVERLAPPED)
+	if first {
+		mode |= windows.FILE_FLAG_FIRST_PIPE_INSTANCE
+	}
+	handle, err := windows.CreateNamedPipe(name, mode, pipeRejectRemote, maxPipeInstances, 65536, 65536, 1000, &attributes)
 	if err != nil {
 		return windows.InvalidHandle, ErrBusy
 	}
@@ -110,7 +114,7 @@ func listen(path string) (Listener, error) {
 		}
 		return nil, ErrBusy
 	}
-	handle, err := createPipe(path)
+	handle, err := createPipe(path, true)
 	if err != nil {
 		windows.CloseHandle(claim)
 		return nil, err
@@ -154,12 +158,8 @@ func (l *pipeListener) Accept(caller context.Context) (Connection, error) {
 		return nil, ErrClosed
 	}
 	if l.handle == windows.InvalidHandle {
-		var err error
-		l.handle, err = createPipe(l.path)
-		if err != nil {
-			l.mu.Unlock()
-			return nil, err
-		}
+		l.mu.Unlock()
+		return nil, ErrUnavailable
 	}
 	handle := l.handle
 	l.active.Add(1)
@@ -182,12 +182,21 @@ func (l *pipeListener) Accept(caller context.Context) (Connection, error) {
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
+	// Pin a successor before handing off or closing the current instance.
+	next, createError := createPipe(l.path, false)
+	if createError != nil {
+		l.closed = true
+		l.cancel()
+		return nil, createError
+	}
+	l.handle = next
 	if err != nil {
-		_ = windows.CloseHandle(handle)
-		l.handle = windows.InvalidHandle
+		if closeError := windows.CloseHandle(handle); closeError != nil {
+			l.closed = true
+			l.cancel()
+		}
 		return nil, ErrUnavailable
 	}
-	l.handle = windows.InvalidHandle
 	return newPipeConnection(handle), nil
 }
 

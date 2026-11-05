@@ -3,6 +3,7 @@ package ownerlocal
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -115,6 +116,80 @@ func TestWindowsOverlappedReadCancellationJoinsKernelCompletion(t *testing.T) {
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestWindowsPipeKeepsSuccessorOwnershipAcrossConcurrentPeers(t *testing.T) {
+	path := endpointFixture(t)
+	listener, first, firstServer := pair(t, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connect := func() (Connection, Connection) {
+		t.Helper()
+		type result struct {
+			connection Connection
+			err        error
+		}
+		done := make(chan result, 1)
+		go func() { connection, err := listener.Accept(ctx); done <- result{connection, err} }()
+		client, err := Dial(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { client.Close() })
+		var got result
+		select {
+		case got = <-done:
+		case <-ctx.Done():
+			t.Fatal("concurrent Windows pipe accept did not finish")
+		}
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		t.Cleanup(func() { got.connection.Close() })
+		return client, got.connection
+	}
+	second, secondServer := connect()
+	first.Close()
+	firstServer.Close()
+	if err := writeAll(ctx, second, []byte("second")); err != nil {
+		t.Fatal(err)
+	}
+	var payload [6]byte
+	if _, err := io.ReadFull(contextReader{ctx, secondServer}, payload[:]); err != nil || string(payload[:]) != "second" {
+		t.Fatal("closing one peer interrupted another Windows pipe instance")
+	}
+	second.Close()
+	secondServer.Close()
+	endpoint, err := Identity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign, err := createPipe(endpoint.Address, true); !errors.Is(err, ErrBusy) {
+		if foreign != windows.InvalidHandle {
+			windows.CloseHandle(foreign)
+		}
+		t.Fatal("listener left a namespace gap between accepted peers")
+	}
+	pipe := listener.(*pipeListener)
+	descriptor, err := windows.GetSecurityInfo(pipe.handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := descriptor.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("successor pipe lost its protected ACL")
+	}
+	third, thirdServer := connect()
+	third.Close()
+	thirdServer.Close()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Listen(path)
+	if err != nil {
+		t.Fatal("closed listener retained an owned pipe instance")
+	}
+	reopened.Close()
 }
 
 func TestWindowsEndpointUsesNativeCanonicalFilename(t *testing.T) {
