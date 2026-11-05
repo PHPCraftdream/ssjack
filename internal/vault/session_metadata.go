@@ -6,6 +6,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
@@ -37,6 +38,7 @@ type DirectoryMetadata struct {
 	Servers    []ServerMetadata
 	Secrets    map[string]SecretBinding
 	OwnerStore *OwnerStoreMetadata
+	RemoteMCP  mcpdirectory.Metadata
 }
 
 // Metadata returns owned display data, never credentials or pending values.
@@ -63,7 +65,7 @@ func (s *Session) metadata() (DirectoryMetadata, error) {
 	if s.closed {
 		return DirectoryMetadata{}, errors.New("database session is closed")
 	}
-	result := DirectoryMetadata{Servers: make([]ServerMetadata, 0, len(s.state.Servers)), Secrets: make(map[string]SecretBinding)}
+	result := DirectoryMetadata{Servers: make([]ServerMetadata, 0, len(s.state.Servers)), Secrets: make(map[string]SecretBinding), RemoteMCP: s.state.RemoteMCP.Metadata()}
 	for id, server := range s.state.Servers {
 		metadata := ServerMetadata{ID: id, Name: server.Name}
 		for name, profile := range server.Accounts {

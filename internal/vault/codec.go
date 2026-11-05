@@ -41,6 +41,9 @@ func marshal(v *Vault) ([]byte, error) {
 		if v.OwnerStore != nil {
 			root["owner_store"] = ownerStoreRecord(v.OwnerStore)
 		}
+		if v.RemoteMCP != nil {
+			root["remote_mcp"] = v.RemoteMCP.Record()
+		}
 	}
 	body, err := pure.EmitCanonical(root)
 	if err != nil {
@@ -61,7 +64,7 @@ func unmarshal(data []byte) (*Vault, error) {
 		return nil, errors.New("invalid vault Ktav")
 	}
 	root, ok := value.(map[string]any)
-	if !ok || (len(root) != 2 && len(root) != 4 && len(root) != 5) || root["version"] == nil {
+	if !ok || (len(root) != 2 && len(root) != 4 && len(root) != 5 && len(root) != 6) || root["version"] == nil {
 		return nil, errors.New("invalid vault fields")
 	}
 	if err := validateDirectoryFields(root); err != nil {

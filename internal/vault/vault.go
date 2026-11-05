@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 
@@ -35,6 +36,7 @@ type Vault struct {
 	Servers     map[string]Server        `json:"servers,omitempty"`
 	Secrets     map[string]SecretBinding `json:"secrets,omitempty"`
 	OwnerStore  *OwnerStore              `json:"owner_store,omitempty"`
+	RemoteMCP   *mcpdirectory.Directory  `json:"remote_mcp,omitempty"`
 	revision    [sha256.Size]byte
 	payloadHash [sha256.Size]byte
 	format      int
@@ -60,6 +62,8 @@ func (v *Vault) Close() {
 	clear(v.Secrets)
 	v.OwnerStore.clear()
 	v.OwnerStore = nil
+	v.RemoteMCP.Clear()
+	v.RemoteMCP = nil
 	clear(v.payloadHash[:])
 }
 
@@ -234,7 +238,7 @@ func (v *Vault) validate() error {
 	if (v.Version != 1 && v.Version != 2) || v.Targets == nil || len(v.Targets) > 64 {
 		return errors.New("unsupported vault version or target count")
 	}
-	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil) {
+	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil) {
 		return errors.New("version 1 cannot contain directory metadata")
 	}
 	if v.Version == 2 {
@@ -242,6 +246,9 @@ func (v *Vault) validate() error {
 			return err
 		}
 		if err := v.validateOwnerStore(); err != nil {
+			return err
+		}
+		if err := v.validateRemoteMCP(); err != nil {
 			return err
 		}
 	}

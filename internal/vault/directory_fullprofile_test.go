@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 )
 
 func TestVaultDirectoryFullProfile(t *testing.T) {
@@ -19,6 +21,22 @@ func TestVaultDirectoryFullProfile(t *testing.T) {
 	password := []byte("synthetic directory fixture")
 	defer clear(password)
 	v, server := directoryFixture(t)
+	v.RemoteMCP = mcpdirectory.New()
+	remote, err := v.RemoteMCP.AddServer("docs", "https://docs.invalid/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := v.RemoteMCP.AddAccount(mcpdirectory.Account{ServerID: remote, Name: "work", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: []byte("synthetic-full-profile-MCP-secret")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := v.RemoteMCP.CurrentBinding(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.RememberRemoteMCP(server, "main", []mcpdirectory.Binding{binding}); err != nil {
+		t.Fatal(err)
+	}
 	other := ownTarget(v.Targets["production"])
 	defer clear(other.PrivateKey)
 	other.User, other.Usage = "another-user", "human"
@@ -37,12 +55,15 @@ func TestVaultDirectoryFullProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer loaded.Close()
-	if loaded.Version != 2 || loaded.format != 2 || len(loaded.Servers) != 2 || !reflect.DeepEqual(v.Targets, loaded.Targets) || !reflect.DeepEqual(v.Servers, loaded.Servers) {
+	if loaded.Version != 2 || loaded.format != 2 || len(loaded.Servers) != 2 || !reflect.DeepEqual(v.Targets, loaded.Targets) || !reflect.DeepEqual(v.Servers, loaded.Servers) || !reflect.DeepEqual(v.RemoteMCP, loaded.RemoteMCP) {
 		t.Fatal("directory lost credentials, metadata or container format")
 	}
 	encoded, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("synthetic-full-profile-MCP-secret")) || bytes.Contains(encoded, []byte("https://docs.invalid/mcp")) {
+		t.Fatal("remote MCP directory persisted plaintext data")
 	}
 	for _, target := range v.Targets {
 		if bytes.Contains(encoded, target.PrivateKey) || bytes.Contains(encoded, []byte(target.Address)) {

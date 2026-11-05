@@ -119,7 +119,7 @@ func (v *Vault) InitializeDirectory(name string, target Target) error {
 	if err := v.validate(); err != nil {
 		return err
 	}
-	if len(v.Targets) != 0 || len(v.Servers) != 0 || len(v.Secrets) != 0 || v.OwnerStore != nil {
+	if len(v.Targets) != 0 || len(v.Servers) != 0 || len(v.Secrets) != 0 || v.OwnerStore != nil || v.RemoteMCP != nil {
 		return errors.New("directory initialization requires an empty database")
 	}
 	id, err := directoryID()

@@ -1,6 +1,10 @@
 package vault
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
+)
 
 func directoryRecords(v *Vault) (map[string]any, map[string]any) {
 	servers, secrets := make(map[string]any), make(map[string]any)
@@ -20,13 +24,18 @@ func directoryRecords(v *Vault) (map[string]any, map[string]any) {
 func validateDirectoryFields(root map[string]any) error {
 	for key := range root {
 		switch key {
-		case "version", "targets", "servers", "secrets", "owner_store":
+		case "version", "targets", "servers", "secrets", "owner_store", "remote_mcp":
 		default:
 			return errors.New("unknown vault field")
 		}
 	}
 	if value, exists := root["owner_store"]; exists {
 		if err := validateOwnerStoreFields(value); err != nil {
+			return err
+		}
+	}
+	if value, exists := root["remote_mcp"]; exists {
+		if err := mcpdirectory.ValidateFields(value); err != nil {
 			return err
 		}
 	}
