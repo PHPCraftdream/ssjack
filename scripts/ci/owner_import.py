@@ -1,7 +1,6 @@
-"""Drive synthetic owner import: owner_import.py EXECUTABLE DATABASE ARCHIVE.
-Stdin lines: database password, wrong and correct archive passwords, leak strings.
-"""
+"""Drive owner_import.py EXECUTABLE DATABASE ARCHIVE; stdin: database password, wrong/correct archive passwords, leak strings."""
 import os
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -245,7 +244,6 @@ def main():
         keys("Enter")
         expect("Import complete")
 
-        # Up from the first root item wraps to Exit.
         keys("Up")
         expect("> Exit")
         keys("Enter")
@@ -255,20 +253,22 @@ def main():
                                stderr=subprocess.DEVNULL, env=environment, check=True,
                                timeout=min(remaining(), 75))
         except subprocess.TimeoutExpired:
-            # PTY EOF alone is not reaped status; a complete result survives a lost hook.
             if not exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
                 content = screen()
-                raise RuntimeError("synthetic terminal exit stalled: working=%s exit-stopped=%s selected-exit=%s list-changed=%s root=%s ssh-failed=%s preview=%s" % (
-                    b"Working; please wait" in content, b"Exit stopped:" in content,
-                    has_line(content, b"> Exit"), b"The list changed;" in content,
-                    b"Database / Global scope" in content, b"SSH connection failed" in content,
-                    b"Import preview" in content)) from None
+                state = tmux("display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}").strip()
+                state = state if len(state) <= 128 and all(c in b"0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ" for c in state) else b"invalid"
+                pid = tmux("display-message", "-p", "-t", "owner", "#{pane_pid}").strip()
+                try:
+                    process = Path("/proc", pid.decode("ascii") if pid.isdigit() else "0", "stat").read_bytes().rsplit(b")", 1)[1].split()[0]
+                except (OSError, IndexError):
+                    process = b"-"
+                raise RuntimeError("synthetic terminal exit stalled: state=%s process=%s pass-line=%s go-failure=%s" % (
+                    state.decode("ascii"), process.decode("ascii", "replace")[:1], any(line.strip() == b"PASS" for line in content.splitlines()), b"--- FAIL:" in content)) from None
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         content = screen()
         if status != b"0" or b"PASS" not in content:
-            raise RuntimeError("synthetic terminal child failed: exit-zero=%s status-empty=%s pass=%s go-failure=%s context-ended=%s terminal=%s save=%s unlock=%s" % (
-                status == b"0", not status, b"PASS" in content, b"--- FAIL:" in content, b"context-ended=true" in content,
-                b"reason=terminal" in content, b"reason=save" in content, b"reason=unlock" in content))
+            raise RuntimeError("synthetic terminal child failed: exit-zero=%s status-empty=%s pass=%s go-failure=%s" % (
+                status == b"0", not status, b"PASS" in content, b"--- FAIL:" in content))
         transcript = close_control()
         if any(secret in transcript for secret in secrets):
             raise RuntimeError("synthetic terminal exposed private input")
