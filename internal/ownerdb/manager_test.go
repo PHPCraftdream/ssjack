@@ -43,8 +43,8 @@ func TestExportRequestOwnsItsSelectionAndRejectsConcurrentRequests(t *testing.T)
 	if !m.busy || m.exportRequest == nil || m.exportRequest.Selection.Servers["server"][0] != "deploy" || <-m.jobs != ":export" {
 		t.Fatal("queued export borrowed caller scope metadata")
 	}
-	if err := m.Export(ExportRequest{Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "another.zip"}); err == nil {
-		t.Fatal("concurrent export bypassed the single owner worker")
+	if err := m.Export(ExportRequest{Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "another.zip"}); err == nil || !errors.Is(m.Edit(func(*vault.Vault) error { return nil }), ErrPending) {
+		t.Fatal("concurrent export or directory edit bypassed the single owner worker")
 	}
 	m = &Manager{jobs: make(chan string, 1), changed: make(chan struct{})}
 	for _, request := range []ExportRequest{{}, {Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip", PlaintextConfirmation: "yes"}, {Selection: vault.ExportSelection{GlobalSecrets: true}, Destination: "synthetic.zip"}} {
@@ -163,8 +163,8 @@ func TestAbortImportSemanticsPerPhase(t *testing.T) {
 	for _, phase := range []ImportPhase{ImportStaged, ImportComplete, ImportPartial} {
 		m := importManager()
 		m.imp.phase, m.imp.staged, m.imp.password, m.imp.effects = phase, new(vault.OwnerImport), []byte("pw"), true
-		if err := m.AbortImport(); err != nil || m.imp.phase != ImportIdle || m.imp.staged != nil || m.imp.password != nil || m.imp.effects {
-			t.Fatalf("abort did not discard phase %q", phase)
+		if err := m.AbortImportAt(1); !errors.Is(err, vault.ErrOwnerRevision) || m.imp.phase != phase || m.imp.staged == nil || m.AbortImportAt(0) != nil || m.imp.phase != ImportIdle || m.imp.staged != nil || m.imp.password != nil || m.imp.effects {
+			t.Fatalf("revision-scoped abort did not preserve stale or discard current phase %q", phase)
 		}
 		m.imp.phase, m.busy = phase, true
 		if err := m.AbortImport(); !errors.Is(err, ErrPending) {
@@ -184,7 +184,7 @@ func TestAbortImportSemanticsPerPhase(t *testing.T) {
 		cancelled := false
 		m = importManager()
 		m.busy, m.imp.phase, m.imp.staged, m.imp.cancel = true, phase, new(vault.OwnerImport), func() { cancelled = true }
-		if err := m.AbortImport(); err != nil || !cancelled || !m.imp.aborted || m.imp.phase != phase || m.imp.staged == nil {
+		if err := m.AbortImportAt(1); !errors.Is(err, vault.ErrOwnerRevision) || cancelled || m.imp.aborted || m.AbortImportAt(0) != nil || !cancelled || !m.imp.aborted || m.imp.phase != phase || m.imp.staged == nil {
 			t.Fatalf("abort did not only cancel the running %q job", phase)
 		}
 	}

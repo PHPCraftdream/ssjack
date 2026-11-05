@@ -250,6 +250,26 @@ func (m *Manager) stageImportSecret(staged *vault.OwnerImport, index int) (strin
 	return pending.ID, nil
 }
 
+type Snapshot struct {
+	Directory    vault.DirectoryMetadata
+	Status       Status
+	Import       ImportStatus
+	CipherDigest [32]byte
+}
+
+func (m *Manager) Snapshot() (Snapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.db == nil {
+		return Snapshot{}, ErrPending
+	}
+	metadata, database, digest, err := m.db.MetadataSnapshot()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{Directory: metadata, Status: Status{Database: database, Busy: m.busy, Pending: m.pending != nil, Err: m.err}, Import: m.importStatus(&metadata), CipherDigest: digest}, nil
+}
+
 func (m *Manager) OwnerPeer(binding [32]byte) (*ownerpacket.Server, error) {
 	return m.db.OwnerPeer(m.path, binding)
 }
@@ -258,4 +278,14 @@ func (m *Manager) LocalOwnerPeer(binding [32]byte) (*ownerpacket.Client, error) 
 }
 func (m *Manager) MetadataSnapshot() (vault.DirectoryMetadata, vault.SessionStatus, [32]byte, error) {
 	return m.db.MetadataSnapshot()
+}
+
+func clonePreview(p vault.ImportPreview) vault.ImportPreview {
+	out := vault.ImportPreview{Encrypted: p.Encrypted, Servers: make([]vault.ImportServer, 0, len(p.Servers)), Secrets: append([]vault.ImportSecret{}, p.Secrets...), Conflicts: append([]vault.ImportConflict{}, p.Conflicts...)}
+	for _, server := range p.Servers {
+		server.Fingerprints = append([]string{}, server.Fingerprints...)
+		server.Accounts = append([]vault.ImportAccount(nil), server.Accounts...)
+		out.Servers = append(out.Servers, server)
+	}
+	return out
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
@@ -119,28 +118,6 @@ func (r *resources) close() {
 	}
 }
 
-// Link authenticates existing installation material before recording its ID.
-func (m *Manager) Link(directory string, master []byte) error {
-	if !appstoreentry.Supported() || len(master) == 0 || len(master) > 16384 {
-		return errors.New("owner-store linking is unsupported or has invalid input")
-	}
-	absolute, err := filepath.Abs(directory)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil || m.link != nil {
-		return ErrPending
-	}
-	clearLink(m.linking)
-	m.linking = &vault.OwnerStore{Directory: absolute, Master: append([]byte(nil), master...)}
-	m.busy = true
-	m.jobs <- ":link"
-	m.signal()
-	return nil
-}
-
 func (m *Manager) linkStore(ctx context.Context) error {
 	m.mu.Lock()
 	link := copyLink(m.linking)
@@ -171,19 +148,6 @@ func (m *Manager) linkStore(ctx context.Context) error {
 	return syncDatabase(ctx, m.path, m.db)
 }
 
-// RetryDatabase retries encrypted local persistence, never a remote mutation.
-func (m *Manager) RetryDatabase() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil {
-		return ErrPending
-	}
-	m.busy = true
-	m.jobs <- ":save"
-	m.signal()
-	return nil
-}
-
 // importConflicts must be called with m.mu held; the staged plan is read-only
 // while any other goroutine may be reading it.
 func (m *Manager) importConflicts() ([]vault.ImportConflict, error) {
@@ -201,6 +165,10 @@ func (m *Manager) importConflicts() ([]vault.ImportConflict, error) {
 func (m *Manager) ImportStatus() ImportStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.importStatus(nil)
+}
+
+func (m *Manager) importStatus(metadata *vault.DirectoryMetadata) ImportStatus {
 	s := &m.imp
 	status := ImportStatus{Phase: s.phase, Err: s.err, DirectoryApplied: s.effects}
 	if s.phase == ImportIdle || s.phase == ImportInspecting {
@@ -209,7 +177,12 @@ func (m *Manager) ImportStatus() ImportStatus {
 	status.Preview, status.Total = clonePreview(s.preview), len(s.preview.Secrets)
 	// Only receipts count: a colliding foreign alias is never Published.
 	if m.db != nil && len(s.published) > 0 {
-		if metadata, err := m.db.Metadata(); err == nil {
+		if metadata == nil {
+			if current, err := m.db.Metadata(); err == nil {
+				metadata = &current
+			}
+		}
+		if metadata != nil {
 			status.Published = importPublished(s.preview.Secrets, s.published, metadata.Secrets)
 		}
 	}
@@ -225,7 +198,9 @@ func (m *Manager) ImportStatus() ImportStatus {
 
 // ConfirmImport only queues the apply job; the TUI polls ImportStatus. The
 // job re-checks conflicts authoritatively inside the directory merge.
-func (m *Manager) ConfirmImport() error {
+func (m *Manager) ConfirmImport() error                  { return m.confirmImport(nil) }
+func (m *Manager) ConfirmImportAt(expected uint64) error { return m.confirmImport(&expected) }
+func (m *Manager) confirmImport(expected *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportStaged || m.imp.staged == nil {
@@ -238,35 +213,52 @@ func (m *Manager) ConfirmImport() error {
 	if len(conflicts) != 0 {
 		return vault.ErrImportConflict
 	}
-	m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
-	m.busy = true
-	m.jobs <- ":import-apply"
-	m.signal()
-	return nil
+	return m.admit(expected, func() error {
+		m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
+		m.busy = true
+		m.jobs <- ":import-apply"
+		m.signal()
+		return nil
+	})
 }
 
 // ResumeImport continues a partial import after any pending owner intent was
 // resolved through ResumeDraft, Reconcile or CancelDraft. It is also the
 // recovery path out of an import-originated m.err.
-func (m *Manager) ResumeImport() error {
+func (m *Manager) ResumeImport() error                  { return m.resumeImport(nil) }
+func (m *Manager) ResumeImportAt(expected uint64) error { return m.resumeImport(&expected) }
+func (m *Manager) resumeImport(expected *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.closing || m.busy || m.pending != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportPartial || m.imp.staged == nil {
 		return ErrPending
 	}
-	m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
-	m.busy = true
-	m.jobs <- ":import-resume"
-	m.signal()
-	return nil
+	return m.admit(expected, func() error {
+		m.imp.phase, m.imp.err, m.imp.aborted = ImportApplying, nil, false
+		m.busy = true
+		m.jobs <- ":import-resume"
+		m.signal()
+		return nil
+	})
 }
 
 // AbortImport discards the plan. A partial import keeps whatever was already
 // applied to the destination; only the retained RAM values are dropped. A
 // running job is cancelled and settles the final state itself.
-func (m *Manager) AbortImport() error {
+func (m *Manager) AbortImport() error                  { return m.abortImport(nil) }
+func (m *Manager) AbortImportAt(expected uint64) error { return m.abortImport(&expected) }
+func (m *Manager) abortImport(expected *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if expected != nil {
+		if m.closed || m.closing || m.db == nil {
+			return ErrPending
+		}
+		return m.db.AdmitAt(*expected, m.abortImportLocked)
+	}
+	return m.abortImportLocked()
+}
+func (m *Manager) abortImportLocked() error {
 	switch m.imp.phase {
 	case ImportInspecting, ImportApplying:
 		m.imp.aborted = true
@@ -285,4 +277,17 @@ func (m *Manager) AbortImport() error {
 		m.signal()
 	}
 	return nil
+}
+
+func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent {
+	if pending == nil {
+		return nil
+	}
+	copy := *pending
+	copy.Change.Value = append([]byte{}, pending.Change.Value...)
+	copy.Versions = make(map[string]string, len(pending.Versions))
+	for object, version := range pending.Versions {
+		copy.Versions[object] = version
+	}
+	return &copy
 }

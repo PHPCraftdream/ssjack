@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownerbackend"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
@@ -30,7 +31,7 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 	if err != nil {
 		return 1, errors.New("cannot unlock owner database; directory payload schema v2 is required")
 	}
-	model := ownertui.New(ctx, manager)
+	model := ownertui.New(ctx, ownerbackend.New(manager))
 	if err := model.Select(server, account); err != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()

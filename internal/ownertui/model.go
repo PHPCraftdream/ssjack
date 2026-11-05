@@ -86,8 +86,8 @@ func nextTick() tea.Cmd {
 func (m *Model) refresh() tea.Cmd {
 	epoch := m.epoch
 	return func() tea.Msg {
-		metadata, err := m.backend.Metadata()
-		return refreshMsg{epoch: epoch, metadata: metadata, status: m.backend.Status(), imports: m.backend.ImportStatus(), err: err}
+		metadata, status, imports, err := readOwnerSnapshot(m.backend)
+		return refreshMsg{epoch: epoch, metadata: metadata, status: status, imports: imports, err: err}
 	}
 }
 

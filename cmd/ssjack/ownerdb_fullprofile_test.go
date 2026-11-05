@@ -68,6 +68,7 @@ func ownerDatabaseAcceptance(t *testing.T, ctx context.Context, storeDirectory, 
 		t.Fatal(err)
 	}
 	defer manager.Discard()
+	ownerAdmissionAcceptance(t, manager, storeDirectory)
 	linkMaster := []byte(master)
 	linkErr := manager.Link(storeDirectory, linkMaster)
 	clear(linkMaster)

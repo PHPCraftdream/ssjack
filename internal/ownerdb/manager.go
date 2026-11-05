@@ -135,7 +135,7 @@ func (m *Manager) EditAt(expected uint64, edit func(*vault.Vault) error) error {
 func (m *Manager) edit(expected *uint64, edit func(*vault.Vault) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || edit == nil || m.imp.owns() {
+	if m.closed || m.closing || m.busy || edit == nil || m.imp.owns() {
 		return ErrPending
 	}
 	apply := m.db.Apply
@@ -194,6 +194,16 @@ func (m *Manager) submit(expected *uint64, change vault.OwnerChange) error {
 	m.jobs <- pending.ID
 	m.signal()
 	return nil
+}
+
+func (m *Manager) admit(expected *uint64, publish func() error) error {
+	if expected == nil {
+		return publish()
+	}
+	if m.db == nil {
+		return ErrPending
+	}
+	return m.db.AdmitAt(*expected, publish)
 }
 
 func (m *Manager) Status() Status {

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -130,16 +132,6 @@ func safeImportError(err error) error {
 	return errImportFailed
 }
 
-func clonePreview(p vault.ImportPreview) vault.ImportPreview {
-	out := vault.ImportPreview{Encrypted: p.Encrypted, Servers: make([]vault.ImportServer, 0, len(p.Servers)), Secrets: append([]vault.ImportSecret{}, p.Secrets...), Conflicts: append([]vault.ImportConflict{}, p.Conflicts...)}
-	for _, server := range p.Servers {
-		server.Fingerprints = append([]string{}, server.Fingerprints...)
-		server.Accounts = append([]vault.ImportAccount(nil), server.Accounts...)
-		out.Servers = append(out.Servers, server)
-	}
-	return out
-}
-
 func (m *Manager) process(ctx context.Context, id string) error {
 	m.mu.Lock()
 	pending := copyIntent(m.pending)
@@ -245,4 +237,51 @@ func (m *Manager) process(ctx context.Context, id string) error {
 	m.pending, m.confirmed = nil, nil
 	m.mu.Unlock()
 	return nil
+}
+
+// RetryDatabase retries encrypted local persistence, never a remote mutation.
+func (m *Manager) RetryDatabase() error                  { return m.retryDatabase(nil) }
+func (m *Manager) RetryDatabaseAt(expected uint64) error { return m.retryDatabase(&expected) }
+func (m *Manager) retryDatabase(expected *uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil {
+		return ErrPending
+	}
+	return m.admit(expected, func() error {
+		m.busy = true
+		m.jobs <- ":save"
+		m.signal()
+		return nil
+	})
+}
+
+// Link authenticates existing installation material before recording its ID.
+func (m *Manager) Link(directory string, master []byte) error {
+	return m.linkStoreRequest(nil, directory, master)
+}
+func (m *Manager) LinkAt(expected uint64, directory string, master []byte) error {
+	return m.linkStoreRequest(&expected, directory, master)
+}
+func (m *Manager) linkStoreRequest(expected *uint64, directory string, master []byte) error {
+	if !appstoreentry.Supported() || len(master) == 0 || len(master) > 16384 {
+		return errors.New("owner-store linking is unsupported or has invalid input")
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil || m.link != nil {
+		return ErrPending
+	}
+	return m.admit(expected, func() error {
+		clearLink(m.linking)
+		m.linking = &vault.OwnerStore{Directory: absolute, Master: append([]byte(nil), master...)}
+		m.busy = true
+		m.jobs <- ":link"
+		m.signal()
+		return nil
+	})
 }

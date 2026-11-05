@@ -14,13 +14,29 @@ this does not itself provide the remote backend or RPC service. Dispatcher,
 helper/keeper lifecycle, single-writer exclusion and cross-process integration
 remain unfinished.
 
+The local owner backend now pins every form operation to its displayed revision.
+Metadata, database status, import counts and saved ciphertext evidence are read
+through one coordinator snapshot; import publication counts use that same directory
+metadata rather than a second revision. Every queued operation has an explicit
+revision-aware entry point. Queue publication, import cancellation and their RAM
+state changes are admitted under the database revision lock. Admission itself does
+not increment that revision or run another KDF. Callbacks cannot re-enter the vault
+session. Directory edits refuse while the owner worker is busy, so a queued export,
+link or import cannot silently adopt intervening connection edits.
+
+These local paths are prerequisites for RPC dispatch, not an implemented remote
+backend, endpoint lifecycle or complete exclusion of legacy command writers.
+
 ## Authority and confidentiality
 
 The database-password holder owns its contents. OS endpoint permissions are
 necessary but do not prove human approval: a model harness can share the same OS
-identity. The helper must obtain its database context through trusted hidden
-owner unlock. No password, application value or master is sent through MCP,
-argv, environment, a watched file, or a plaintext bootstrap document.
+identity. The helper must obtain its database context through trusted owner
+unlock. Hidden input is the default; the explicit existing-vault startup exception
+is documented in [STARTUP-PASSWORD.md](STARTUP-PASSWORD.md). Startup password sources
+are never forwarded to the helper/harness environment or RPC messages. No stored
+application value or master is sent through MCP, argv, environment, a watched file
+or a plaintext bootstrap document.
 
 Packets reuse the existing authenticated `keyfile.Unlocked` storage context and
 full data-encryption profile. Four independent sequential Argon2id derivations

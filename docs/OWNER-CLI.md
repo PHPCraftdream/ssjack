@@ -14,6 +14,13 @@ skipped by Tab/Shift+Tab. Apply is still explicit. Escape, Ctrl+C and Cancel aba
 an unsubmitted form. A failure after submission may follow effects: inspect
 persistence and pending recovery rather than automatically retrying.
 
+Forms pin the database revision from the same snapshot as their displayed metadata.
+A stale Apply refuses before changing the directory or publishing queued owner work.
+Directory edits also refuse while the owner worker is busy, preserving the scope of
+an admitted export/import/link operation. Explicit import cancellation remains
+revision-checked and does not roll back effects already committed. This local
+backend does not itself provide the pending keeper/helper RPC integration.
+
 ## Syntax and selectors
 
 ```sh

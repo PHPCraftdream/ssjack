@@ -19,7 +19,11 @@ type ExportRequest struct {
 	PlaintextConfirmation string
 }
 
-func (m *Manager) Export(request ExportRequest) error {
+func (m *Manager) Export(request ExportRequest) error { return m.export(nil, request) }
+func (m *Manager) ExportAt(expected uint64, request ExportRequest) error {
+	return m.export(&expected, request)
+}
+func (m *Manager) export(expected *uint64, request ExportRequest) error {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("owner export requires a supported private-file runtime")
 	}
@@ -42,10 +46,12 @@ func (m *Manager) Export(request ExportRequest) error {
 	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil {
 		return ErrPending
 	}
-	m.exportRequest, m.busy = &owned, true
-	m.jobs <- ":export"
-	m.signal()
-	return nil
+	return m.admit(expected, func() error {
+		m.exportRequest, m.busy = &owned, true
+		m.jobs <- ":export"
+		m.signal()
+		return nil
+	})
 }
 
 func (m *Manager) exportArchive(ctx context.Context, request ExportRequest) error {
@@ -216,6 +222,12 @@ func (s *importState) owns() bool {
 // InspectImport reads the archive on the owner worker; the destination is
 // never touched. The outcome lives only in ImportStatus, never in m.err.
 func (m *Manager) InspectImport(path string, password []byte) error {
+	return m.inspectImportRequest(nil, path, password)
+}
+func (m *Manager) InspectImportAt(expected uint64, path string, password []byte) error {
+	return m.inspectImportRequest(&expected, path, password)
+}
+func (m *Manager) inspectImportRequest(expected *uint64, path string, password []byte) error {
 	if path == "" || len(path) > 4096 || strings.ContainsAny(path, "\x00\r\n") || len(password) > 16384 {
 		return errors.New("invalid owner import path or password")
 	}
@@ -231,13 +243,19 @@ func (m *Manager) InspectImport(path string, password []byte) error {
 		clear(owned)
 		return ErrPending
 	}
-	m.imp.reset()
-	m.imp.phase, m.imp.err, m.imp.aborted = ImportInspecting, nil, false
-	m.imp.path, m.imp.password = path, owned
-	m.busy = true
-	m.jobs <- ":import-inspect"
-	m.signal()
-	return nil
+	err := m.admit(expected, func() error {
+		m.imp.reset()
+		m.imp.phase, m.imp.err, m.imp.aborted = ImportInspecting, nil, false
+		m.imp.path, m.imp.password = path, owned
+		m.busy = true
+		m.jobs <- ":import-inspect"
+		m.signal()
+		return nil
+	})
+	if err != nil {
+		clear(owned)
+	}
+	return err
 }
 
 // inspectImport always returns nil so a bad archive or password cannot wedge
@@ -276,17 +294,4 @@ func (m *Manager) readImport(ctx context.Context, path string, password []byte) 
 	}
 	defer opened.Close()
 	return vault.ParseOwnerImport(opened)
-}
-
-func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent {
-	if pending == nil {
-		return nil
-	}
-	copy := *pending
-	copy.Change.Value = append([]byte{}, pending.Change.Value...)
-	copy.Versions = make(map[string]string, len(pending.Versions))
-	for object, version := range pending.Versions {
-		copy.Versions[object] = version
-	}
-	return &copy
 }

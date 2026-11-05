@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownerbackend"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
@@ -45,7 +46,7 @@ func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, acc
 	if err != nil {
 		return 1, errors.New("cannot unlock owner database; directory payload schema v2 is required")
 	}
-	model := ownertui.New(ctx, manager)
+	model := ownertui.New(ctx, ownerbackend.New(manager))
 	err = model.ConfigureCommand(request)
 	if err == nil {
 		_, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run()

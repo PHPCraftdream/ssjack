@@ -179,7 +179,7 @@ func (m *Model) Select(serverName, accountName string) error {
 		}
 		return nil
 	}
-	metadata, err := m.backend.Metadata()
+	metadata, status, imports, err := readOwnerSnapshot(m.backend)
 	if err != nil {
 		return errors.New("cannot load named server metadata")
 	}
@@ -202,7 +202,8 @@ func (m *Model) Select(serverName, accountName string) error {
 			stack = append(stack, at)
 			at.screen, at.account = accountScreen, accountName
 		}
-		m.metadata, m.at, m.stack, m.cursor = metadata, at, stack, 0
+		m.metadata, m.status, m.imp = metadata, status, imports
+		m.at, m.stack, m.cursor = at, stack, 0
 		return nil
 	}
 	return errors.New("selected named server does not exist")
@@ -214,11 +215,11 @@ func (m *Model) ConfigureCommand(request ownercommand.Request) error {
 	if !ok || m.command != nil {
 		return errForm
 	}
-	metadata, err := m.backend.Metadata()
+	metadata, status, imports, err := readOwnerSnapshot(m.backend)
 	if err != nil {
 		return err
 	}
-	m.metadata, m.status, m.imp, m.ready = metadata, m.backend.Status(), m.backend.ImportStatus(), true
+	m.metadata, m.status, m.imp, m.ready = metadata, status, imports, true
 	account := ""
 	if spec.Scope == "account" || request.Scope == "account" {
 		account = request.Account

@@ -11,24 +11,35 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
-func (m *Manager) queueRecovery(command, phase string) error {
+func (m *Manager) queueRecovery(expected *uint64, command, phase string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.closing || m.busy || m.pending == nil || m.pending.Phase != phase {
 		return ErrPending
 	}
-	m.busy = true
-	m.jobs <- command
-	m.signal()
-	return nil
+	return m.admit(expected, func() error {
+		m.busy = true
+		m.jobs <- command
+		m.signal()
+		return nil
+	})
 }
 
 // Reconcile requires a new explicit owner action; startup never calls it.
-func (m *Manager) Reconcile() error { return m.queueRecovery(":reconcile", "prepared") }
+func (m *Manager) Reconcile() error { return m.queueRecovery(nil, ":reconcile", "prepared") }
+func (m *Manager) ReconcileAt(expected uint64) error {
+	return m.queueRecovery(&expected, ":reconcile", "prepared")
+}
 
-func (m *Manager) ResumeDraft() error { return m.queueRecovery(":resume", "draft") }
+func (m *Manager) ResumeDraft() error { return m.queueRecovery(nil, ":resume", "draft") }
+func (m *Manager) ResumeDraftAt(expected uint64) error {
+	return m.queueRecovery(&expected, ":resume", "draft")
+}
 
-func (m *Manager) CancelDraft() error { return m.queueRecovery(":cancel", "draft") }
+func (m *Manager) CancelDraft() error { return m.queueRecovery(nil, ":cancel", "draft") }
+func (m *Manager) CancelDraftAt(expected uint64) error {
+	return m.queueRecovery(&expected, ":cancel", "draft")
+}
 
 func decodeOwnerID(text string) ([16]byte, error) {
 	var id [16]byte

@@ -17,6 +17,19 @@ import (
 
 var errForm = errors.New("invalid owner form")
 
+func readOwnerSnapshot(b Backend) (vault.DirectoryMetadata, ownerdb.Status, ownerdb.ImportStatus, error) {
+	if atomic, ok := b.(interface {
+		OwnerSnapshot() (vault.DirectoryMetadata, ownerdb.Status, ownerdb.ImportStatus, error)
+	}); ok {
+		return atomic.OwnerSnapshot()
+	}
+	metadata, err := b.Metadata()
+	if err != nil {
+		return metadata, ownerdb.Status{}, ownerdb.ImportStatus{}, err
+	}
+	return metadata, b.Status(), b.ImportStatus(), nil
+}
+
 func (m *Model) prepareExportForm(f *form) error {
 	selection := vault.ExportSelection{Servers: make(map[string][]string)}
 	accountCount := 0
