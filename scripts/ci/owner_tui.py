@@ -1,11 +1,18 @@
 """Drive a synthetic owner database using real terminal screen snapshots."""
+import importlib.util
 import os
+from pathlib import Path
 import select
 import signal
 import subprocess
 import sys
 import time
 import uuid
+
+
+spec = importlib.util.spec_from_file_location("owner_terminal_driver", Path(__file__).with_name("owner_terminal.py"))
+terminal = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(terminal)
 
 
 def cancelled(_signal, _frame):
@@ -71,6 +78,7 @@ def main():
         if owned_pid <= 1:
             raise RuntimeError("invalid owned terminal server identity")
         server_pid = owned_pid
+        identity = terminal.server_identity(server_pid)
         tmux("set-option", "-w", "-t", "owner", "remain-on-exit", "on")
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
@@ -104,7 +112,7 @@ def main():
         expect("Global secrets")
         # Root lists connection points first; Up from the first item wraps to Exit.
         keys("Up", "Enter")
-        tmux("wait-for", "finished")
+        terminal.wait_for_exit(prefix, identity, remaining(), environment)
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic terminal child failed")

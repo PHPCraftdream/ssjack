@@ -1,4 +1,5 @@
 """Drive owner_import.py EXECUTABLE DATABASE ARCHIVE; stdin: database password, wrong/correct archive passwords, leak strings."""
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -6,62 +7,15 @@ import subprocess
 import sys
 import time
 import uuid
-import threading
 
 
-class TerminalOutput:
-    """Drain a control client even while the driver waits for pane exit."""
-    def __init__(self, stream, limit=8 * 1024 * 1024):
-        self.stream, self.limit = stream, limit
-        self.data = bytearray()
-        self.condition = threading.Condition()
-        self.sequence, self.seen, self.offset = 0, 0, 0
-        self.ended, self.overflow = False, False
-        self.thread = threading.Thread(target=self.read)
-        self.thread.start()
-
-    def read(self):
-        try:
-            while True:
-                chunk = os.read(self.stream.fileno(), 32768)
-                if not chunk:
-                    return
-                with self.condition:
-                    if len(self.data) + len(chunk) <= self.limit and not self.overflow:
-                        self.data.extend(chunk)
-                    else:
-                        self.overflow = True
-                    self.sequence += 1
-                    self.condition.notify_all()
-        finally:
-            with self.condition:
-                self.ended = True
-                self.condition.notify_all()
-
-    def next(self, seconds, phase):
-        with self.condition:
-            changed = self.condition.wait_for(lambda: self.sequence != self.seen or self.ended, seconds)
-            if self.overflow:
-                raise RuntimeError("synthetic terminal output exceeded its bound")
-            if not changed:
-                raise RuntimeError("synthetic terminal timed out at phase: " + phase)
-            if self.ended and self.sequence == self.seen:
-                raise RuntimeError("synthetic terminal ended at phase: " + phase)
-            self.seen = self.sequence
-
-    def take(self):
-        with self.condition:
-            chunk = bytes(self.data[self.offset:])
-            self.offset = len(self.data)
-            return chunk
-
-    def finish(self):
-        self.thread.join(timeout=5)
-        if self.thread.is_alive():
-            raise RuntimeError("synthetic terminal output reader did not join")
-        if self.overflow:
-            raise RuntimeError("synthetic terminal output exceeded its bound")
-        return bytes(self.data)
+spec = importlib.util.spec_from_file_location("owner_terminal_driver", Path(__file__).with_name("owner_terminal.py"))
+terminal = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(terminal)
+TerminalOutput = terminal.TerminalOutput
+exit_status_ready = terminal.exit_status_ready
+server_identity = terminal.server_identity
+wait_for_exit = terminal.wait_for_exit
 
 IMPORT_ITEM = b"> Import credentials and values"
 PREVIEW_ROWS = [
@@ -99,11 +53,6 @@ def cursor_line(content):
 
 def has_line(content, prefix):
     return any(line.startswith(prefix) for line in content.splitlines())
-
-
-def exit_status_ready(value):
-    status, separator, signal_name = value.strip().partition(b":")
-    return separator == b":" and bool(status or signal_name)
 
 
 def main():
@@ -211,6 +160,7 @@ def main():
         if owned_pid <= 1:
             raise RuntimeError("invalid owned terminal server identity")
         server_pid = owned_pid
+        owner = server_identity(server_pid)
         tmux("set-option", "-w", "-t", "owner", "remain-on-exit", "on")
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
@@ -247,23 +197,7 @@ def main():
         keys("Up")
         expect("> Exit")
         keys("Enter")
-        try:
-            if not exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
-                subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, env=environment, check=True,
-                               timeout=min(remaining(), 75))
-        except subprocess.TimeoutExpired:
-            if not exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
-                content = screen()
-                state = tmux("display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}").strip()
-                state = state if len(state) <= 128 and all(c in b"0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ" for c in state) else b"invalid"
-                pid = tmux("display-message", "-p", "-t", "owner", "#{pane_pid}").strip()
-                try:
-                    process = Path("/proc", pid.decode("ascii") if pid.isdigit() else "0", "stat").read_bytes().rsplit(b")", 1)[1].split()[0]
-                except (OSError, IndexError):
-                    process = b"-"
-                raise RuntimeError("synthetic terminal exit stalled: state=%s process=%s pass-line=%s go-failure=%s" % (
-                    state.decode("ascii"), process.decode("ascii", "replace")[:1], any(line.strip() == b"PASS" for line in content.splitlines()), b"--- FAIL:" in content)) from None
+        wait_for_exit(prefix, owner, min(remaining(), 75), environment)
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         content = screen()
         if status != b"0" or b"PASS" not in content:

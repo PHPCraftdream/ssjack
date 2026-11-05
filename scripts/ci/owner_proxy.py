@@ -109,6 +109,7 @@ def main():
         pid = int(tmux("display-message", "-p", "-t", "owner", "#{pid}").strip())
         if pid <= 1:
             raise RuntimeError("invalid owned terminal identity")
+        identity = shared.server_identity(pid)
         tmux("set-option", "-w", "-t", "owner", "remain-on-exit", "on")
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
@@ -151,7 +152,7 @@ def main():
         keys("Up")
         expect(b"> Exit")
         keys("Enter")
-        tmux("wait-for", "finished")
+        shared.wait_for_exit(prefix, identity, remaining(), environment)
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic proxy terminal child failed")

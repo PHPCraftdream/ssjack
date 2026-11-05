@@ -5,7 +5,9 @@ Multi covers key/password/wrong-pin accounts; single has one human point.
 Connection points are sorted; Exit is located in the displayed menu.
 Agent-only accounts are never listed. Screen polling and barrier() order output.
 """
+import importlib.util
 import os
+from pathlib import Path
 import re
 import select
 import signal
@@ -14,6 +16,10 @@ import sys
 import time
 import uuid
 
+spec = importlib.util.spec_from_file_location("owner_terminal_driver", Path(__file__).with_name("owner_terminal.py"))
+terminal = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(terminal)
+menu_index = terminal.menu_index
 OCTAL = re.compile(rb"\\([0-7]{3})")
 
 
@@ -25,13 +31,6 @@ def connect_line(server, login, account, authentication):
     pattern = '^> Connect: "%s" / "127\\.0\\.0\\.1:\\d+" / login "%s" / account "%s" / "%s"' % (
         server, login, account, authentication)
     return pattern.encode()
-
-
-def menu_index(content, label):
-    rows = re.findall(rb"^(?:> |  )(.+)$", content, re.M)
-    if label not in rows:
-        raise RuntimeError("synthetic terminal menu item is not visible")
-    return rows.index(label)
 
 
 def process_gone(pid):
@@ -207,6 +206,7 @@ def main():
         server_pid = int(tmux("display-message", "-p", "-t", "owner", "#{pid}").strip())
         if server_pid <= 1:
             raise RuntimeError("invalid owned terminal server identity")
+        identity = terminal.server_identity(server_pid)
         tmux("set-option", "-w", "-t", "owner", "remain-on-exit", "on")
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
@@ -256,7 +256,7 @@ def main():
 
         move_to(menu_index(screen(), b"Exit"), rb"^> Exit")
         keys("Enter")
-        tmux("wait-for", "finished")
+        terminal.wait_for_exit(prefix, identity, remaining(), environment)
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic terminal child failed")

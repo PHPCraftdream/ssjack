@@ -77,6 +77,7 @@ def main():
         server_pid = int(tmux("display-message", "-p", "-t", "owner", "#{pid}").strip())
         if server_pid <= 1:
             raise RuntimeError("invalid owned terminal identity")
+        identity = shared.server_identity(server_pid)
         tmux("set-option", "-w", "-t", "owner", "remain-on-exit", "on")
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
@@ -95,14 +96,7 @@ def main():
             tmux("send-keys", "-t", "owner", "Tab")
             expect(b"> [Apply]")
             tmux("send-keys", "-t", "owner", "Enter")
-        try:
-            if not shared.exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
-                subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, env=environment, check=True,
-                               timeout=min(remaining(), 75))
-        except subprocess.TimeoutExpired:
-            if not shared.exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
-                raise RuntimeError("synthetic owner command did not exit") from None
+        shared.wait_for_exit(prefix, identity, min(remaining(), 75), environment)
         content = screen()
         if tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip() != b"0" or b"PASS" not in content:
             raise RuntimeError("synthetic owner-command child failed")

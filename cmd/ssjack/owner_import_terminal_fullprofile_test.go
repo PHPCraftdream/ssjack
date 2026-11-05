@@ -71,8 +71,15 @@ func runImportTerminal(t *testing.T, ctx context.Context, database string, passw
 	command.Stdin = bytes.NewReader(input)
 	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
 	command.WaitDelay = 5 * time.Second
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	if err != nil {
 		t.Fatalf("synthetic owner import terminal interaction: %v: %s", err, output)
+	}
+	if bytes.Contains(output, []byte("Owned terminal zombie required a SIGCHLD wakeup.")) {
+		t.Log("synthetic owner import verified an owned zombie wakeup and a real zero exit status")
+	}
+	if bytes.Contains(output, []byte("Owned terminal exit wakeup followed a stalled completion barrier.")) {
+		t.Log("synthetic owner import recovered a missed reaping notification after the completion barrier stalled")
 	}
 }
 
