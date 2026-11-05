@@ -191,6 +191,32 @@ it is not a running keeper service or authorization to expose a generic callback
 through MCP. Native acceptance uses a synthetic handler, actual OS transport and
 independently unlocked production contexts; it does not prove Manager dispatch.
 
+## Native database publication
+
+Before publishing an external owner intent, the manager waits for encrypted saves,
+checks the exact saved ciphertext digest, requests native publication flush and
+checks the digest again. Unix retains the parent-directory `fsync` barrier.
+Windows cannot flush an `os.Open` read-only directory handle: the observed failure
+is `ERROR_ACCESS_DENIED` (5), before archive inspection ever starts.
+
+Windows vault replacement therefore requests `MOVEFILE_REPLACE_EXISTING` with
+`MOVEFILE_WRITE_THROUGH` for the already flushed same-volume staging file, with no
+copy/delete fallback. The subsequent manager barrier opens the existing encrypted
+file with read/write and write-through access, refuses reparse substitution, checks
+its identity and flushes that handle before closing it. Rename, flush and close
+failures propagate; access errors are not ignored. Ciphertext checks before and
+after the barrier remain unchanged. No plaintext file, extra KDF or weaker cipher
+is involved.
+
+These are native OS completion/flush semantics, not POSIX directory-fsync emulation
+or certification against every filesystem/device power-loss failure. In particular,
+Microsoft documents the explicit copy/delete flushing guarantee separately; this
+path does not enable cross-volume copying. See [MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+and [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+Native regression exercises the original read-only directory failure, successful
+file flush, unchanged file identity/bytes, actual replacement and long paths, plus
+refusal rather than success when writable access is unavailable.
+
 ## Acceptance layers
 
 Native tests exercise round trips, exclusive ownership, cancellation, protected

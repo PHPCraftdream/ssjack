@@ -6,12 +6,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpublication"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -54,17 +54,8 @@ func syncDatabase(ctx context.Context, path string, db *vault.Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	parent, err := os.Open(filepath.Dir(path))
-	if err != nil {
+	if err := ownerpublication.Sync(path); err != nil {
 		return err
-	}
-	syncErr := parent.Sync()
-	closeErr := parent.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	after, err := cipherDigest(path)
 	if err != nil || after != expected {

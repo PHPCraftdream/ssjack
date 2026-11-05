@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpublication"
 )
 
 func readEncoded(path string) ([]byte, error) {
@@ -266,5 +267,5 @@ func commit(path string, encoded []byte, expected *[sha256.Size]byte) error {
 	if err != nil || sha256.Sum256(current) != *expected {
 		return errors.New("vault changed before replacement; original file preserved")
 	}
-	return os.Rename(stage.Name(), path)
+	return ownerpublication.Replace(stage.Name(), path)
 }
