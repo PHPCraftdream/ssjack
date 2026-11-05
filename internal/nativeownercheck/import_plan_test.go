@@ -1,6 +1,7 @@
 package nativeownercheck
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -51,6 +53,26 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	manager, err := ownerdb.Open(ctx, path, password)
 	must(t, err)
 	defer manager.Discard()
+	encodedBefore, err := os.ReadFile(path)
+	must(t, err)
+	readonly, err := vault.Load(path, password)
+	must(t, err)
+	if err := vault.SaveUnlocked(ctx, path, readonly); !errors.Is(err, vault.ErrWriterRole) {
+		readonly.Close()
+		t.Fatal("standalone authenticated writer bypassed the live coordinator")
+	}
+	readonly.Close()
+	if second, err := ownerdb.Open(ctx, path, password); !errors.Is(err, vault.ErrWriterRole) {
+		if second != nil {
+			second.Discard()
+		}
+		t.Fatal("second coordinator acquired the same database writer role")
+	}
+	encodedAfter, err := os.ReadFile(path)
+	must(t, err)
+	if !bytes.Equal(encodedBefore, encodedAfter) {
+		t.Fatal("refused coordinator or standalone save changed the encrypted database")
+	}
 	before, err := manager.Snapshot()
 	must(t, err)
 	body, err := pure.EmitCanonical(map[string]any{"version": 2, "targets": map[string]any{}, "servers": map[string]any{}, "secrets": map[string]any{}})
@@ -114,4 +136,9 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	}
 	t.Run("manager-rpc", func(t *testing.T) { verifyManagerRPC(t, ctx, path, password, firstPath, manager) })
 	must(t, manager.Close(ctx))
+	listener, err := ownerlocal.Listen(path)
+	if err != nil {
+		t.Fatal("joined Manager close retained its writer endpoint")
+	}
+	must(t, listener.Close())
 }

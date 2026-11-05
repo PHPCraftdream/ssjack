@@ -56,9 +56,6 @@ func verifyManagerRPC(t *testing.T, ctx context.Context, path string, password [
 	t.Helper()
 	endpoint, err := ownerlocal.Identity(path)
 	must(t, err)
-	listener, err := ownerlocal.Listen(path)
-	must(t, err)
-	defer listener.Close()
 	dispatcher, err := ownerdispatch.New(manager)
 	must(t, err)
 	var peers []*managerRPCPeer
@@ -86,7 +83,7 @@ func verifyManagerRPC(t *testing.T, ctx context.Context, path string, password [
 		p := &managerRPCPeer{unlock: unlock, server: server, lease: lease, cancel: cancel, done: make(chan error, 1)}
 		peers = append(peers, p)
 		go func() {
-			connection, err := listener.Accept(lifetime)
+			connection, err := manager.AcceptOwner(lifetime)
 			if err != nil {
 				p.done <- err
 				return

@@ -13,6 +13,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
+	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -92,6 +93,10 @@ func Adopt(ctx context.Context, path string, loaded *vault.Vault) (*Manager, err
 
 func copyLink(link *vault.OwnerStore) *vault.OwnerStore { return ownerclone.Link(link) }
 func clearLink(link *vault.OwnerStore)                  { ownerclone.ClearLink(link) }
+
+func (m *Manager) AcceptOwner(ctx context.Context) (ownerlocal.Connection, error) {
+	return m.db.AcceptOwner(ctx)
+}
 
 func (m *Manager) ConfirmImportPlanAt(expected, plan uint64) error {
 	return m.confirmImport(&expected, &plan)

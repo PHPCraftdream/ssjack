@@ -41,6 +41,7 @@ type Vault struct {
 	payloadHash [sha256.Size]byte
 	format      int
 	unlocked    *keyfile.Unlocked
+	writer      *writerRole
 }
 
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -65,6 +66,7 @@ func (v *Vault) Close() {
 	v.RemoteMCP.Clear()
 	v.RemoteMCP = nil
 	clear(v.payloadHash[:])
+	v.writer.close()
 }
 
 func (v *Vault) ReplaceKey(name string, private []byte) error {

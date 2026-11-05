@@ -174,7 +174,7 @@ func SaveContext(ctx context.Context, path string, v *Vault, password []byte) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := commit(path, encoded, &v.revision); err != nil {
+	if err := commitWithRole(path, encoded, &v.revision, v.writer); err != nil {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
@@ -205,7 +205,7 @@ func SaveUnlocked(ctx context.Context, path string, v *Vault) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := commit(path, encoded, &v.revision); err != nil {
+	if err := commitWithRole(path, encoded, &v.revision, v.writer); err != nil {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
@@ -229,6 +229,10 @@ func writeAndClose(file *os.File, data []byte) error {
 }
 
 func commit(path string, encoded []byte, expected *[sha256.Size]byte) error {
+	return commitWithRole(path, encoded, expected, nil)
+}
+
+func commitFile(path string, encoded []byte, expected *[sha256.Size]byte) error {
 	lockPath := path + ".lock"
 	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {

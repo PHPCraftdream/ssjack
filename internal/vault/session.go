@@ -42,6 +42,8 @@ type Session struct {
 	saveDigest  func() [sha256.Size]byte
 	savedCipher [sha256.Size]byte
 	exportKey   *keyfile.Unlocked
+	writer      *writerRole
+	closeErr    error
 }
 
 // OpenSession unlocks once. Close or explicit Discard must join its worker.
@@ -66,12 +68,16 @@ func StartSession(ctx context.Context, path string, v *Vault) (*Session, error) 
 		v.Close()
 		return nil, err
 	}
+	if err := v.ClaimWriter(path); err != nil {
+		v.Close()
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		v.Close()
 		return nil, err
 	}
-	key, expected := v.unlocked, v.revision
-	v.unlocked = nil
+	key, expected, role := v.unlocked, v.revision, v.writer
+	v.unlocked, v.writer = nil, nil
 	save := func(ctx context.Context, payload []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -83,7 +89,7 @@ func StartSession(ctx context.Context, path string, v *Vault) (*Session, error) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := commit(path, encoded, &expected); err != nil {
+		if err := commitWithRole(path, encoded, &expected, role); err != nil {
 			return err
 		}
 		expected = sha256.Sum256(encoded)
@@ -91,7 +97,7 @@ func StartSession(ctx context.Context, path string, v *Vault) (*Session, error) 
 	}
 	s := newSession(v, save, key.Close)
 	s.mu.Lock()
-	s.savedCipher = expected
+	s.savedCipher, s.writer = expected, role
 	s.exportKey = key
 	s.saveDigest = func() [sha256.Size]byte { return expected }
 	s.mu.Unlock()
@@ -225,8 +231,9 @@ func (s *Session) Close(ctx context.Context) error {
 	defer s.closeMu.Unlock()
 	s.mu.Lock()
 	if s.closed {
+		err := s.closeErr
 		s.mu.Unlock()
-		return nil
+		return err
 	}
 	s.closing = true
 	s.mu.Unlock()
@@ -237,7 +244,7 @@ func (s *Session) Close(ctx context.Context) error {
 		return err
 	}
 	s.stop()
-	return nil
+	return s.closeErr
 }
 
 // Discard is destructive; the UI must obtain explicit owner confirmation first.
@@ -261,5 +268,8 @@ func (s *Session) stop() {
 	s.mu.Lock()
 	s.state.Close()
 	s.release()
+	if err := s.writer.close(); err != nil {
+		s.closeErr = ErrWriterRole
+	}
 	s.mu.Unlock()
 }

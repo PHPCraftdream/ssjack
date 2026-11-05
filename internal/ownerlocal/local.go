@@ -34,23 +34,32 @@ type Endpoint struct {
 	Binding [sha256.Size]byte
 }
 
-// Identity is metadata only; neither a path hash nor OS ownership authorizes edits.
-func Identity(database string) (Endpoint, error) {
+// CanonicalPath preserves native filename identity, not an authorization grant.
+func CanonicalPath(database string) (string, error) {
 	absolute, err := filepath.Abs(database)
 	if err != nil {
-		return Endpoint{}, ErrEndpoint
+		return "", ErrEndpoint
 	}
 	info, err := os.Lstat(absolute)
 	if err != nil || !info.Mode().IsRegular() {
-		return Endpoint{}, ErrEndpoint
+		return "", ErrEndpoint
 	}
 	parent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
 	if err != nil {
-		return Endpoint{}, ErrEndpoint
+		return "", ErrEndpoint
 	}
 	canonical := normalize(filepath.Join(parent, filepath.Base(absolute)))
 	if canonical == "" {
-		return Endpoint{}, ErrEndpoint
+		return "", ErrEndpoint
+	}
+	return canonical, nil
+}
+
+// Identity is metadata only; neither a path hash nor OS ownership authorizes edits.
+func Identity(database string) (Endpoint, error) {
+	canonical, err := CanonicalPath(database)
+	if err != nil {
+		return Endpoint{}, err
 	}
 	binding := sha256.Sum256([]byte("ssjack/owner-endpoint/v1\x00" + canonical))
 	address, err := endpointAddress(binding)

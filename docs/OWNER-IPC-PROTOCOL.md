@@ -98,6 +98,30 @@ Listeners admit connections, not mutations. The coordinator must stop/join peers
 and complete or fail closed on outstanding persistence before releasing its
 listener ownership. No TCP, environment route or transport fallback is supplied.
 
+## Writer-role lifetime
+
+An authenticated unchanged vault may claim the existing database's native owner
+endpoint before mutation. Session adoption transfers that claim with the retained
+key; it does not open a competing listener or derive another key. Owned autosaves
+publish under the same claim. Read-only vault loads do not acquire writer authority.
+Standalone existing-database commits must acquire the claim or refuse before even
+creating their commit lock. New database creation remains exclusive/no-overwrite;
+a missing existing-database update refuses rather than recreating it.
+
+The writer pins the native canonical filename and publishes through that spelling,
+so a case alias cannot silently change endpoint identity during replacement. The
+claim is not a password grant: loaded authentication, unchanged ciphertext and
+revision checks still apply. Unsafe/occupied endpoint state is not repaired or
+converted into a standalone fallback.
+
+Failed Session saves and cancelled close preserve the live claim. Successful close
+or an explicit discard joins the save worker before releasing it; release failure is not
+reported as a successful Session close. The service receives only `AcceptOwner`,
+not authority to close the listener or read keys. It must cancel/join peers before
+closing the parent Manager. Caller-controlled legacy commands with earlier remote
+or recovery-copy effects still require their own early guard; commit admission alone
+does not yet accept complete legacy-writer exclusion or CLI helper attachment.
+
 ## Packet state machine and bounds
 
 1. The server seals a fresh session challenge, exact endpoint binding, saved
