@@ -36,7 +36,18 @@ func TestOwnerInteractivePTYChild(t *testing.T) {
 	defer cancel()
 	code, err := run(ctx, args)
 	if code != 0 || err != nil {
-		t.Fatal("synthetic interactive child failed")
+		reason := "other"
+		if err != nil {
+			switch err.Error() {
+			case "owner terminal editor stopped unexpectedly":
+				reason = "terminal"
+			case "owner editor stopped with unsaved or unresolved changes; reopen the encrypted database and inspect pending recovery":
+				reason = "save"
+			case "cannot unlock owner database; directory payload schema v2 is required":
+				reason = "unlock"
+			}
+		}
+		t.Fatalf("synthetic interactive child failed: code=%d context-ended=%t reason=%s", code, ctx.Err() != nil, reason)
 	}
 }
 

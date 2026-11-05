@@ -256,8 +256,11 @@ def main():
                     b"Database / Global scope" in content, b"SSH connection failed" in content,
                     b"Import preview" in content)) from None
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
-        if status != b"0" or b"PASS" not in screen():
-            raise RuntimeError("synthetic terminal child failed")
+        content = screen()
+        if status != b"0" or b"PASS" not in content:
+            raise RuntimeError("synthetic terminal child failed: exit-zero=%s pass=%s go-failure=%s context-ended=%s terminal=%s save=%s unlock=%s" % (
+                status == b"0", b"PASS" in content, b"--- FAIL:" in content, b"context-ended=true" in content,
+                b"reason=terminal" in content, b"reason=save" in content, b"reason=unlock" in content))
         transcript = close_control()
         if any(secret in transcript for secret in secrets):
             raise RuntimeError("synthetic terminal exposed private input")

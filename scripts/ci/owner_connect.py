@@ -1,14 +1,9 @@
-"""Drive the owner connection picker through a real terminal against a loopback SSH server.
-
+"""Drive the owner picker through a real terminal against a loopback SSH server.
 Usage: owner_connect.py single|multi EXECUTABLE DATABASE MARKER; stdin carries
-the database secret on line one and the synthetic SSH password on line two
-(leak checks only). Root order (servers, then accounts, sorted by name):
-  multi:  0 main/first (key)  1 second (password)  2 wrong-pin/intruder  3 Servers
-          4 Global secrets  5 Export  6 Import  7 Link  8 Pending  9 Exit
-  single: 0 main/first  1 Servers  2 Global secrets  3 Export  4 Import  5 Link
-          6 Pending  7 Exit (the Go side made every other account agent-only)
-The agent-only account "agentonly" is never listed. No sleeps: screen polling
-plus barrier(), which orders a control-mode response after earlier output.
+the database secret and synthetic SSH password on separate lines (leak checks).
+Multi covers key/password/wrong-pin accounts; single has one human point.
+Connection points are sorted; Exit is located in the displayed menu.
+Agent-only accounts are never listed. Screen polling and barrier() order output.
 """
 import os
 import re
@@ -30,6 +25,13 @@ def connect_line(server, login, account, authentication):
     pattern = '^> Connect: "%s" / "127\\.0\\.0\\.1:\\d+" / login "%s" / account "%s" / "%s"' % (
         server, login, account, authentication)
     return pattern.encode()
+
+
+def menu_index(content, label):
+    rows = re.findall(rb"^(?:> |  )(.+)$", content, re.M)
+    if label not in rows:
+        raise RuntimeError("synthetic terminal menu item is not visible")
+    return rows.index(label)
 
 
 def process_gone(pid):
@@ -62,7 +64,6 @@ def main():
     mode, executable, database, marker = sys.argv[1:]
     if mode not in ("single", "multi"):
         raise RuntimeError("unknown driver mode")
-    exit_index = 9 if mode == "multi" else 7
     password = sys.stdin.buffer.readline(16386).rstrip(b"\n")
     ssh_password = sys.stdin.buffer.readline(4098).rstrip(b"\n")
     if not password or len(password) > 16384 or not ssh_password or not re.fullmatch(r"[0-9a-z]{1,64}", marker):
@@ -253,7 +254,7 @@ def main():
             if b"user=intruder" in screen():
                 raise RuntimeError("a wrong host pin still reached the SSH shell")
 
-        move_to(exit_index, rb"^> Exit")
+        move_to(menu_index(screen(), b"Exit"), rb"^> Exit")
         keys("Enter")
         tmux("wait-for", "finished")
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
