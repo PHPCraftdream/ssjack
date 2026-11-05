@@ -12,6 +12,8 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 )
 
 // unitBox exercises protocol state only; public constructors require real keyfile contexts.
@@ -224,6 +226,30 @@ func (c *frameConnection) Write(_ context.Context, p []byte) (int, error) {
 	return c.Buffer.Write(p)
 }
 func (c *frameConnection) Close() error { return nil }
+func TestOwnerMCPReplyBounds(t *testing.T) {
+	for _, metadata := range []mcpdirectory.Metadata{
+		{Servers: make([]mcpdirectory.ServerMetadata, 33)},
+		{Accounts: make([]mcpdirectory.AccountMetadata, 65)},
+		{Accounts: []mcpdirectory.AccountMetadata{{HeaderNames: make([]string, 5)}}},
+		{Last: map[string][]mcpdirectory.Binding{"profile": make([]mcpdirectory.Binding, 17)}},
+	} {
+		if (Reply{Metadata: Metadata{RemoteMCP: metadata}}).valid() {
+			t.Fatal("owner reply accepted oversized MCP metadata")
+		}
+	}
+	last := make(map[string][]mcpdirectory.Binding)
+	for i := 0; i < 65; i++ {
+		last[string(rune(i))] = nil
+	}
+	if (Reply{Metadata: Metadata{RemoteMCP: mcpdirectory.Metadata{Last: last}}}).valid() {
+		t.Fatal("owner reply accepted too many remembered MCP contexts")
+	}
+	bounded := mcpdirectory.Metadata{Servers: make([]mcpdirectory.ServerMetadata, 32), Accounts: make([]mcpdirectory.AccountMetadata, 64)}
+	if !(Reply{Metadata: Metadata{RemoteMCP: bounded}}).valid() {
+		t.Fatal("owner reply rejected bounded MCP metadata")
+	}
+}
+
 func TestOwnerFramesRefuseBoundsBeforeBodyAndNeverRetryWrites(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

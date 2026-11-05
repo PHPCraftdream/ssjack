@@ -114,6 +114,20 @@ last admitted command still eligible for its matching reply. All frame I/O
 requires a bounded context. A failed/partial write is uncertain and never grants
 permission to automatically replay a mutation.
 
+Snapshot projection now preserves SSH and proxy metadata, remote MCP server/account
+metadata and remembered revision-pinned choices, owner-store state, import previews
+and conflicts, database revision and saved-ciphertext evidence. Mutable maps and
+slices are copied in both directions. Error diagnostics are replaced with closed
+fixed codes; stored credentials, header values and application values are not reply
+fields. Remote MCP reply bounds match the directory limits, including four header
+names and sixteen choices per remembered context. The existing packet plaintext
+bound still applies; oversized snapshots fail rather than silently dropping data.
+
+The reply shape is strict: peers built before the remote MCP metadata field refuse
+the new shape, and new peers refuse the old noncanonical shape. This is fail-closed
+pre-integration protocol evolution, not a persisted vault format change or a rolling
+upgrade promise. No live owner endpoint is started by snapshot projection alone.
+
 The closed operation union covers directory changes, selected secret changes,
 export, link, import inspection/confirmation, explicit recovery, metadata and
 flush. Replies contain only directory/import metadata and persistence evidence;

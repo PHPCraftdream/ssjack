@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
@@ -96,6 +97,7 @@ type Metadata struct {
 	Servers    []ServerMetadata
 	Secrets    map[string]Binding
 	OwnerStore *Store
+	RemoteMCP  mcpdirectory.Metadata
 }
 type Status struct {
 	Revision, SavedRevision                       uint64
@@ -232,6 +234,20 @@ func (r Reply) valid() bool {
 			accounts += len(server.Accounts)
 		}
 		if accounts > 64 {
+			return false
+		}
+	}
+	mcp := r.Metadata.RemoteMCP
+	if len(mcp.Servers) > mcpdirectory.MaxServers || len(mcp.Accounts) > mcpdirectory.MaxAccounts || len(mcp.Last) > 64 {
+		return false
+	}
+	for _, account := range mcp.Accounts {
+		if len(account.HeaderNames) > 4 {
+			return false
+		}
+	}
+	for _, selected := range mcp.Last {
+		if len(selected) > mcpdirectory.MaxSelections {
 			return false
 		}
 	}

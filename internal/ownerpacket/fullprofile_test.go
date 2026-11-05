@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 )
 
 func TestOwnerPacketFullProfile(t *testing.T) {
@@ -75,12 +77,18 @@ func TestOwnerPacketFullProfile(t *testing.T) {
 	if !bytes.Equal(owned, make([]byte, len(owned))) || !bytes.Equal(value, expected) {
 		t.Fatal("owner command ownership or clearing changed")
 	}
-	ack, err := server.Reply(Reply{Status: Status{CipherDigest: digest}})
-	if err != nil {
-		t.Fatal(err)
+	mcp := mcpdirectory.Metadata{
+		Servers:  []mcpdirectory.ServerMetadata{{ID: "synthetic-server", Name: "remote", URL: "https://mcp.invalid/mcp", Enabled: true, Revision: 3}},
+		Accounts: []mcpdirectory.AccountMetadata{{ID: "synthetic-account", ServerID: "synthetic-server", Name: "owner", Authentication: "bearer", Enabled: true, CredentialSet: true, Revision: 4, HeaderNames: []string{"X-Api-Key"}}},
+		Last:     map[string][]mcpdirectory.Binding{"synthetic-profile": {{ServerID: "synthetic-server", AccountID: "synthetic-account", ServerRevision: 3, AccountRevision: 4}}},
 	}
-	if _, err := client.OpenReply(ack); err != nil {
-		t.Fatal(err)
+	ack, err := server.Reply(Reply{Status: Status{CipherDigest: digest}, Metadata: Metadata{RemoteMCP: mcp}})
+	if err != nil || bytes.Contains(ack, []byte(mcp.Servers[0].URL)) {
+		t.Fatal("production reply did not encrypt owner MCP metadata")
+	}
+	reply, err := client.OpenReply(ack)
+	if err != nil || !reflect.DeepEqual(reply.Metadata.RemoteMCP, mcp) || reply.Status.CipherDigest != digest {
+		t.Fatal("production reply lost MCP metadata or persistence evidence")
 	}
 	otherKey, err := keyfile.NewUnlocked(password, 2)
 	if err != nil {
