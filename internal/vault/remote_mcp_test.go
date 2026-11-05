@@ -33,8 +33,10 @@ func TestRemoteMCPRoundTripPreferencesAndOwnedMetadata(t *testing.T) {
 	if err := v.RememberRemoteMCP(ssh, "main", []mcpdirectory.Binding{binding}); err != nil {
 		t.Fatal(err)
 	}
-	target := testTarget(t)
+	target := ownTarget(v.Targets["production"])
 	defer clear(target.PrivateKey)
+	defer clear(target.Password)
+	defer target.Proxy.Clear()
 	if err := v.SetAccount(ssh, "admin", target); err != nil {
 		t.Fatal(err)
 	}
