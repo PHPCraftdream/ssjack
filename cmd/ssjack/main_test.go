@@ -13,7 +13,6 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
@@ -37,9 +36,9 @@ func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			credentialsCalled := false
 			oldCredentials := cliLoadAgentCredentials
-			cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+			cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 				credentialsCalled = true
-				return nil, nil, nil, errors.New("credentials reached")
+				return nil, errors.New("credentials reached")
 			}
 			defer func() { cliLoadAgentCredentials = oldCredentials }()
 			args := []string{"--mode", "declarative", "--enrollment-metadata", tc.path, "--vault", filepath.Join(dir, "missing-vault"), "run", "driver"}
@@ -64,9 +63,9 @@ func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
 	}
 	credentialsCalled := false
 	oldCredentials := cliLoadAgentCredentials
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 		credentialsCalled = true
-		return nil, nil, nil, errors.New("credentials reached")
+		return nil, errors.New("credentials reached")
 	}
 	defer func() { cliLoadAgentCredentials = oldCredentials }()
 	args := []string{"--enrollment-metadata", filepath.Join(dir, "absent"), "--vault", filepath.Join(dir, "missing-vault"), "run", "driver"}
@@ -98,9 +97,9 @@ func TestEnrollmentMetadataSnapshotReachesKeeper(t *testing.T) {
 	oldCredentials, oldLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldCredentials, oldLaunch }()
 	credentialsCalled := false
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 		credentialsCalled = true
-		return nil, nil, nil, errors.New("declarative mode read credentials")
+		return nil, errors.New("declarative mode read credentials")
 	}
 	cliLaunchRun = func(ctx context.Context, opts launch.Options) (int, error) {
 		if err := os.WriteFile(path, []byte(second), 0600); err != nil {
@@ -246,9 +245,9 @@ func TestEnrollmentIdentityCLIReadsSnapshotAndNeverCredentials(t *testing.T) {
 	oldC, oldL := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldC, oldL }()
 	credentials := false
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 		credentials = true
-		return nil, nil, nil, errors.New("credentials accessed")
+		return nil, errors.New("credentials accessed")
 	}
 	launched := false
 	cliLaunchRun = func(_ context.Context, opts launch.Options) (int, error) {

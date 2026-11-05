@@ -39,7 +39,7 @@ func main() {
 	}
 	os.Exit(code)
 }
-func runWithStartupPassword(ctx context.Context, args []string) (int, error) {
+func runWithStartupPassword(ctx context.Context, args []string) (code int, result error) {
 	if handled, err := handleHelp(args, os.Stdout); handled {
 		if err != nil {
 			return 1, err
@@ -302,10 +302,17 @@ func runWithStartupPassword(ctx context.Context, args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		runner, streamRunner, targets, err = cliLoadAgentCredentials(ctx, *vaultPath, profile)
+		credentials, err := cliLoadAgentCredentials(ctx, *vaultPath, profile)
+		if credentials != nil {
+			defer finishAgentCredentials(credentials, &code, &result)
+		}
 		if err != nil {
 			return 1, err
 		}
+		if credentials == nil {
+			return 1, errors.New("credential session is unavailable")
+		}
+		runner, streamRunner, targets = credentials.runner, credentials.stream, credentials.targets
 		if named {
 			if err := bindNamedApplication(applicationOptions, targets); err != nil {
 				return 1, err

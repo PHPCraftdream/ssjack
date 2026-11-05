@@ -13,7 +13,6 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
 func TestClawwrightRegistrationWithoutUnlock(t *testing.T) {
@@ -119,9 +118,9 @@ func TestPolicySnapshotCLIValidationPrecedesCredentials(t *testing.T) {
 	}
 	old := cliLoadAgentCredentials
 	called := false
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 		called = true
-		return nil, nil, nil, errors.New("credentials reached")
+		return nil, errors.New("credentials reached")
 	}
 	defer func() { cliLoadAgentCredentials = old }()
 	for _, tc := range []struct {
@@ -182,8 +181,8 @@ func TestPolicySnapshotCLIReachesAuthenticatedKeeper(t *testing.T) {
 	}
 	oldCredentials, oldLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldCredentials, oldLaunch }()
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
-		return nil, nil, nil, errors.New("declarative mode read credentials")
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
+		return nil, errors.New("declarative mode read credentials")
 	}
 	cliLaunchRun = func(ctx context.Context, opts launch.Options) (int, error) {
 		if opts.Policy == nil || opts.Policy.Digest() != loaded.Digest() {
@@ -245,9 +244,9 @@ func TestEnrollmentIdentityCLIRejectsInvalidAndForgedInputsBeforeCredentials(t *
 	old := cliLoadAgentCredentials
 	defer func() { cliLoadAgentCredentials = old }()
 	called := false
-	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) {
 		called = true
-		return nil, nil, nil, errors.New("credentials accessed")
+		return nil, errors.New("credentials accessed")
 	}
 	cases := [][]string{{"--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "full", "--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "declarative", "--enrollment-metadata", metaPath, "--enrollment-identity", identityPath, "run", "fixture"}, {"--mode", "declarative", "--enrollment-metadata", metaPath, "--policy-snapshot", policyPath, "--enrollment-identity", "relative.json", "run", "fixture"}}
 	for _, args := range cases {

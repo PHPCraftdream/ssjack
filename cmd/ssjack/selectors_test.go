@@ -13,7 +13,6 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -127,15 +126,15 @@ func TestNamedHarnessUsesResolvedCredentialScope(t *testing.T) {
 	previousLoad, previousLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = previousLoad, previousLaunch }()
 	loaded, launched := false, false
-	cliLoadAgentCredentials = func(_ context.Context, path, selector string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(_ context.Context, path, selector string) (*agentCredentials, error) {
 		if selector != "@production/deploy" {
 			t.Fatal("harness lost named selectors")
 		}
 		loaded = true
-		return func(context.Context, string, string, io.Writer, io.Writer) (int, error) {
+		return &agentCredentials{runner: func(context.Context, string, string, io.Writer, io.Writer) (int, error) {
 			t.Fatal("selector test unexpectedly ran SSH")
 			return 1, nil
-		}, nil, []string{"resolved-credential"}, nil
+		}, targets: []string{"resolved-credential"}}, nil
 	}
 	cliLaunchRun = func(_ context.Context, options launch.Options) (int, error) {
 		launched = true

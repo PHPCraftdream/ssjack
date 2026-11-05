@@ -27,6 +27,23 @@ link or import cannot silently adopt intervening connection edits.
 These local paths are prerequisites for RPC dispatch, not an implemented remote
 backend, endpoint lifecycle or complete exclusion of legacy command writers.
 
+## Keeper authentication lifetime
+
+Full-mode startup with a directory payload now transfers the already authenticated
+vault into `ownerdb.Adopt` and retains that owner session until the harness and its
+remote/application consumers have stopped. Adoption does not derive another key or
+request another password. Captured SSH runners remain immutable: later database
+edits do not silently change their address, login, authentication or usage capture.
+Shutdown uses a separate bounded context so cancellation of the harness does not
+skip owner persistence. An owner-close failure overrides a successful harness exit
+with a fixed recovery error; it is never reported as a saved success.
+
+Legacy non-directory startup preserves its previous read-only credential capture;
+it does not create a directory coordinator. Declarative startup still does not
+unlock this database. This lifetime change does not itself start an owner endpoint,
+attach helpers, exclude legacy writers or share a text-adapter installation lock.
+Those remain integration requirements, not working advertised modes.
+
 ## Authority and confidentiality
 
 The database-password holder owns its contents. OS endpoint permissions are
