@@ -96,12 +96,12 @@ def main():
             expect(b"> [Apply]")
             tmux("send-keys", "-t", "owner", "Enter")
         try:
-            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+            if not shared.exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
                 subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, env=environment, check=True,
                                timeout=min(remaining(), 75))
         except subprocess.TimeoutExpired:
-            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+            if not shared.exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
                 raise RuntimeError("synthetic owner command did not exit") from None
         content = screen()
         if tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip() != b"0" or b"PASS" not in content:

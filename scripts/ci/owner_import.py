@@ -99,6 +99,11 @@ def has_line(content, prefix):
     return any(line.startswith(prefix) for line in content.splitlines())
 
 
+def exit_status_ready(value):
+    status, separator, signal_name = value.strip().partition(b":")
+    return separator == b":" and bool(status or signal_name)
+
+
 def main():
     signal.signal(signal.SIGTERM, cancelled)
     executable, database, archive = sys.argv[1:]
@@ -242,13 +247,13 @@ def main():
         expect("> Exit")
         keys("Enter")
         try:
-            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+            if not exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
                 subprocess.run(prefix + ["wait-for", "finished"], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, env=environment, check=True,
                                timeout=min(remaining(), 75))
         except subprocess.TimeoutExpired:
-            # The process state is authoritative even if a hook notification was lost.
-            if tmux("display-message", "-p", "-t", "owner", "#{pane_dead}").strip() != b"1":
+            # PTY EOF alone is not reaped status; a complete result survives a lost hook.
+            if not exit_status_ready(tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}:#{pane_dead_signal}")):
                 content = screen()
                 raise RuntimeError("synthetic terminal exit stalled: working=%s exit-stopped=%s selected-exit=%s list-changed=%s root=%s ssh-failed=%s preview=%s" % (
                     b"Working; please wait" in content, b"Exit stopped:" in content,
@@ -258,8 +263,8 @@ def main():
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         content = screen()
         if status != b"0" or b"PASS" not in content:
-            raise RuntimeError("synthetic terminal child failed: exit-zero=%s pass=%s go-failure=%s context-ended=%s terminal=%s save=%s unlock=%s" % (
-                status == b"0", b"PASS" in content, b"--- FAIL:" in content, b"context-ended=true" in content,
+            raise RuntimeError("synthetic terminal child failed: exit-zero=%s status-empty=%s pass=%s go-failure=%s context-ended=%s terminal=%s save=%s unlock=%s" % (
+                status == b"0", not status, b"PASS" in content, b"--- FAIL:" in content, b"context-ended=true" in content,
                 b"reason=terminal" in content, b"reason=save" in content, b"reason=unlock" in content))
         transcript = close_control()
         if any(secret in transcript for secret in secrets):
