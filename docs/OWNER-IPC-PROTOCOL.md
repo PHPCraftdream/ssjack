@@ -135,6 +135,27 @@ there is no stored-secret or master getter. Mutating requests carry an expected
 revision, whose atomic admission must be enforced by the integrated coordinator.
 A successful receipt is not application adoption or an environment reload.
 
+## Bounded RPC exchange
+
+`ownerrpc.Attach` and `ServePeer` compose real packet peers with native connections.
+They consume the connection and peer, never the borrowed unlock context. Handshake
+I/O is bounded to ten seconds; commands and replies use at most one minute within
+the caller's deadline and authenticated lease. Idle server reads end at the lease.
+Unbounded contexts refuse before I/O. Only one client command is outstanding.
+
+After a command is encoded for dispatch, a write failure, missing reply or failed
+reply authentication closes the channel and returns `ErrUncertain`. The exchange
+never retries or reconnects. Client close first wakes native I/O, then joins the
+active exchange before releasing the packet capability. Callers must join the
+server peer before closing its parent database context. The server clears decoded
+private command buffers after every dispatched outcome, including failed replies.
+
+This layer accepts only the closed command/reply types. Its trusted handler still
+needs Manager admission, helper/import-plan ownership and lifecycle integration;
+it is not a running keeper service or authorization to expose a generic callback
+through MCP. Native acceptance uses a synthetic handler, actual OS transport and
+independently unlocked production contexts; it does not prove Manager dispatch.
+
 ## Acceptance layers
 
 Native tests exercise round trips, exclusive ownership, cancellation, protected
