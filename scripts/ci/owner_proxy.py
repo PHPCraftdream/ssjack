@@ -1,12 +1,18 @@
 """Configure a synthetic per-server proxy through the real Bubble Tea terminal."""
+import importlib.util
 import os
+from pathlib import Path
 import re
-import select
 import signal
 import subprocess
 import sys
 import time
 import uuid
+
+
+spec = importlib.util.spec_from_file_location("owner_import_driver", Path(__file__).with_name("owner_import.py"))
+shared = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(shared)
 
 
 def cancelled(_signal, _frame):
@@ -23,7 +29,7 @@ def main():
     prefix = ["tmux", "-L", "ssjack-proxy-" + uuid.uuid4().hex, "-f", "/dev/null"]
     environment = dict(os.environ, TERM="xterm-256color", SSJACK_OWNER_TUI_CHILD="1")
     deadline = time.monotonic() + 120
-    control, pid = None, None
+    control, output, pid = None, None, None
     pending, transcript = bytearray(), bytearray()
 
     def remaining():
@@ -47,11 +53,14 @@ def main():
         return content
 
     def pump():
-        if not select.select([control.stdout], [], [], remaining())[0]:
-            raise RuntimeError("synthetic proxy terminal output timed out")
-        chunk = os.read(control.stdout.fileno(), 32768)
-        if not chunk:
-            raise RuntimeError("synthetic proxy terminal ended early")
+        output.next(remaining(), "proxy terminal output")
+        consume(output.take())
+
+    def consume(chunk):
+        for offset in range(0, len(chunk), 32768):
+            parse(chunk[offset:offset + 32768])
+
+    def parse(chunk):
         pending.extend(chunk)
         if len(pending) > 1 << 20 or len(transcript) > 2 << 20:
             raise RuntimeError("synthetic proxy terminal output exceeded its bound")
@@ -64,6 +73,22 @@ def main():
                 if len(fields) == 3:
                     transcript.extend(re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m.group(1), 8)]), fields[2]))
         private(transcript)
+
+    def close_control():
+        if control is None:
+            return
+        if not control.stdin.closed:
+            control.stdin.close()
+        control.terminate()
+        try:
+            control.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            control.kill()
+            control.wait(timeout=5)
+        if output is not None:
+            output.finish()
+            consume(output.take())
+        control.stdout.close()
 
     def expect(text):
         while text not in screen():
@@ -88,7 +113,8 @@ def main():
         tmux("set-hook", "-g", "pane-died", "wait-for -S finished")
         control = subprocess.Popen(prefix + ["-C", "attach-session", "-t", "owner"],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, env=environment)
+                                   stderr=subprocess.DEVNULL, env=environment)
+        output = shared.TerminalOutput(control.stdout, limit=2 * 1024 * 1024)
         pump()
         tmux("wait-for", "-S", "ready")
         expect(b"Vault secret:")
@@ -129,29 +155,26 @@ def main():
         status = tmux("display-message", "-p", "-t", "owner", "#{pane_dead_status}").strip()
         if status != b"0" or b"PASS" not in screen():
             raise RuntimeError("synthetic proxy terminal child failed")
+        close_control()
         private(transcript)
         print("Synthetic server proxy terminal configuration accepted.")
     finally:
-        if control is not None:
-            control.terminate()
-            try:
-                control.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                control.kill()
-                control.communicate()
-        if pid is not None:
-            try:
-                result = subprocess.run(prefix + ["display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_pid}"],
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
-                dead, pane = result.stdout.strip().split(b":")
-                if dead == b"0" and int(pane) > 1:
-                    os.kill(int(pane), signal.SIGKILL)
-            except (OSError, ValueError, subprocess.SubprocessError):
-                pass
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        try:
+            close_control()
+        finally:
+            if pid is not None:
+                try:
+                    result = subprocess.run(prefix + ["display-message", "-p", "-t", "owner", "#{pane_dead}:#{pane_pid}"],
+                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+                    dead, pane = result.stdout.strip().split(b":")
+                    if dead == b"0" and int(pane) > 1:
+                        os.kill(int(pane), signal.SIGKILL)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
 
 if __name__ == "__main__":

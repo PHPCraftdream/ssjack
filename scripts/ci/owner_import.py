@@ -1,8 +1,5 @@
-"""Drive owner import in a real terminal (tmux) against synthetic fixtures.
-
-Usage: owner_import.py EXECUTABLE DATABASE ARCHIVE
-Stdin lines (never argv): 1 database password, 2 wrong archive password,
-3 correct archive password, 4+ strings that must never reach the screen.
+"""Drive synthetic owner import: owner_import.py EXECUTABLE DATABASE ARCHIVE.
+Stdin lines: database password, wrong and correct archive passwords, leak strings.
 """
 import os
 import signal
@@ -19,7 +16,7 @@ class TerminalOutput:
         self.stream, self.limit = stream, limit
         self.data = bytearray()
         self.condition = threading.Condition()
-        self.sequence, self.seen = 0, 0
+        self.sequence, self.seen, self.offset = 0, 0, 0
         self.ended, self.overflow = False, False
         self.thread = threading.Thread(target=self.read)
         self.thread.start()
@@ -52,6 +49,12 @@ class TerminalOutput:
             if self.ended and self.sequence == self.seen:
                 raise RuntimeError("synthetic terminal ended at phase: " + phase)
             self.seen = self.sequence
+
+    def take(self):
+        with self.condition:
+            chunk = bytes(self.data[self.offset:])
+            self.offset = len(self.data)
+            return chunk
 
     def finish(self):
         self.thread.join(timeout=5)
