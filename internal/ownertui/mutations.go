@@ -179,11 +179,19 @@ func (m *Model) applyForm() tea.Cmd {
 	m.back()
 	m.working = true
 	operation := *m
-	if scoped, ok := m.backend.(interface{ AtRevision(uint64) Backend }); ok {
-		operation.backend = scoped.AtRevision(f.revision)
-	}
+	operation.backend = scopeBackend(m.backend, f.revision, f.planID)
 	return func() tea.Msg {
 		defer f.clear()
 		return operationMsg{err: operation.perform(f), action: f.action}
 	}
+}
+
+func scopeBackend(b Backend, revision, plan uint64) Backend {
+	if scoped, ok := b.(interface{ AtImportPlan(uint64, uint64) Backend }); ok {
+		return scoped.AtImportPlan(revision, plan)
+	}
+	if scoped, ok := b.(interface{ AtRevision(uint64) Backend }); ok {
+		return scoped.AtRevision(revision)
+	}
+	return b
 }

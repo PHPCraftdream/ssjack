@@ -18,6 +18,8 @@ import (
 type remoteRecorder struct {
 	command   ownerpacket.Command
 	snapshots uint64
+	revision  uint64
+	plan      uint64
 	closed    int
 	failure   error
 }
@@ -38,9 +40,18 @@ func (r *remoteRecorder) Execute(ctx context.Context, command ownerpacket.Comman
 	}
 	if command.Operation == "snapshot" {
 		r.snapshots++
+		revision := r.revision
+		if revision == 0 {
+			revision = r.snapshots
+		}
+		imports := ownerdb.ImportStatus{PlanID: r.plan}
+		if r.plan != 0 {
+			imports.Phase = ownerdb.ImportStaged
+		}
 		return ownerdb.Snapshot{
 			Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Address: "synthetic.invalid:22"}}},
-			Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: r.snapshots}}}, r.failure
+			Import:    imports,
+			Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: revision}}}, r.failure
 	}
 	return ownerdb.Snapshot{}, r.failure
 }
@@ -79,12 +90,15 @@ func TestRemoteMutationsUseClosedCommandsAndImmutableRevision(t *testing.T) {
 		if err := test.call(original); !errors.Is(err, vault.ErrOwnerRevision) || r.command.Operation != "" {
 			t.Fatal("unscoped remote mutation fetched a revision or reached the wire")
 		}
-		b := original.AtRevision(42).(*Remote)
+		b := original.AtImportPlan(42, 7).(*Remote)
 		if err := test.call(b); !errors.Is(err, refusal) || original.expected != nil {
 			t.Fatal("remote form lost its error or changed the retained revision scope")
 		}
 		revision := uint64(42)
 		test.want.Revision = &revision
+		if test.want.Operation == "confirm-import" || (test.want.Operation == "recovery" && (test.want.Recovery == "resume-import" || test.want.Recovery == "abort-import")) {
+			test.want.Plan = 7
+		}
 		if !reflect.DeepEqual(r.command, test.want) {
 			t.Fatal("remote form changed a closed command's scope or private input")
 		}
@@ -141,6 +155,30 @@ func TestRemoteRefusesCallbacksAndDoesNotCloseKeeperOnFailedFlush(t *testing.T) 
 	if err := b.Close(context.Background()); err != nil || r.closed != 1 || r.command.Operation != "flush" {
 		t.Fatal("saved helper close did not flush and detach")
 	}
+}
+
+func TestRemoteFormKeepsItsPlanAcrossSameRevisionRefresh(t *testing.T) {
+	r := &remoteRecorder{revision: 42, plan: 17}
+	model := ownertui.New(context.Background(), &Remote{ctx: context.Background(), client: r})
+	request, err := ownercommand.Parse([]string{"pending", "--action", "abort-import"}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.ConfigureCommand(request); err != nil {
+		t.Fatal(err)
+	}
+	r.plan = 18
+	model.Update(model.Init()())
+	r.failure = ownerdb.ErrPending
+	_, operation := model.Update(tea.KeyPressMsg{Code: 13})
+	if operation == nil {
+		t.Fatal("plan-scoped owner form did not reach Apply")
+	}
+	model.Update(operation())
+	if r.command.Operation != "recovery" || r.command.Recovery != "abort-import" || r.command.Plan != 17 || r.command.Revision == nil || *r.command.Revision != 42 || r.plan != 18 {
+		t.Fatal("refreshed form substituted a new plan at the same database revision")
+	}
+	model.ClearInput()
 }
 
 func TestRemoteCommandAndMenuUseTypedDisplayedRevision(t *testing.T) {

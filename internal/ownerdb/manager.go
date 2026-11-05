@@ -26,26 +26,27 @@ type Status struct {
 }
 
 type Manager struct {
-	mu            sync.Mutex
-	closeMu       sync.Mutex
-	path          string
-	db            *vault.Session
-	link          *vault.OwnerStore
-	linking       *vault.OwnerStore
-	pending       *vault.OwnerIntent
-	confirmed     *appstorecrypto.SnapshotCommit
-	resources     *resources
-	exportRequest *ExportRequest
-	busy          bool
-	closed        bool
-	closing       bool
-	err           error
-	imp           importState
-	jobs          chan string
-	changed       chan struct{}
-	done          chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
+	mu             sync.Mutex
+	closeMu        sync.Mutex
+	path           string
+	db             *vault.Session
+	link           *vault.OwnerStore
+	linking        *vault.OwnerStore
+	pending        *vault.OwnerIntent
+	confirmed      *appstorecrypto.SnapshotCommit
+	resources      *resources
+	exportRequest  *ExportRequest
+	busy           bool
+	closed         bool
+	closing        bool
+	err            error
+	imp            importState
+	importSequence uint64
+	jobs           chan string
+	changed        chan struct{}
+	done           chan struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func Open(ctx context.Context, path string, password []byte) (*Manager, error) {
@@ -91,6 +92,16 @@ func Adopt(ctx context.Context, path string, loaded *vault.Vault) (*Manager, err
 
 func copyLink(link *vault.OwnerStore) *vault.OwnerStore { return ownerclone.Link(link) }
 func clearLink(link *vault.OwnerStore)                  { ownerclone.ClearLink(link) }
+
+func (m *Manager) ConfirmImportPlanAt(expected, plan uint64) error {
+	return m.confirmImport(&expected, &plan)
+}
+func (m *Manager) ResumeImportPlanAt(expected, plan uint64) error {
+	return m.resumeImport(&expected, &plan)
+}
+func (m *Manager) AbortImportPlanAt(expected, plan uint64) error {
+	return m.abortImport(&expected, &plan)
+}
 
 func (m *Manager) signal() {
 	close(m.changed)

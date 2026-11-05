@@ -152,6 +152,7 @@ func TestNativeOwnerFullProfile(t *testing.T) {
 	verifySnapshot(t, ctx, installation, directory, second, updated)
 	must(t, store.VerifyUnchanged(digest))
 	t.Run("owner-rpc", func(t *testing.T) { verifyOwnerRPC(t, ctx) })
+	t.Run("import-plan", func(t *testing.T) { verifyImportPlanAdmission(t, ctx) })
 }
 
 func verifySnapshot(t *testing.T, ctx context.Context, installation *appstorecrypto.Installation, directory *appstorefile.Directory, commit appstorecrypto.SnapshotCommit, value []byte) {

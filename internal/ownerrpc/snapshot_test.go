@@ -30,7 +30,7 @@ func snapshotFixture() ownerdb.Snapshot {
 		},
 		Status: ownerdb.Status{Database: vault.SessionStatus{Revision: 12, SavedRevision: 11, Pending: true}, Busy: true, Pending: true},
 		Import: ownerdb.ImportStatus{
-			Phase: ownerdb.ImportPartial, Published: 1, Total: 2, DirectoryApplied: true,
+			Phase: ownerdb.ImportPartial, PlanID: 17, Published: 1, Total: 2, DirectoryApplied: true,
 			Preview: vault.ImportPreview{Encrypted: true,
 				Servers:   []vault.ImportServer{{ID: "import-server", Name: "imported", Address: "import.invalid:22", Fingerprints: []string{"SHA256:import"}, Accounts: []vault.ImportAccount{{Name: "import-account", User: "import-user", Authentication: "key", Usage: "agent"}}, Proxy: proxy}},
 				Secrets:   []vault.ImportSecret{{AliasID: "import-alias", Name: "import-secret", ServerID: "import-server", ServerName: "imported", Length: 19}},

@@ -171,7 +171,7 @@ func (m *Manager) ImportStatus() ImportStatus {
 
 func (m *Manager) importStatus(metadata *vault.DirectoryMetadata) ImportStatus {
 	s := &m.imp
-	status := ImportStatus{Phase: s.phase, Err: s.err, DirectoryApplied: s.effects}
+	status := ImportStatus{Phase: s.phase, PlanID: s.planID, Err: s.err, DirectoryApplied: s.effects}
 	if s.phase == ImportIdle || s.phase == ImportInspecting {
 		return status
 	}
@@ -199,11 +199,14 @@ func (m *Manager) importStatus(metadata *vault.DirectoryMetadata) ImportStatus {
 
 // ConfirmImport only queues the apply job; the TUI polls ImportStatus. The
 // job re-checks conflicts authoritatively inside the directory merge.
-func (m *Manager) ConfirmImport() error                  { return m.confirmImport(nil) }
-func (m *Manager) ConfirmImportAt(expected uint64) error { return m.confirmImport(&expected) }
-func (m *Manager) confirmImport(expected *uint64) error {
+func (m *Manager) ConfirmImport() error                  { return m.confirmImport(nil, nil) }
+func (m *Manager) ConfirmImportAt(expected uint64) error { return m.confirmImport(&expected, nil) }
+func (m *Manager) confirmImport(expected, plan *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
+		return ErrPending
+	}
 	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportStaged || m.imp.staged == nil {
 		return ErrPending
 	}
@@ -226,11 +229,14 @@ func (m *Manager) confirmImport(expected *uint64) error {
 // ResumeImport continues a partial import after any pending owner intent was
 // resolved through ResumeDraft, Reconcile or CancelDraft. It is also the
 // recovery path out of an import-originated m.err.
-func (m *Manager) ResumeImport() error                  { return m.resumeImport(nil) }
-func (m *Manager) ResumeImportAt(expected uint64) error { return m.resumeImport(&expected) }
-func (m *Manager) resumeImport(expected *uint64) error {
+func (m *Manager) ResumeImport() error                  { return m.resumeImport(nil, nil) }
+func (m *Manager) ResumeImportAt(expected uint64) error { return m.resumeImport(&expected, nil) }
+func (m *Manager) resumeImport(expected, plan *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
+		return ErrPending
+	}
 	if m.closed || m.closing || m.busy || m.pending != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportPartial || m.imp.staged == nil {
 		return ErrPending
 	}
@@ -246,11 +252,14 @@ func (m *Manager) resumeImport(expected *uint64) error {
 // AbortImport discards the plan. A partial import keeps whatever was already
 // applied to the destination; only the retained RAM values are dropped. A
 // running job is cancelled and settles the final state itself.
-func (m *Manager) AbortImport() error                  { return m.abortImport(nil) }
-func (m *Manager) AbortImportAt(expected uint64) error { return m.abortImport(&expected) }
-func (m *Manager) abortImport(expected *uint64) error {
+func (m *Manager) AbortImport() error                  { return m.abortImport(nil, nil) }
+func (m *Manager) AbortImportAt(expected uint64) error { return m.abortImport(&expected, nil) }
+func (m *Manager) abortImport(expected, plan *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
+		return ErrPending
+	}
 	if expected != nil {
 		if m.closed || m.closing || m.db == nil {
 			return ErrPending

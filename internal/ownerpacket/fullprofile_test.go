@@ -90,6 +90,23 @@ func TestOwnerPacketFullProfile(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(reply.Metadata.RemoteMCP, mcp) || reply.Status.CipherDigest != digest {
 		t.Fatal("production reply lost MCP metadata or persistence evidence")
 	}
+	planCommand, err := client.Command(Command{Operation: "confirm-import", Revision: &revision, Plan: 17})
+	if err != nil {
+		t.Fatal("production client rejected a plan-scoped decision")
+	}
+	openedPlan, err := server.OpenCommand(planCommand)
+	if err != nil || openedPlan == nil || openedPlan.Plan != 17 {
+		t.Fatal("production request lost its authenticated RAM plan identity")
+	}
+	openedPlan.Clear()
+	planReply, err := server.Reply(Reply{Import: ImportStatus{Phase: "staged", PlanID: 17}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectedPlan, err := client.OpenReply(planReply)
+	if err != nil || projectedPlan.Import.PlanID != 17 {
+		t.Fatal("production reply lost its authenticated RAM plan identity")
+	}
 	otherKey, err := keyfile.NewUnlocked(password, 2)
 	if err != nil {
 		t.Fatal(err)

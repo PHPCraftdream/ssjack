@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -282,3 +283,18 @@ func (m *Manager) MetadataSnapshot() (vault.DirectoryMetadata, vault.SessionStat
 }
 
 func clonePreview(p vault.ImportPreview) vault.ImportPreview { return ownerclone.Preview(p) }
+
+func (m *Manager) readImport(ctx context.Context, path string, password []byte) (*vault.OwnerImport, error) {
+	if err := m.importStopped(ctx); err != nil {
+		return nil, err
+	}
+	if err := syncDatabase(ctx, m.path, m.db); err != nil {
+		return nil, err
+	}
+	opened, err := ownerarchive.ReadFile(ctx, path, password)
+	if err != nil {
+		return nil, err
+	}
+	defer opened.Close()
+	return vault.ParseOwnerImport(opened)
+}

@@ -18,6 +18,7 @@ type recorder struct {
 	*ownerdb.Manager
 	action    string
 	revision  uint64
+	plan      uint64
 	snapshots uint64
 }
 
@@ -47,6 +48,18 @@ func (r *recorder) RetryDatabaseAt(revision uint64) error { return r.record("ret
 func (r *recorder) ReconcileAt(revision uint64) error     { return r.record("reconcile", revision) }
 func (r *recorder) ResumeDraftAt(revision uint64) error   { return r.record("resume-draft", revision) }
 func (r *recorder) CancelDraftAt(revision uint64) error   { return r.record("cancel-draft", revision) }
+func (r *recorder) ConfirmImportPlanAt(revision, plan uint64) error {
+	r.plan = plan
+	return r.record("confirm", revision)
+}
+func (r *recorder) ResumeImportPlanAt(revision, plan uint64) error {
+	r.plan = plan
+	return r.record("resume-import", revision)
+}
+func (r *recorder) AbortImportPlanAt(revision, plan uint64) error {
+	r.plan = plan
+	return r.record("abort-import", revision)
+}
 func (r *recorder) Edit(_ func(*vault.Vault) error) error { return r.record("unscoped-edit", 0) }
 func (r *recorder) Snapshot() (ownerdb.Snapshot, error) {
 	r.snapshots++
@@ -78,6 +91,20 @@ func TestEveryScopedMutationUsesThePinnedAdmissionAPI(t *testing.T) {
 				t.Fatal("scoped operation lost its revision, error or immutable original backend")
 			}
 		})
+	}
+}
+
+func TestLocalImportDecisionsPinBothDisplayedIdentities(t *testing.T) {
+	for _, call := range []func(ownertui.Backend) error{
+		func(b ownertui.Backend) error { return b.ConfirmImport() },
+		func(b ownertui.Backend) error { return b.ResumeImport() },
+		func(b ownertui.Backend) error { return b.AbortImport() },
+	} {
+		r := &recorder{}
+		original := &Local{manager: r}
+		if err := call(original.AtImportPlan(42, 17)); !errors.Is(err, refusal) || r.revision != 42 || r.plan != 17 || original.expected != nil || original.plan != nil {
+			t.Fatal("local import scope lost its displayed revision, plan, error or immutable original")
+		}
 	}
 }
 

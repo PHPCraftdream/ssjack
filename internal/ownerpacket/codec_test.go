@@ -250,6 +250,22 @@ func TestOwnerMCPReplyBounds(t *testing.T) {
 	}
 }
 
+func TestImportDecisionsRequireExactlyOnePlanIdentity(t *testing.T) {
+	revision := uint64(7)
+	for _, command := range []Command{{Operation: "confirm-import", Revision: &revision}, {Operation: "recovery", Revision: &revision, Recovery: "resume-import"}, {Operation: "recovery", Revision: &revision, Recovery: "abort-import"}} {
+		if command.valid() {
+			t.Fatal("import decision omitted its displayed RAM plan")
+		}
+		command.Plan = 17
+		if !command.valid() {
+			t.Fatal("plan-scoped import decision was rejected")
+		}
+	}
+	if (Command{Operation: "snapshot", Plan: 17}).valid() || (Command{Operation: "recovery", Revision: &revision, Recovery: "retry-db", Plan: 17}).valid() {
+		t.Fatal("non-import command accepted unrelated plan authority")
+	}
+}
+
 func TestOwnerFramesRefuseBoundsBeforeBodyAndNeverRetryWrites(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

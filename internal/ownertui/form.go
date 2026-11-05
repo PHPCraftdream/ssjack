@@ -23,6 +23,7 @@ type field struct {
 }
 
 type form struct {
+	planID      uint64
 	revision    uint64
 	action      string
 	fields      []field
@@ -259,7 +260,7 @@ func (m *Model) importDone(action string, err error) {
 
 // abortImport drops the staged material; the manager clears it.
 func (m *Model) abortImport() {
-	if m.backend.AbortImport() != nil {
+	if scopeBackend(m.backend, m.status.Database.Revision, m.imp.PlanID).AbortImport() != nil {
 		m.message = "Import abort failed; use Pending change → abort-import."
 	}
 	m.imp = ownerdb.ImportStatus{}

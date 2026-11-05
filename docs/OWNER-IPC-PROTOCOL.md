@@ -151,8 +151,24 @@ operation validation still applies; absolute paths are not authorization.
 Closing a remote form first requests flush, then detaches only its client peer.
 A failed flush does not claim saved success or close the keeper. The helper must
 also close its client on abandoned/error exits before closing its own unlock.
-Routing and shared-form tests do not establish live keeper attachment or import
-plan ownership; those remain integration requirements.
+Routing and shared-form tests do not establish live keeper attachment or helper
+lease ownership; those remain integration requirements.
+
+RAM import plans have a non-secret monotonic identity within the coordinator.
+Successful inspection admission allocates the next identity without changing the
+database revision; aborted/failed plans do not reuse identities. Counter exhaustion
+refuses new inspection rather than wrapping. Confirmation, resume and abort can be
+admitted only against the expected plan and database revision under the Manager
+lock. Existing trusted local APIs remain available; shared Local/Remote forms use
+immutable plan-aware scopes. A refresh cannot substitute a new plan into an open
+form. Leaving a preview also targets its displayed revision and plan.
+
+The closed protocol requires a nonzero `plan` only for confirm/resume/abort import
+decisions and returns `PlanID` in import metadata. Plan identity is neither a grant
+nor authentication: authenticated helper/lease ownership and disconnect cleanup
+still need integration. The fields are RAM/protocol metadata, not a vault schema
+change. Native production acceptance replaces plan A with B at the same database
+revision and requires stale A decisions to leave the full snapshot unchanged.
 
 ## Bounded RPC exchange
 

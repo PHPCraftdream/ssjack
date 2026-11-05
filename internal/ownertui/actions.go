@@ -55,7 +55,7 @@ func input(label, help string, limit int, secret bool, value string) field {
 }
 
 func (m *Model) openForm(action string) {
-	f := &form{action: action, origin: m.at, revision: m.status.Database.Revision}
+	f := &form{action: action, origin: m.at, revision: m.status.Database.Revision, planID: m.imp.PlanID}
 	switch action {
 	case "add-server":
 		f.fields = []field{

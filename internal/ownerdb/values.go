@@ -9,7 +9,6 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
-	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -169,6 +168,7 @@ const (
 
 // ImportStatus carries metadata only: never values, credentials or passwords.
 type ImportStatus struct {
+	PlanID           uint64
 	Phase            ImportPhase
 	Preview          vault.ImportPreview
 	Conflicts        []vault.ImportConflict
@@ -191,6 +191,7 @@ var (
 // import and not yet receipted. Only the commit hook (importCommitted) writes
 // receipts; an alias is import-owned only by an exact receipt.
 type importState struct {
+	planID    uint64
 	phase     ImportPhase
 	staged    *vault.OwnerImport
 	preview   vault.ImportPreview
@@ -207,6 +208,7 @@ type importState struct {
 
 // reset discards every secret-bearing buffer and the plan metadata.
 func (s *importState) reset() {
+	s.planID = 0
 	s.staged.Close()
 	clear(s.password)
 	s.staged, s.password, s.preview, s.path, s.effects = nil, nil, vault.ImportPreview{}, "", false
@@ -239,12 +241,14 @@ func (m *Manager) inspectImportRequest(expected *uint64, path string, password [
 		clear(owned)
 		return ErrPending
 	}
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.importSequence == ^uint64(0) {
 		clear(owned)
 		return ErrPending
 	}
 	err := m.admit(expected, func() error {
 		m.imp.reset()
+		m.importSequence++
+		m.imp.planID = m.importSequence
 		m.imp.phase, m.imp.err, m.imp.aborted = ImportInspecting, nil, false
 		m.imp.path, m.imp.password = path, owned
 		m.busy = true
@@ -274,24 +278,9 @@ func (m *Manager) inspectImport(ctx context.Context) error {
 		staged, err = nil, ErrImportAborted
 	}
 	if err != nil {
-		m.imp.phase, m.imp.err = ImportIdle, safeImportError(err)
+		m.imp.phase, m.imp.err, m.imp.planID = ImportIdle, safeImportError(err), 0
 		return nil
 	}
 	m.imp.staged, m.imp.preview, m.imp.phase, m.imp.err = staged, staged.Preview(), ImportStaged, nil
 	return nil
-}
-
-func (m *Manager) readImport(ctx context.Context, path string, password []byte) (*vault.OwnerImport, error) {
-	if err := m.importStopped(ctx); err != nil {
-		return nil, err
-	}
-	if err := syncDatabase(ctx, m.path, m.db); err != nil {
-		return nil, err
-	}
-	opened, err := ownerarchive.ReadFile(ctx, path, password)
-	if err != nil {
-		return nil, err
-	}
-	defer opened.Close()
-	return vault.ParseOwnerImport(opened)
 }

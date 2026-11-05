@@ -25,10 +25,13 @@ type manager interface {
 	InspectImportAt(uint64, string, []byte) error
 	ConfirmImport() error
 	ConfirmImportAt(uint64) error
+	ConfirmImportPlanAt(uint64, uint64) error
 	ResumeImport() error
 	ResumeImportAt(uint64) error
+	ResumeImportPlanAt(uint64, uint64) error
 	AbortImport() error
 	AbortImportAt(uint64) error
+	AbortImportPlanAt(uint64, uint64) error
 	RetryDatabase() error
 	RetryDatabaseAt(uint64) error
 	Reconcile() error
@@ -44,11 +47,15 @@ type manager interface {
 type Local struct {
 	manager  manager
 	expected *uint64
+	plan     *uint64
 }
 
 func New(m *ownerdb.Manager) *Local { return &Local{manager: m} }
 func (b *Local) AtRevision(revision uint64) ownertui.Backend {
 	return &Local{manager: b.manager, expected: &revision}
+}
+func (b *Local) AtImportPlan(revision, plan uint64) ownertui.Backend {
+	return &Local{manager: b.manager, expected: &revision, plan: &plan}
 }
 func (b *Local) OwnerSnapshot() (vault.DirectoryMetadata, ownerdb.Status, ownerdb.ImportStatus, error) {
 	snapshot, err := b.manager.Snapshot()
@@ -67,12 +74,21 @@ func (b *Local) decision(at func(uint64) error, current func() error) error {
 	return current()
 }
 func (b *Local) ConfirmImport() error {
+	if b.plan != nil {
+		return b.manager.ConfirmImportPlanAt(*b.expected, *b.plan)
+	}
 	return b.decision(b.manager.ConfirmImportAt, b.manager.ConfirmImport)
 }
 func (b *Local) ResumeImport() error {
+	if b.plan != nil {
+		return b.manager.ResumeImportPlanAt(*b.expected, *b.plan)
+	}
 	return b.decision(b.manager.ResumeImportAt, b.manager.ResumeImport)
 }
 func (b *Local) AbortImport() error {
+	if b.plan != nil {
+		return b.manager.AbortImportPlanAt(*b.expected, *b.plan)
+	}
 	return b.decision(b.manager.AbortImportAt, b.manager.AbortImport)
 }
 func (b *Local) RetryDatabase() error {

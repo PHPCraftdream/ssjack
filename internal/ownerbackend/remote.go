@@ -23,6 +23,7 @@ type Remote struct {
 	ctx      context.Context
 	client   remoteClient
 	expected *uint64
+	plan     *uint64
 }
 
 func NewRemote(ctx context.Context, client *ownerrpc.Client) (*Remote, error) {
@@ -34,6 +35,10 @@ func NewRemote(ctx context.Context, client *ownerrpc.Client) (*Remote, error) {
 
 func (b *Remote) AtRevision(revision uint64) ownertui.Backend {
 	return &Remote{ctx: b.ctx, client: b.client, expected: &revision}
+}
+
+func (b *Remote) AtImportPlan(revision, plan uint64) ownertui.Backend {
+	return &Remote{ctx: b.ctx, client: b.client, expected: &revision, plan: &plan}
 }
 
 func (b *Remote) execute(command ownerpacket.Command) (ownerdb.Snapshot, error) {
@@ -69,6 +74,12 @@ func (b *Remote) ImportStatus() ownerdb.ImportStatus {
 func (b *Remote) mutate(command ownerpacket.Command) error {
 	if b.expected == nil {
 		return vault.ErrOwnerRevision
+	}
+	if command.Operation == "confirm-import" || (command.Operation == "recovery" && (command.Recovery == "resume-import" || command.Recovery == "abort-import")) {
+		if b.plan == nil || *b.plan == 0 {
+			return ownerdb.ErrPending
+		}
+		command.Plan = *b.plan
 	}
 	revision := *b.expected
 	command.Revision = &revision

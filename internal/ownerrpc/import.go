@@ -30,7 +30,7 @@ func decodeConflicts(in []ownerpacket.Conflict) []vault.ImportConflict {
 
 func encodeImport(in ownerdb.ImportStatus) ownerpacket.ImportStatus {
 	out := ownerpacket.ImportStatus{
-		Phase: string(in.Phase), Conflicts: encodeConflicts(in.Conflicts), Published: in.Published,
+		Phase: string(in.Phase), PlanID: in.PlanID, Conflicts: encodeConflicts(in.Conflicts), Published: in.Published,
 		Total: in.Total, DirectoryApplied: in.DirectoryApplied, ErrorCode: errorCode(in.Err),
 	}
 	out.Preview.Encrypted, out.Preview.Conflicts = in.Preview.Encrypted, encodeConflicts(in.Preview.Conflicts)
@@ -58,7 +58,7 @@ func encodeImport(in ownerdb.ImportStatus) ownerpacket.ImportStatus {
 
 func decodeImport(in ownerpacket.ImportStatus) ownerdb.ImportStatus {
 	out := ownerdb.ImportStatus{
-		Phase: ownerdb.ImportPhase(in.Phase), Conflicts: decodeConflicts(in.Conflicts), Published: in.Published,
+		Phase: ownerdb.ImportPhase(in.Phase), PlanID: in.PlanID, Conflicts: decodeConflicts(in.Conflicts), Published: in.Published,
 		Total: in.Total, DirectoryApplied: in.DirectoryApplied, Err: codeError(in.ErrorCode),
 	}
 	out.Preview.Encrypted, out.Preview.Conflicts = in.Preview.Encrypted, decodeConflicts(in.Preview.Conflicts)

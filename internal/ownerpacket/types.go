@@ -57,6 +57,7 @@ type Inspect struct {
 type Command struct {
 	Operation string           `json:"operation"`
 	Revision  *uint64          `json:"revision,omitempty"`
+	Plan      uint64           `json:"plan,omitempty"`
 	Directory *DirectoryChange `json:"directory,omitempty"`
 	Secret    *SecretChange    `json:"secret,omitempty"`
 	Export    *Export          `json:"export,omitempty"`
@@ -116,6 +117,7 @@ type Preview struct {
 	Conflicts []Conflict
 }
 type ImportStatus struct {
+	PlanID           uint64
 	Phase            string
 	Preview          Preview
 	Conflicts        []Conflict
@@ -133,6 +135,10 @@ type Reply struct {
 }
 
 func (c Command) valid() bool {
+	importDecision := c.Operation == "confirm-import" || (c.Operation == "recovery" && (c.Recovery == "resume-import" || c.Recovery == "abort-import"))
+	if importDecision != (c.Plan != 0) {
+		return false
+	}
 	bodies := 0
 	for _, present := range []bool{c.Directory != nil, c.Secret != nil, c.Export != nil, c.Link != nil, c.Inspect != nil, c.Recovery != ""} {
 		if present {
