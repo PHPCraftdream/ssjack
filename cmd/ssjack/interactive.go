@@ -21,7 +21,7 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	password, err := readSecret("Vault secret: ")
+	password, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return 1, err
 	}

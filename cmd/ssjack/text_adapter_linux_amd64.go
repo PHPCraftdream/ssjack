@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
@@ -61,8 +62,11 @@ func credentialIdentity(profile string, target vault.Target) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func readVaultTextCredential(path, profile string) (remote.StreamRunner, string, string, error) {
-	secret, err := readSecret("Vault secret: ")
+func readVaultTextCredential(ctx context.Context, path, profile string) (remote.StreamRunner, string, string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, "", "", errors.New("text-adapter credentials require a trusted input terminal")
+	}
+	secret, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -136,7 +140,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		if len(args) != 1 || rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 			return 1, errors.New("text-adapter identity requires an unlocked vault in a non-root terminal")
 		}
-		_, _, digest, err := readVaultTextCredential(vaultPath, profile)
+		_, _, digest, err := readVaultTextCredential(ctx, vaultPath, profile)
 		if err != nil {
 			return 1, errors.New("cannot derive credential identity")
 		}
@@ -150,7 +154,7 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	if rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 		return 1, errors.New("text adapter requires a non-root terminal outside broker sessions")
 	}
-	runner, profile, digest, err := readVaultTextCredential(vaultPath, profile)
+	runner, profile, digest, err := readVaultTextCredential(ctx, vaultPath, profile)
 	if err != nil {
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}

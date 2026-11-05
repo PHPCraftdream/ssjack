@@ -47,7 +47,7 @@ func Environment(base []string, bootstrap broker.Bootstrap, executable string) [
 		switch {
 		case strings.EqualFold(name, broker.EnvToken), strings.EqualFold(name, broker.EnvFile),
 			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin),
-			strings.EqualFold(name, "SSJACK_APP_ENDPOINT"), strings.EqualFold(name, "SSJACK_APP_TOKEN"), strings.EqualFold(name, "SSJACK_APP_CERTIFICATE_SHA256"):
+			strings.EqualFold(name, "SSJACK_APP_ENDPOINT"), strings.EqualFold(name, "SSJACK_APP_TOKEN"), strings.EqualFold(name, "SSJACK_APP_CERTIFICATE_SHA256"), strings.EqualFold(name, "SSJACK_VAULT_PASSWORD"):
 			continue
 		case strings.EqualFold(name, "PATH"):
 			path = value

@@ -23,7 +23,7 @@ func runPolicy(ctx context.Context, path, profile string, args []string) (int, e
 	if len(args) != 1 || (args[0] != "show" && args[0] != "edit") {
 		return 1, errors.New("usage: ssjack [-p PROFILE] policy show|edit")
 	}
-	v, secret, err := openManagedVault(path)
+	v, secret, err := openManagedVault(ctx, path)
 	if err != nil {
 		return 1, err
 	}

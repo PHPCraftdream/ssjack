@@ -19,7 +19,7 @@ import (
 func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, account string, args []string) (int, error) {
 	invalid := false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name != "vault" && f.Name != "server" && f.Name != "account" {
+		if f.Name != "vault" && f.Name != "server" && f.Name != "account" && f.Name != "vault-password" {
 			invalid = true
 		}
 	})
@@ -36,7 +36,7 @@ func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, acc
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	password, err := readSecret("Vault secret: ")
+	password, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return 1, err
 	}

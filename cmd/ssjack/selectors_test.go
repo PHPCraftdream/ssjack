@@ -127,7 +127,7 @@ func TestNamedHarnessUsesResolvedCredentialScope(t *testing.T) {
 	previousLoad, previousLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = previousLoad, previousLaunch }()
 	loaded, launched := false, false
-	cliLoadAgentCredentials = func(path, selector string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(_ context.Context, path, selector string) (remote.Runner, remote.StreamRunner, []string, error) {
 		if selector != "@production/deploy" {
 			t.Fatal("harness lost named selectors")
 		}

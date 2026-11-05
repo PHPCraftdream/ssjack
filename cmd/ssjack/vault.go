@@ -44,7 +44,7 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 	if args[0] == "init" {
 		return runInitProfile(ctx, path, "main")
 	}
-	secret, err := readSecret("Vault secret: ")
+	secret, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return 1, err
 	}

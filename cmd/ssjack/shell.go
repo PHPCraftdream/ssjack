@@ -22,7 +22,7 @@ func runVaultShell(ctx context.Context, path, name string) (int, error) {
 	if !term.IsTerminal(inputFD) || !term.IsTerminal(outputFD) {
 		return 1, errors.New("interactive SSH requires terminal input and output")
 	}
-	config, address, _, err := readVaultCredential(path, name, "human")
+	config, address, _, err := readVaultCredential(ctx, path, name, "human")
 	if err != nil {
 		return 1, err
 	}

@@ -45,7 +45,7 @@ func runVaultMaintenance(ctx context.Context, path, profile string, args []strin
 		if err := requireNewPath(args[1]); err != nil {
 			return 1, err
 		}
-		password, err := readSecret("Vault secret: ")
+		password, err := readVaultPassword(ctx, "Vault secret: ")
 		if err != nil {
 			return 1, err
 		}
@@ -73,7 +73,7 @@ func runVaultMaintenance(ctx context.Context, path, profile string, args []strin
 	}
 	var current []byte
 	if _, err := os.Lstat(path); err == nil {
-		current, err = readSecret("Current vault secret: ")
+		current, err = readVaultPassword(ctx, "Current vault secret: ")
 		if err != nil {
 			return 1, err
 		}

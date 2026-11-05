@@ -36,7 +36,7 @@ func readSecret(prompt string) ([]byte, error) {
 
 func readTerminalInput(prompt string, allowEmpty bool) ([]byte, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, errors.New("an interactive terminal is required; secrets from arguments, environment variables, or pipes are not accepted")
+		return nil, errors.New("this prompt requires an interactive terminal; only existing vault unlock accepts --vault-password or SSJACK_VAULT_PASSWORD")
 	}
 	fmt.Fprint(os.Stderr, prompt)
 	secret, err := term.ReadPassword(int(os.Stdin.Fd()))

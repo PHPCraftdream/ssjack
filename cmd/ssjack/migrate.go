@@ -29,7 +29,7 @@ func runLegacyMigration(ctx context.Context, destination, profile, source string
 		v = vault.New()
 		fresh = true
 	} else if err == nil {
-		v, secret, err = openManagedVault(destination)
+		v, secret, err = openManagedVault(ctx, destination)
 	}
 	if err != nil {
 		clear(secret)

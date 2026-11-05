@@ -37,7 +37,7 @@ func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			credentialsCalled := false
 			oldCredentials := cliLoadAgentCredentials
-			cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+			cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 				credentialsCalled = true
 				return nil, nil, nil, errors.New("credentials reached")
 			}
@@ -64,7 +64,7 @@ func TestEnrollmentMetadataValidationPrecedesCredentials(t *testing.T) {
 	}
 	credentialsCalled := false
 	oldCredentials := cliLoadAgentCredentials
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		credentialsCalled = true
 		return nil, nil, nil, errors.New("credentials reached")
 	}
@@ -98,7 +98,7 @@ func TestEnrollmentMetadataSnapshotReachesKeeper(t *testing.T) {
 	oldCredentials, oldLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldCredentials, oldLaunch }()
 	credentialsCalled := false
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		credentialsCalled = true
 		return nil, nil, nil, errors.New("declarative mode read credentials")
 	}
@@ -246,7 +246,7 @@ func TestEnrollmentIdentityCLIReadsSnapshotAndNeverCredentials(t *testing.T) {
 	oldC, oldL := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldC, oldL }()
 	credentials := false
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		credentials = true
 		return nil, nil, nil, errors.New("credentials accessed")
 	}

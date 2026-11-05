@@ -22,7 +22,10 @@ ssjack --vault DATABASE --server production --account operator owner edit-accoun
 ```
 
 Global options precede `owner`; action options follow `ACTION`. Global
-`--vault`, `--server`, `--account` are the only supported global options here.
+`--vault`, `--server`, `--account` and `--vault-password` are supported here.
+The database unlock password alone can also come from `SSJACK_VAULT_PASSWORD`;
+see [startup password risks and precedence](STARTUP-PASSWORD.md). This does not
+supply form credentials or confirmations and does not remove the TTY requirement.
 Do not combine with `--interactive`, `--profile`, keeper modes or a harness.
 Duplicate options, conflicting selectors, unknown options and secret/confirmation
 options refuse before unlock. Names are exact and case-sensitive.

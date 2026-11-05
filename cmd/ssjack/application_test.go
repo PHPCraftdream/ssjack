@@ -119,7 +119,7 @@ func TestPolicySnapshotCLIValidationPrecedesCredentials(t *testing.T) {
 	}
 	old := cliLoadAgentCredentials
 	called := false
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		called = true
 		return nil, nil, nil, errors.New("credentials reached")
 	}
@@ -182,7 +182,7 @@ func TestPolicySnapshotCLIReachesAuthenticatedKeeper(t *testing.T) {
 	}
 	oldCredentials, oldLaunch := cliLoadAgentCredentials, cliLaunchRun
 	defer func() { cliLoadAgentCredentials, cliLaunchRun = oldCredentials, oldLaunch }()
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		return nil, nil, nil, errors.New("declarative mode read credentials")
 	}
 	cliLaunchRun = func(ctx context.Context, opts launch.Options) (int, error) {
@@ -245,7 +245,7 @@ func TestEnrollmentIdentityCLIRejectsInvalidAndForgedInputsBeforeCredentials(t *
 	old := cliLoadAgentCredentials
 	defer func() { cliLoadAgentCredentials = old }()
 	called := false
-	cliLoadAgentCredentials = func(string, string) (remote.Runner, remote.StreamRunner, []string, error) {
+	cliLoadAgentCredentials = func(context.Context, string, string) (remote.Runner, remote.StreamRunner, []string, error) {
 		called = true
 		return nil, nil, nil, errors.New("credentials accessed")
 	}

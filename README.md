@@ -61,6 +61,12 @@ public-key file. It does not create users, grant sudo or discover trust. Omit
 `--generate-key` to import an existing key. Generated private bytes stay encrypted;
 only the public key and installation instructions are printed after save.
 
+Existing-vault startup can optionally use `SSJACK_VAULT_PASSWORD` or the global
+`--vault-password VALUE` option instead of the hidden prompt. **These sources can
+expose the password through environment/process inspection or shell history.**
+See [precedence, cleanup and limits](docs/STARTUP-PASSWORD.md). Stored credentials
+and action confirmations remain separate hidden terminal input.
+
 In the menu:
 
 - Press **Enter** on a connection point to connect; showing or focusing one never connects.

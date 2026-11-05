@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,13 +29,13 @@ func chooseCredential(v *vault.Vault, name string) (string, error) {
 	return name, nil
 }
 
-func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, string, error) {
+func readVaultCredential(ctx context.Context, path, name, usage string) (*ssh.ClientConfig, string, string, error) {
 	if name != "" {
 		if err := validateCredentialSelection(name); err != nil {
 			return nil, "", "", err
 		}
 	}
-	secret, err := readSecret("Vault secret: ")
+	secret, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -62,8 +63,8 @@ func readVaultCredential(path, name, usage string) (*ssh.ClientConfig, string, s
 	return config, target.Address, name, nil
 }
 
-func loadAgentCredentials(path, name string) (remote.Runner, remote.StreamRunner, []string, error) {
-	config, address, selected, err := readVaultCredential(path, name, "agent")
+func loadAgentCredentials(ctx context.Context, path, name string) (remote.Runner, remote.StreamRunner, []string, error) {
+	config, address, selected, err := readVaultCredential(ctx, path, name, "agent")
 	if err != nil {
 		return nil, nil, nil, err
 	}

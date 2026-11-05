@@ -39,7 +39,7 @@ func main() {
 	}
 	os.Exit(code)
 }
-func run(ctx context.Context, args []string) (int, error) {
+func runWithStartupPassword(ctx context.Context, args []string) (int, error) {
 	if handled, err := handleHelp(args, os.Stdout); handled {
 		if err != nil {
 			return 1, err
@@ -77,6 +77,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	registerStartupPassword(ctx, flags)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
@@ -105,6 +106,9 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 		return 1, err
 	}
+	if err := validateStartupPassword(ctx); err != nil {
+		return 1, err
+	}
 	metadataSupplied, policySupplied, identitySupplied := false, false, false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "enrollment-metadata" {
@@ -125,12 +129,12 @@ func run(ctx context.Context, args []string) (int, error) {
 	if *interactive {
 		conflict := len(command) != 0
 		flags.Visit(func(f *flag.Flag) {
-			if f.Name != "interactive" && f.Name != "vault" && f.Name != "server" && f.Name != "account" {
+			if f.Name != "interactive" && f.Name != "vault" && f.Name != "server" && f.Name != "account" && f.Name != "vault-password" {
 				conflict = true
 			}
 		})
 		if conflict {
-			return 1, errors.New("--interactive accepts only --vault, --server and --account; no command")
+			return 1, errors.New("--interactive accepts only --vault, --server, --account and --vault-password; no command")
 		}
 		return runInteractive(ctx, *vaultPath, *server, *account)
 	}
@@ -298,7 +302,7 @@ func run(ctx context.Context, args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		runner, streamRunner, targets, err = cliLoadAgentCredentials(*vaultPath, profile)
+		runner, streamRunner, targets, err = cliLoadAgentCredentials(ctx, *vaultPath, profile)
 		if err != nil {
 			return 1, err
 		}

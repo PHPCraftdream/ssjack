@@ -22,7 +22,7 @@ func runSafetyCommand(ctx context.Context, path string, args []string) (int, err
 		if err := validateCredentialSelection(args[1]); err != nil {
 			return 1, err
 		}
-		config, address, name, err := readVaultCredential(path, args[1], "")
+		config, address, name, err := readVaultCredential(ctx, path, args[1], "")
 		if err != nil {
 			return 1, err
 		}
@@ -59,7 +59,7 @@ func runDoctor(ctx context.Context, path string) (int, error) {
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return 1, errors.New("vault is unavailable; create it with ssjack vault init")
 	}
-	secret, err := readSecret("Vault secret for full validation: ")
+	secret, err := readVaultPassword(ctx, "Vault secret for full validation: ")
 	if err != nil {
 		return 1, err
 	}
