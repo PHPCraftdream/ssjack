@@ -37,6 +37,11 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
 		t.Skip("owned finite keeper harness only")
 	}
+	for _, argument := range os.Args[1:] {
+		if argument == "--no-output-filter" {
+			t.Fatal("root output-filter option was forwarded to the harness")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	session := nativeGuardHarnessSession(t, ctx)
@@ -64,6 +69,11 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 
 func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *loopbackSSH) {
 	t.Helper()
+	nativeKeeperCycles(t, ctx, path, password, server, name, shell, []string{"edit", "restart"})
+}
+
+func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *loopbackSSH, cycles []string) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +82,7 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, cycle := range []string{"edit", "restart"} {
+	for _, cycle := range cycles {
 		t.Run(cycle, func(t *testing.T) {
 			lifetime, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
@@ -84,9 +94,14 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 				}
 			}
 			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_KEEPER_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD_SECONDS=180")
+			arguments := []string{"-test.run=^TestNativeKeeperProcessChild$", "--", "--vault", path, "--server", name, "--account", "main"}
+			if cycle == "bypass" {
+				arguments = append(arguments, "--no-output-filter")
+				environment = append(environment, "SSJACK_OWNER_GUARD_BYPASS_CHILD=1")
+			}
+			arguments = append(arguments, "run", executable, "-test.run=^TestNativeKeeperHarnessChild$")
 			terminal, err := ownerterminal.Start(lifetime, ownerterminal.Command{Executable: executable, UnixBridge: bridge,
-				Directory: t.TempDir(), Environment: environment,
-				Args: []string{"-test.run=^TestNativeKeeperProcessChild$", "--", "--vault", path, "--server", name, "--account", "main", "run", executable, "-test.run=^TestNativeKeeperHarnessChild$"}})
+				Directory: t.TempDir(), Environment: environment, Args: arguments})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,6 +131,9 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 			if err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-HARNESS-READY") != nil {
 				t.Fatal("actual keeper did not start its owned harness")
 			}
+			if cycle == "bypass" && capture.Wait(lifetime, "WARNING: MCP known-literal output filtering is DISABLED") != nil {
+				t.Fatal("trusted bypass launch omitted its terminal warning")
+			}
 			probe, err := ownerlocal.Dial(lifetime, path)
 			if err != nil {
 				t.Fatal("actual keeper did not hold the native database endpoint")
@@ -136,7 +154,7 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 				t.Run("native-human-ssh", func(t *testing.T) {
 					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
 				})
-			} else {
+			} else if cycle == "restart" {
 				metadata, err := observer.Backend().Metadata()
 				found := false
 				for _, entry := range metadata.Servers {
@@ -149,6 +167,10 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 				if err != nil || !found {
 					t.Fatal("restarted actual keeper lost the confirmed helper account")
 				}
+			} else {
+				t.Run("native-human-ssh", func(t *testing.T) {
+					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
+				})
 			}
 			if err := observer.Close(lifetime); err != nil {
 				t.Fatal(err)

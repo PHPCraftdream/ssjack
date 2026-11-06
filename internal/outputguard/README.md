@@ -110,3 +110,11 @@ private delivery, fixed diagnostics and application bootstrap-token masking stay
 enabled. Human streams remain unfiltered regardless of this option. Terminal
 presence is a necessary boundary check, not proof of a distinct human identity;
 the password holder and trusted startup process retain the existing owner trust.
+
+The independent native bypass profile checks the warning, exact unfiltered model
+text/base64 bytes, non-forwarding of the root flag, continued human SSH echo and
+legacy-writer refusal, and authenticated encrypted database readback. Application
+child tests separately retain bootstrap-token masking under a deliberately empty
+literal snapshot. SSH stream regression tests pass fullscreen/ANSI sequences,
+NUL and invalid UTF-8 through stdin and echoed stdout byte-for-byte; this is not
+an assertion that a particular external editor was installed or driven.

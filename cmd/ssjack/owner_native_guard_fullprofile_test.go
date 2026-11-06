@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,10 +18,65 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 const nativeGuardCommand = "ssjack-ci-known-literal-output"
 const nativeGuardAddedCredential = "synthetic keeper MCP credential"
+
+func TestVaultOutputFilterFullProfile(t *testing.T) {
+	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
+		t.Skip("native output-filter acceptance runs in GitHub CI")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	defer clear(private)
+	public, err := ssh.NewPublicKey(private.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startLoopbackSSH(t, public, connectPassword, "owner-control")
+	v := vault.NewDirectory()
+	defer v.Close()
+	target := vault.Target{Address: server.address(), User: "second", Password: []byte(connectPassword), HostKeys: []string{string(ssh.MarshalAuthorizedKey(server.hostKey))}, Usage: "both"}
+	serverID, err := v.AddServer("production", "main", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(private, "synthetic bypass writer refusal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(block.Bytes)
+	key := target
+	key.User, key.Password, key.PrivateKey, key.Usage = "first", nil, pem.EncodeToMemory(block), "agent"
+	defer clear(key.PrivateKey)
+	if err := v.SetAccount(serverID, "key-only", key); err != nil {
+		t.Fatal(err)
+	}
+	added := target
+	added.User, added.Password, added.Usage = "native-user", []byte(nativeGuardAddedCredential), "agent"
+	if err := v.SetAccount(serverID, "keeper-added", added); err != nil {
+		t.Fatal(err)
+	}
+	password := []byte("synthetic native bypass database password")
+	defer clear(password)
+	path := filepath.Join(t.TempDir(), "bypass.ktav")
+	if err := vault.CreateWithRecords(ctx, path, v, password); err != nil {
+		t.Fatal(err)
+	}
+	nativeKeeperCycles(t, ctx, path, password, serverID, "production", server, []string{"bypass"})
+	encoded, err := os.ReadFile(path)
+	if err != nil || bytes.Contains(encoded, password) || bytes.Contains(encoded, []byte(connectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)) {
+		t.Fatal("output-filter bypass changed encrypted persistence boundaries")
+	}
+	loaded, err := vault.Load(path, password)
+	if err != nil {
+		t.Fatal("bypass database failed authenticated readback")
+	}
+	loaded.Close()
+}
 
 func nativeGuardSSHReply(server *loopbackSSH, channel ssh.Channel, request *ssh.Request) bool {
 	var command struct{ Command string }
@@ -51,7 +109,7 @@ func nativeGuardMCPCall(t *testing.T, ctx context.Context, session *mcp.ClientSe
 		t.Fatal("actual native guard MCP call failed")
 	}
 	encoded, err := json.Marshal(result)
-	if err != nil || bytes.Contains(encoded, []byte(connectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)) {
+	if err != nil || (os.Getenv("SSJACK_OWNER_GUARD_BYPASS_CHILD") != "1" && (bytes.Contains(encoded, []byte(connectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)))) {
 		t.Fatal("actual native MCP result exposed a known credential")
 	}
 	var envelope struct {
@@ -99,6 +157,14 @@ func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.
 		command += "-refresh"
 		want = "[REDACTED]|[REDACTED]|\xff"
 	}
+	stderrWant, textWant := "[REDACTED]|\xfe", "[REDACTED]|�"
+	if os.Getenv("SSJACK_OWNER_GUARD_BYPASS_CHILD") == "1" {
+		want = connectPassword + "|\xff"
+		if refreshed {
+			want = connectPassword + "|" + nativeGuardAddedCredential + "|\xff"
+		}
+		stderrWant, textWant = connectPassword+"|\xfe", connectPassword+"|�"
+	}
 	var started remote.StartOutput
 	nativeGuardMCPCall(t, ctx, session, "remote_exec", map[string]any{"target": targets.Targets[0], "command": command}, &started)
 	ticker := time.NewTicker(5 * time.Millisecond)
@@ -117,10 +183,10 @@ func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.
 	}
 	stdout, first := base64.StdEncoding.DecodeString(out.StdoutBase64)
 	stderr, second := base64.StdEncoding.DecodeString(out.StderrBase64)
-	if first != nil || second != nil || !bytes.Equal(stdout, []byte(want)) || !bytes.Equal(stderr, []byte("[REDACTED]|\xfe")) || out.ExitCode != 23 || out.Error != "" || out.StdoutOffset != int64(len(stdout)) || out.StderrOffset != int64(len(stderr)) {
+	if first != nil || second != nil || !bytes.Equal(stdout, []byte(want)) || !bytes.Equal(stderr, []byte(stderrWant)) || out.ExitCode != 23 || out.Error != "" || out.StdoutOffset != int64(len(stdout)) || out.StderrOffset != int64(len(stderr)) {
 		t.Fatal("actual native MCP text/base64 capture lost guard coverage or control fields")
 	}
-	if out.Stdout == "" || out.Stderr != "[REDACTED]|�" {
+	if out.Stdout == "" || out.Stderr != textWant {
 		t.Fatal("actual native MCP text representation was not guarded")
 	}
 }

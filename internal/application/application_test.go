@@ -80,20 +80,7 @@ func applicationCall(t *testing.T, ctx context.Context, manager *Manager, operat
 
 func fixtureManager(t *testing.T, ctx context.Context) *Manager {
 	t.Helper()
-	t.Setenv("SSJACK_APPLICATION_TEST_HELPER", "1")
-	for _, name := range []string{broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, broker.EnvFile, apptransport.EnvToken, apptransport.EnvEndpoint, apptransport.EnvPin} {
-		t.Setenv(name, "stale")
-	}
-	program, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, err := New(ctx, &Options{Guard: applicationFixtureGuard(t), Directory: t.TempDir(), Command: []string{program, "-test.run=^TestApplicationProcess$", "--"}, Profile: "host.profile", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(manager.Close)
-	return manager
+	return fixtureManagerWithGuard(t, ctx, applicationFixtureGuard(t))
 }
 
 func readApplication(t *testing.T, ctx context.Context, manager *Manager, id string) remote.ReadOutput {

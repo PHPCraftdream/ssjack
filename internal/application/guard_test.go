@@ -2,15 +2,53 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/apptransport"
+	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
+
+func fixtureManagerWithGuard(t *testing.T, ctx context.Context, guard remote.GuardProvider) *Manager {
+	t.Helper()
+	t.Setenv("SSJACK_APPLICATION_TEST_HELPER", "1")
+	for _, name := range []string{broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, broker.EnvFile, apptransport.EnvToken, apptransport.EnvEndpoint, apptransport.EnvPin} {
+		t.Setenv(name, "stale")
+	}
+	program, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(ctx, &Options{Guard: guard, Directory: t.TempDir(), Command: []string{program, "-test.run=^TestApplicationProcess$", "--"}, Profile: "host.profile", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	return manager
+}
+
+func TestExplicitLiteralBypassPreservesApplicationBootstrapMasking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	empty, err := outputguard.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := fixtureManagerWithGuard(t, ctx, func(context.Context) (*outputguard.Snapshot, error) { return empty, nil })
+	var started remote.StartOutput
+	applicationCall(t, ctx, manager, "app_start", Input{Application: Name, Arguments: []string{"inspect", "synthetic-app-credential"}}, &started)
+	out := readApplication(t, ctx, manager, started.JobID)
+	var body struct{ Token string }
+	if json.Unmarshal(out.Stdout, &body) != nil || body.Token != "***" || out.ExitCode != 7 || out.Error != "" || !strings.Contains(string(out.Stdout), "synthetic-app-credential") || string(out.Stderr) != "***" {
+		t.Fatal("literal bypass disabled bootstrap masking or transformed permitted model bytes")
+	}
+}
 
 func applicationFixtureGuard(t *testing.T) remote.GuardProvider {
 	t.Helper()
