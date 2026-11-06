@@ -2,7 +2,6 @@ package ownerdb
 
 import (
 	"context"
-	"errors"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
