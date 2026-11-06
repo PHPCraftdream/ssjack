@@ -29,6 +29,7 @@ type loopbackSSH struct {
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
 	records  []string
+	exits    []uint32
 	accepted int // raw TCP connections, counted before any SSH handshake
 	stopped  bool
 }
@@ -130,6 +131,12 @@ func (s *loopbackSSH) authentications() []string {
 	return result
 }
 
+func (s *loopbackSSH) exitStatuses() []uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uint32(nil), s.exits...)
+}
+
 func (s *loopbackSSH) serve(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -208,7 +215,11 @@ func (s *loopbackSSH) session(login string, opened ssh.NewChannel) {
 		switch text {
 		case "":
 		case "exit":
-			channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+			if _, err := channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0})); err == nil {
+				s.mu.Lock()
+				s.exits = append(s.exits, 0)
+				s.mu.Unlock()
+			}
 			return
 		default:
 			fmt.Fprintf(channel, "ECHO:%s\r\n", text)

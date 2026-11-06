@@ -138,9 +138,9 @@ func TestPickerListsEmptyHumanOnlyKeepsBackCtrlCEnterAndRefreshFocus(t *testing.
 	moved := points("a", "b")
 	moved.Servers[1].Address = "moved.example:22"
 	for i, next := range []vault.DirectoryMetadata{moved, points("a")} {
-		m = testModel(&fakeBackend{})
-		m.metadata = points("a", "b")
+		m = testModel(&fakeBackend{metadata: points("a", "b")})
 		press(m, tea.KeyDown)
+		m.Connected(0, nil)
 		m.Update(refreshMsg{metadata: next})
 		check(t, press(m, 13) != nil || m.connection != nil || m.cursor != 0 || m.message != reselectMessage, "Enter acted on a changed list")
 		press(m, tea.KeyDown)

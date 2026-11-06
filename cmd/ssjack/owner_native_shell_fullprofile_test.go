@@ -72,6 +72,7 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 	}
 	connections := loopback.acceptedConnections()
 	authentications := len(loopback.authentications())
+	exits := len(loopback.exitStatuses())
 	environment := make([]string, 0)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
@@ -138,10 +139,15 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 	clear(input)
 	expect("ECHO:" + connectPassword)
 	send([]byte("exit\r"))
-	expect("SSH session ended (exit code 0).")
+	// Fresh metadata replaces the transient exit message after the address edit.
+	expect("The list changed; choose an entry again.")
 	send([]byte{3})
 	if terminal.Wait(ctx) != nil {
 		t.Fatal("human shell handoff did not restore and close the picker")
+	}
+	statuses := loopback.exitStatuses()
+	if len(statuses) != exits+1 || statuses[len(statuses)-1] != 0 {
+		t.Fatal("loopback SSH did not send exactly one zero exit status")
 	}
 	accepted := loopback.authentications()
 	if loopback.acceptedConnections() != connections+1 || len(accepted) != authentications+1 || accepted[len(accepted)-1] != "second|password" {
