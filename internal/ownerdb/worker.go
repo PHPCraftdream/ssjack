@@ -51,9 +51,8 @@ func (m *Manager) run() {
 			case ":cancel":
 				err = m.cancelDraft(ctx)
 			case ":resume":
-				if m.resources != nil && m.resources.editor != nil {
-					m.resources.editor.Close()
-					m.resources.editor = nil
+				if m.resources != nil && m.resources.Editor() != nil {
+					m.resources.ResetEditor()
 				}
 				m.mu.Lock()
 				pendingID := m.pending.ID
@@ -160,7 +159,7 @@ func (m *Manager) process(ctx context.Context, id string) error {
 		}
 		m.resources = resource
 	}
-	if err := m.resources.openEditor(ctx); err != nil {
+	if err := m.resources.OpenEditor(ctx); err != nil {
 		return err
 	}
 	object, err := m.applyValue(pending.Change)
@@ -185,8 +184,8 @@ func (m *Manager) process(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	commit, err := m.resources.editor.CommitPrepared(ctx, func(ctx context.Context, proposal appstorecrypto.OwnerWriteProposal) error {
-		if err := m.resources.check(); err != nil {
+	commit, err := m.resources.Editor().CommitPrepared(ctx, func(ctx context.Context, proposal appstorecrypto.OwnerWriteProposal) error {
+		if err := m.resources.Check(); err != nil {
 			return err
 		}
 		versions := make(map[string]string, len(proposal.References))
@@ -219,7 +218,7 @@ func (m *Manager) process(ctx context.Context, id string) error {
 		if err := syncDatabase(ctx, m.path, m.db); err != nil {
 			return err
 		}
-		return m.resources.check()
+		return m.resources.Check()
 	})
 	if err != nil {
 		return err

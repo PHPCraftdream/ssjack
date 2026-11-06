@@ -285,7 +285,7 @@ func (m *Manager) stop() {
 	m.signal()
 	m.mu.Unlock()
 	<-m.done
-	m.resources.close()
+	m.resources.Close()
 	clearLink(m.link)
 	clearLink(m.linking)
 	if m.pending != nil {

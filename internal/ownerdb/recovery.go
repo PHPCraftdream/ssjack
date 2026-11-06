@@ -111,18 +111,17 @@ func (m *Manager) reconcile(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := m.resources.check(); err != nil {
+	if err := m.resources.Check(); err != nil {
 		return err
 	}
-	if m.resources.editor != nil {
-		m.resources.editor.Close()
-		m.resources.editor = nil
+	if m.resources.Editor() != nil {
+		m.resources.ResetEditor()
 	}
 	expected, err := recoveryExpected(pending)
 	if err != nil {
 		return err
 	}
-	writer, transport, err := m.resources.installation.Writer(m.resources.directory)
+	writer, transport, err := m.resources.Writer()
 	if err != nil {
 		return err
 	}
@@ -166,9 +165,8 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	if err := syncDatabase(ctx, m.path, m.db); err != nil {
 		return err
 	}
-	if m.resources != nil && m.resources.editor != nil {
-		m.resources.editor.Close()
-		m.resources.editor = nil
+	if m.resources != nil && m.resources.Editor() != nil {
+		m.resources.ResetEditor()
 	}
 	m.clearPending()
 	return nil
@@ -201,9 +199,8 @@ func (m *Manager) cancelDraft(ctx context.Context) error {
 	if err := syncDatabase(ctx, m.path, m.db); err != nil {
 		return err
 	}
-	if m.resources != nil && m.resources.editor != nil {
-		m.resources.editor.Close()
-		m.resources.editor = nil
+	if m.resources != nil && m.resources.Editor() != nil {
+		m.resources.ResetEditor()
 	}
 	m.clearPending()
 	return nil

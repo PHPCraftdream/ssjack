@@ -117,7 +117,7 @@ func (m *Manager) applyImport(ctx context.Context, staged *vault.OwnerImport, re
 			}
 			m.resources = resource
 		}
-		if err := m.resources.check(); err != nil {
+		if err := m.resources.Check(); err != nil {
 			return err
 		}
 	}

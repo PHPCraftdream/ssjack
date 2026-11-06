@@ -74,21 +74,20 @@ func (m *Manager) exportArchive(ctx context.Context, request ExportRequest) erro
 				return err
 			}
 		}
-		if m.resources.editor != nil {
-			m.resources.editor.Close()
-			m.resources.editor = nil
+		if m.resources.Editor() != nil {
+			m.resources.ResetEditor()
 		}
-		if err := m.resources.openEditor(ctx); err != nil {
+		if err := m.resources.OpenEditor(ctx); err != nil {
 			return err
 		}
-		defer func() { m.resources.editor.Close(); m.resources.editor = nil }()
-		if err := m.resources.check(); err != nil {
+		defer func() { m.resources.ResetEditor() }()
+		if err := m.resources.Check(); err != nil {
 			return err
 		}
-		if err := m.resources.editor.AppendOwnerExport(ctx, plan); err != nil {
+		if err := m.resources.Editor().AppendOwnerExport(ctx, plan); err != nil {
 			return err
 		}
-		if err := m.resources.check(); err != nil {
+		if err := m.resources.Check(); err != nil {
 			return err
 		}
 	}
@@ -102,7 +101,7 @@ var errAliasOnly = errors.New("remove only the shared secret binding")
 
 func (m *Manager) applyValue(change vault.OwnerChange) (string, error) {
 	if change.Action == "add" {
-		id, err := m.resources.editor.Add(change.MediaType, change.Value)
+		id, err := m.resources.Editor().Add(change.MediaType, change.Value)
 		return hex.EncodeToString(id[:]), err
 	}
 	previous, err := appstoreplaceholder.Parse([]byte(change.PreviousReference))
@@ -111,7 +110,7 @@ func (m *Manager) applyValue(change vault.OwnerChange) (string, error) {
 	}
 	object := previous.ObjectID()
 	found := false
-	for _, metadata := range m.resources.editor.Objects() {
+	for _, metadata := range m.resources.Editor().Objects() {
 		if metadata.ObjectID == object {
 			if metadata.Reference != previous || metadata.Pending {
 				return "", appstorecrypto.ErrOwnerChanged
@@ -142,15 +141,15 @@ func (m *Manager) applyValue(change vault.OwnerChange) (string, error) {
 	switch change.Action {
 	case "update":
 		if shared {
-			id, err := m.resources.editor.Add(change.MediaType, change.Value)
+			id, err := m.resources.Editor().Add(change.MediaType, change.Value)
 			return hex.EncodeToString(id[:]), err
 		}
-		err = m.resources.editor.Update(object, change.Value)
+		err = m.resources.Editor().Update(object, change.Value)
 	case "remove":
 		if shared {
 			return "", errAliasOnly
 		}
-		err = m.resources.editor.Remove(object)
+		err = m.resources.Editor().Remove(object)
 	default:
 		return "", errors.New("unsupported owner value change")
 	}
