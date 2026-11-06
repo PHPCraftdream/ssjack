@@ -55,3 +55,12 @@ original-byte base64 or textual result can reach a model. A saved revision is no
 consumer adoption. Control fields, private hydration, signed/binary protocols and
 human streams must remain unchanged. These private construction seams are not yet
 called by the keeper/MCP runtime and do not enable filtering.
+
+`remote.NewGuardedManager` is an explicit model-job construction path. It obtains
+one capability before runner effects, uses independent stdout/stderr writers and
+captures only filtered bytes. Read offsets, retained-buffer loss and chunking refer
+to that filtered view; rereading at arbitrary offsets cannot recover original
+bytes. Both streams finish before a job becomes done. Provider/guard failures use
+fixed `ErrGuard`; runner failures use fixed `ErrJob`, without formatting private
+errors. The existing unguarded manager and private stream/human paths are unchanged.
+Keeper startup has not yet switched to this constructor.
