@@ -12,11 +12,22 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownerterminal"
+	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 )
 
 func nativeServerAddress(t *testing.T, ctx context.Context, control *ownercontrol.Control, server, address string) {
 	t.Helper()
-	backend, ok := control.Backend().(interface {
+	status := control.Backend().Status()
+	if status.Err != nil || status.Database.Err != nil {
+		t.Fatal("observer could not read the explicit fixture revision")
+	}
+	scoper, ok := control.Backend().(interface {
+		AtRevision(uint64) ownertui.Backend
+	})
+	if !ok {
+		t.Fatal("observer lost revision-scoped admission")
+	}
+	backend, ok := scoper.AtRevision(status.Database.Revision).(interface {
 		ApplyDirectory(ownerpacket.DirectoryChange) error
 	})
 	if !ok {
