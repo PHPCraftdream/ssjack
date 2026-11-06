@@ -77,6 +77,8 @@ func start(ctx context.Context, spec Command) (_ *Terminal, result error) {
 	}
 	startup := windows.StartupInfoEx{ProcThreadAttributeList: attributes.List()}
 	startup.Cb = uint32(unsafe.Sizeof(startup))
+	// Null standard handles let ConPTY replace the parent's redirected pipes.
+	startup.Flags = windows.STARTF_USESTDHANDLES
 	var process windows.ProcessInformation
 	if err = windows.CreateProcess(application, &command[0], nil, nil, false,
 		windows.EXTENDED_STARTUPINFO_PRESENT|windows.CREATE_UNICODE_ENVIRONMENT,
