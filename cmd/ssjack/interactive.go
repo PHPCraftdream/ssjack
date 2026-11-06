@@ -9,8 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
-	"github.com/PHPCraftdream/ssjack/internal/ownerbackend"
-	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
@@ -26,16 +25,17 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 	if err != nil {
 		return 1, err
 	}
-	manager, err := ownerdb.Open(ctx, path, password)
+	control, err := ownercontrol.Open(ctx, path, password)
 	clear(password)
 	if err != nil {
-		return 1, errors.New("cannot unlock owner database; directory payload schema v2 is required")
+		return 1, ownercontrol.ErrControl
 	}
-	model := ownertui.New(ctx, ownerbackend.New(manager))
+	defer control.Detach()
+	model := ownertui.New(ctx, control.Backend())
 	if err := model.Select(server, account); err != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if closeErr := manager.Close(closeCtx); closeErr != nil {
+		if closeErr := control.Close(closeCtx); closeErr != nil {
 			return 1, errors.New("named selection failed; inspect the saved owner database and pending recovery")
 		}
 		return 1, err
@@ -51,7 +51,7 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 		if runErr != nil || ctx.Err() != nil || !requested {
 			break
 		}
-		config, address, err := manager.HumanSSH(connection.ServerID, connection.Account)
+		config, address, err := control.HumanSSH(ctx, connection)
 		if err != nil {
 			model.Connected(1, err)
 			continue
@@ -71,7 +71,7 @@ func runInteractive(ctx context.Context, path, server, account string) (int, err
 	}
 	closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := manager.Close(closeCtx); err != nil {
+	if err := control.Close(closeCtx); err != nil {
 		return 1, errors.New("owner editor stopped with unsaved or unresolved changes; reopen the encrypted database and inspect pending recovery")
 	}
 	if inputErr != nil {

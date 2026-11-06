@@ -12,8 +12,9 @@ and narrow owner packet capabilities. Directory forms share one typed mutation
 implementation. A form may pin its displayed revision through a scoped backend;
 the typed remote backend now maps these operations to the closed packet union.
 Directory full-mode startup now starts the bounded private service from that retained
-Manager and its held writer endpoint. Owner CLI/TUI attachment, human SSH handoff,
-protected-consumer sharing and full cross-process integration remain unfinished.
+Manager and its held writer endpoint. Owner CLI/TUI now select authenticated remote
+attach or exclusive standalone control. Protected-consumer sharing and broader native
+cross-process integration remain separate acceptance gates.
 
 The local owner backend now pins every form operation to its displayed revision.
 Metadata, database status, import counts and saved ciphertext evidence are read
@@ -261,9 +262,35 @@ service acceptance injects a commit-lock refusal, authenticates in that failed s
 then explicitly retries and verifies persistence without another KDF. It also stops
 an active peer, proves the parent writer/key remain usable and restarts the service.
 
-This starts the full-mode directory service, not a completed public owner CLI/TUI
-attach flow. Helper selection, frozen human SSH capture and protected installation
-sharing remain required before the whole live-update feature is accepted.
+## Owner helper attachment and human SSH
+
+Owner CLI/TUI unlock the database once, then select control from the native endpoint.
+A successful dial requires mutual packet authentication before any owner value is
+sent. Only `ErrAbsent` permits standalone adoption; busy/unsafe endpoint state,
+authentication failure, timeout or transport uncertainty never falls back to a new
+local writer. A race between absence detection and role acquisition refuses rather
+than creating a second coordinator. The already loaded vault is transferred either
+to the helper's narrow retained unlock or the standalone Manager without another KDF.
+Trusted input/output TTY requirements remain independent of password source.
+
+The control backend preserves atomic metadata, typed directory dispatch and immutable
+revision/plan scopes through its lifecycle wrapper. Successful close flushes and
+detaches only a remote helper; the live keeper remains owned. Standalone close joins
+its service before closing its Manager. Failed remote flush leaves explicit recovery
+available; abandoned/error exit detaches the helper without silently discarding
+partial effects or closing the keeper.
+
+SSH selection records the displayed database revision. Local capture checks it under
+the Session lock. Remote capture flushes, requires the selected revision to remain
+current and saved, then privately opens exactly that saved ciphertext digest using
+the helper's retained context. The narrow result is one host-pin-verified,
+human-permitted client configuration, never serialized credential bytes or a stored
+secret getter. A different revision or file digest refuses instead of adopting a
+new account. Later database edits do not change the captured configuration. Existing
+SSH/PTY/editor input/output and terminal-release behavior are unfiltered.
+
+This adds helper control and narrow human capture, not accepted protected installation
+sharing or the broader native cross-process/selected-value acceptance gate.
 
 ## Manager dispatch and helper ownership
 

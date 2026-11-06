@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -283,4 +285,13 @@ func (m *Manager) inspectImport(ctx context.Context) error {
 	}
 	m.imp.staged, m.imp.preview, m.imp.phase, m.imp.err = staged, staged.Preview(), ImportStaged, nil
 	return nil
+}
+
+func (m *Manager) HumanSSHAt(expected uint64, server, account string) (*ssh.ClientConfig, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing {
+		return nil, "", ErrPending
+	}
+	return m.db.HumanSSHAt(expected, server, account)
 }

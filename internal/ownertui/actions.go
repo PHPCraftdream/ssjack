@@ -164,9 +164,6 @@ func (m *Model) perform(f *form) error {
 	return errForm
 }
 
-// Connection names one owner-selected SSH account; it carries no credentials.
-type Connection struct{ ServerID, Account string }
-
 // TakeConnection returns and clears the request recorded by selecting a
 // connection point. The caller obtains credentials through the manager only.
 func (m *Model) TakeConnection() (Connection, bool) {
@@ -226,7 +223,7 @@ func (m *Model) activate(selected item, enter bool) tea.Cmd {
 			return nil
 		}
 		// The manager stays open: the caller needs it for the credential path.
-		m.connection = &Connection{ServerID: selected.target.server, Account: selected.target.account}
+		m.connection = &Connection{ServerID: selected.target.server, Account: selected.target.account, Revision: m.status.Database.Revision}
 		return tea.Quit
 	case "none":
 		m.message = "No SSH connection is available; add a server account that permits human use."

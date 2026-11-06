@@ -11,9 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
-	"github.com/PHPCraftdream/ssjack/internal/ownerbackend"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
-	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 )
 
@@ -41,12 +40,13 @@ func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, acc
 	if err != nil {
 		return 1, err
 	}
-	manager, err := ownerdb.Open(ctx, path, password)
+	control, err := ownercontrol.Open(ctx, path, password)
 	clear(password)
 	if err != nil {
-		return 1, errors.New("cannot unlock owner database; directory payload schema v2 is required")
+		return 1, ownercontrol.ErrControl
 	}
-	model := ownertui.New(ctx, ownerbackend.New(manager))
+	defer control.Detach()
+	model := ownertui.New(ctx, control.Backend())
 	err = model.ConfigureCommand(request)
 	if err == nil {
 		_, err = tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout)).Run()
@@ -59,7 +59,7 @@ func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, acc
 	}
 	closeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if closeErr := manager.Close(closeCtx); closeErr != nil {
+	if closeErr := control.Close(closeCtx); closeErr != nil {
 		return 1, ownercommand.ErrOperation
 	}
 	if err != nil {

@@ -109,8 +109,17 @@ func (s *Session) metadata() (DirectoryMetadata, error) {
 // interactive connection: it yields a host-pin verified client configuration,
 // never raw credential bytes, and only for human-permitted accounts.
 func (s *Session) HumanSSH(serverID, account string) (*ssh.ClientConfig, string, error) {
+	return s.humanSSH(nil, serverID, account)
+}
+func (s *Session) HumanSSHAt(expected uint64, serverID, account string) (*ssh.ClientConfig, string, error) {
+	return s.humanSSH(&expected, serverID, account)
+}
+func (s *Session) humanSSH(expected *uint64, serverID, account string) (*ssh.ClientConfig, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if expected != nil && *expected != s.revision {
+		return nil, "", ErrOwnerRevision
+	}
 	if s.closed {
 		return nil, "", errors.New("database session is closed")
 	}

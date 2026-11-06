@@ -46,9 +46,17 @@ func OpenOwnerUnlock(path string, password []byte, binding [32]byte) (*OwnerUnlo
 	if err != nil {
 		return nil, errors.New("cannot authenticate owner database")
 	}
-	if loaded.Version != 2 || loaded.unlocked == nil || binding == ([32]byte{}) {
+	return AdoptOwnerUnlock(loaded, binding)
+}
+
+// AdoptOwnerUnlock consumes a read-only authenticated vault without another KDF.
+func AdoptOwnerUnlock(loaded *Vault, binding [32]byte) (*OwnerUnlock, error) {
+	if loaded == nil {
+		return nil, errors.New("owner channel requires an authenticated vault")
+	}
+	if loaded.Version != 2 || loaded.unlocked == nil || loaded.writer != nil || binding == ([32]byte{}) {
 		loaded.Close()
-		return nil, errors.New("owner channel requires directory payload schema v2")
+		return nil, errors.New("owner channel requires a read-only directory unlock")
 	}
 	key := loaded.unlocked
 	loaded.unlocked = nil

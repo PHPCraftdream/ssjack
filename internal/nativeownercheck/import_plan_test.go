@@ -136,6 +136,7 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	}
 	t.Run("manager-rpc", func(t *testing.T) { verifyManagerRPC(t, ctx, path, password, firstPath, manager) })
 	t.Run("owner-service", func(t *testing.T) { verifyOwnerService(t, ctx, path, manager) })
+	t.Run("owner-control", func(t *testing.T) { verifyOwnerControl(t, ctx, path, password, manager) })
 	must(t, manager.Close(ctx))
 	listener, err := ownerlocal.Listen(path)
 	if err != nil {

@@ -195,3 +195,9 @@ func scopeBackend(b Backend, revision, plan uint64) Backend {
 	}
 	return b
 }
+
+// Connection pins one owner-selected SSH account and its displayed revision.
+type Connection struct {
+	ServerID, Account string
+	Revision          uint64
+}
