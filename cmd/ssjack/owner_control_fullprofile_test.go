@@ -99,6 +99,9 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if _, err := local.Backend().Metadata(); err != nil {
 		t.Fatal("remote helper detach closed the local coordinator")
 	}
+	t.Run("native-command-helper", func(t *testing.T) {
+		nativeOwnerCommandAcceptance(t, ctx, path, password, serverID, local)
+	})
 	if err := local.Close(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,68 +35,6 @@ func TestNativeTerminalChild(t *testing.T) {
 	fmt.Fprintln(os.Stdout, "NATIVE-TERMINAL-ACK")
 }
 
-type terminalCapture struct {
-	mu       sync.Mutex
-	data     []byte
-	overflow bool
-	changed  chan struct{}
-	done     chan struct{}
-}
-
-func captureTerminal(output io.Reader) *terminalCapture {
-	capture := &terminalCapture{changed: make(chan struct{}, 1), done: make(chan struct{})}
-	go func() {
-		defer close(capture.done)
-		buffer := make([]byte, 4096)
-		defer clear(buffer)
-		for {
-			n, err := output.Read(buffer)
-			capture.mu.Lock()
-			if len(capture.data)+n <= 64<<10 && !capture.overflow {
-				capture.data = append(capture.data, buffer[:n]...)
-			} else {
-				capture.overflow = true
-			}
-			capture.mu.Unlock()
-			select {
-			case capture.changed <- struct{}{}:
-			default:
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	return capture
-}
-
-func (c *terminalCapture) wait(ctx context.Context, text string) error {
-	for {
-		c.mu.Lock()
-		found, overflow := bytes.Contains(c.data, []byte(text)), c.overflow
-		c.mu.Unlock()
-		if overflow {
-			return ErrTerminal
-		}
-		if found {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-c.done:
-			c.mu.Lock()
-			found, overflow := bytes.Contains(c.data, []byte(text)), c.overflow
-			c.mu.Unlock()
-			if found && !overflow {
-				return nil
-			}
-			return ErrTerminal
-		case <-c.changed:
-		}
-	}
-}
-
 func TestNativeTerminal(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		t.Skip("native owner terminal target platforms only")
@@ -120,7 +56,7 @@ func TestNativeTerminal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			capture := captureTerminal(terminal.Output)
+			capture := CaptureOutput(terminal.Output)
 			defer func() {
 				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 				defer stop()
@@ -134,7 +70,7 @@ func TestNativeTerminal(t *testing.T) {
 					t.Error("native terminal reader did not join")
 				}
 			}()
-			if err := capture.wait(ctx, "NATIVE-TERMINAL-READY"); err != nil {
+			if err := capture.Wait(ctx, "NATIVE-TERMINAL-READY"); err != nil {
 				t.Fatal("real terminal readiness failed:", err)
 			}
 			if mode == "cancel" {
@@ -153,7 +89,7 @@ func TestNativeTerminal(t *testing.T) {
 			input := []byte("synthetic hidden terminal input" + ending)
 			_, err = terminal.Input.Write(input)
 			clear(input)
-			if err != nil || capture.wait(ctx, "NATIVE-TERMINAL-ACK") != nil || terminal.Wait(ctx) != nil {
+			if err != nil || capture.Wait(ctx, "NATIVE-TERMINAL-ACK") != nil || terminal.Wait(ctx) != nil {
 				t.Fatal("native terminal hidden-input exchange failed")
 			}
 			<-capture.done
