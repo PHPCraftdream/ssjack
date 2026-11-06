@@ -19,7 +19,7 @@ func runRotation(ctx context.Context, path, name string) (int, error) {
 	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
 	}
-	v, secret, err := openManagedVault(ctx, path)
+	v, secret, err := openManagedVaultForWrite(ctx, path)
 	if err != nil {
 		return 1, err
 	}

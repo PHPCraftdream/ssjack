@@ -54,6 +54,11 @@ func runVaultCommand(ctx context.Context, path string, args []string) (int, erro
 		return 1, err
 	}
 	defer v.Close()
+	if writesVault(args[0]) {
+		if err := v.ClaimWriter(path); err != nil {
+			return 1, err
+		}
+	}
 	if args[0] == "list" {
 		var names []string
 		for name := range v.Targets {

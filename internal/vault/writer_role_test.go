@@ -73,6 +73,34 @@ func TestWriterRoleRefusesAnotherDatabaseAndNeverRecreatesMissingFiles(t *testin
 	}
 }
 
+func TestRestoreAndUpgradeRefuseBeforeCreatingRecoveryCopies(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "vault.ktav")
+	previous := []byte("synthetic encrypted previous")
+	if err := commit(path, previous, nil); err != nil {
+		t.Fatal(err)
+	}
+	role, err := claimWriterRole(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer role.close()
+	for _, label := range []string{"before-restore", "before-upgrade"} {
+		backup, err := replaceVerified(context.Background(), path, []byte("synthetic encrypted replacement"), previous, label)
+		if !errors.Is(err, ErrWriterRole) || backup != "" {
+			t.Fatal("occupied replacement reached recovery-copy publication")
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "vault.ktav" {
+			t.Fatal("refused replacement created recovery or commit artifacts")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, previous) {
+			t.Fatal("refused replacement changed the encrypted database")
+		}
+	}
+}
+
 func TestCancelledSessionCloseKeepsWriterUntilItsWorkerJoins(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.ktav")
 	if err := commit(path, []byte("synthetic encrypted data"), nil); err != nil {

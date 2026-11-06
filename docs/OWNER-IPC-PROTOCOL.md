@@ -118,9 +118,21 @@ Failed Session saves and cancelled close preserve the live claim. Successful clo
 or an explicit discard joins the save worker before releasing it; release failure is not
 reported as a successful Session close. The service receives only `AcceptOwner`,
 not authority to close the listener or read keys. It must cancel/join peers before
-closing the parent Manager. Caller-controlled legacy commands with earlier remote
-or recovery-copy effects still require their own early guard; commit admission alone
-does not yet accept complete legacy-writer exclusion or CLI helper attachment.
+closing the parent Manager.
+
+Legacy database add/edit/remove/key-import/password changes claim immediately after
+authentication, before further mutation prompts or key generation. Host-key replacement,
+policy editing, rotation and existing-destination migration use the same early writer
+loader. Rotation therefore refuses before even the first SSH probe. Restore/format
+replacement claims before creating its recovery copy and uses that same role for the
+final replacement. Read-only list/show/public-key/SSH/policy/host-key capture does not
+claim a database writer; selected final key export still does not change the database.
+Initial creation remains no-overwrite. An already-current format check is read-only.
+
+Production CLI acceptance holds an occupied endpoint and requires every legacy writer
+to refuse with unchanged encrypted bytes, no new key/recovery/lock files and zero
+connections to its self-owned SSH fixture. This is writer-effect exclusion, not a
+running keeper RPC loop or completed owner CLI attachment.
 
 ## Packet state machine and bounds
 

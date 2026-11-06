@@ -31,7 +31,11 @@ func runHostKey(ctx context.Context, path string, args []string) (int, error) {
 	if err := vault.ValidateName(args[1]); err != nil {
 		return 1, err
 	}
-	v, secret, err := openManagedVault(ctx, path)
+	open := openManagedVault
+	if args[0] == "replace" {
+		open = openManagedVaultForWrite
+	}
+	v, secret, err := open(ctx, path)
 	if err != nil {
 		return 1, err
 	}
