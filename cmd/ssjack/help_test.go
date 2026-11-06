@@ -72,6 +72,9 @@ func TestHelpAndVersionNeverOpenVault(t *testing.T) {
 func TestOwnerAndTextHelpStateActualBoundaries(t *testing.T) {
 	for topic, fragments := range map[string][]string{
 		"--interactive":                {"even for one point", "key-file", "hidden-password", "EXPORT PLAINTEXT", "IMPORT", "RAM-only", "Windows", "SOCKS5", "HTTP CONNECT", "no environment proxy", "unencrypted"},
+		"owner":                        {"authenticated native IPC", "proven absent endpoint", "never trigger standalone fallback", "detaches without closing the keeper"},
+		"owner import":                 {"RAM-only in the coordinator", "coordinator restart", "disconnect drops only no-effect state", "revision and PlanID"},
+		"owner pending":                {"recover a retained partial plan", "coordinator restart", "cannot reconstruct that lost plan"},
 		"vault init":                   {"directory payload schema v2 directly", "account named main"},
 		"--server":                     {"conflicts with -p", "exactly one account", "never connect automatically"},
 		"text-adapter":                 {"Linux/amd64", "separate registry", "unknown", "not adoption"},
