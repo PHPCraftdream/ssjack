@@ -58,8 +58,11 @@ jobs:
           SSJACK_TEST_FULL_KDF: '1'
         run: |
           set -o pipefail
-          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerControlFullProfile$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-cli.log"
+          go test -v -mod=readonly -p 1 -run '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile)$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^--- PASS: TestVaultOwnerControlFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^--- PASS: TestVaultKeeperLifetimeFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultKeeperLifetimeFullProfile/directory ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultKeeperLifetimeFullProfile/legacy ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/native-command-helper ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"

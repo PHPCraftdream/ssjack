@@ -97,18 +97,25 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 	if err != nil {
 		return nil, err
 	}
-	credentials := &agentCredentials{runner: runner, stream: stream, targets: []string{selected}}
+	credentials := &agentCredentials{runner: runner, stream: stream, targets: []string{selected}, guard: fixedOutputGuard(nil)}
 	if v.Version == 2 {
 		owner, err := ownerdb.Adopt(ctx, path, v)
 		if err != nil {
 			return nil, err
 		}
 		credentials.owner, adopted = owner, true
+		// Seed before helpers can change the frozen runner's credentials.
+		if _, err := owner.OutputGuard(ctx); err == nil {
+			credentials.guard = owner.OutputGuard
+		}
 		service, err := ownerservice.Start(ctx, owner)
 		if err != nil {
 			return credentials, err
 		}
 		credentials.service = service
+	} else {
+		snapshot, _ := v.LegacyOutputGuard(ctx, path)
+		credentials.guard = fixedOutputGuard(snapshot)
 	}
 	return credentials, nil
 }

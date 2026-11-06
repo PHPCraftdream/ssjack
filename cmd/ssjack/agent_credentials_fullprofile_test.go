@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
@@ -108,6 +109,18 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 			manager.Discard()
 		}
 	}()
+	if credentials.guard == nil {
+		t.Fatal("authenticated startup omitted its private guard provider")
+	}
+	initialGuard, err := credentials.guard(ctx)
+	if err != nil {
+		t.Fatal("authenticated startup failed to seed its private guard")
+	}
+	credential := target.Password
+	if !directory {
+		credential = target.PrivateKey
+	}
+	assertGuardMasks(t, initialGuard, credential)
 	if directory {
 		var ok bool
 		manager, ok = credentials.owner.(*ownerdb.Manager)
@@ -147,12 +160,19 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 			}
 			changed := candidate.Targets[profile]
 			changed.Address, changed.User, changed.Usage = "127.0.0.1:1", "edited", "human"
+			changed.Password = []byte("synthetic rotated keeper password")
 			candidate.Targets[profile] = changed
 			return nil
 		})
 		if err != nil || manager.Flush(ctx) != nil {
 			t.Fatal("retained owner could not edit and save without another unlock")
 		}
+		currentGuard, err := credentials.guard(ctx)
+		if err != nil {
+			t.Fatal("startup provider did not adopt confirmed owner state")
+		}
+		assertGuardMasks(t, currentGuard, credential)
+		assertGuardMasks(t, currentGuard, []byte("synthetic rotated keeper password"))
 	} else if credentials.owner != nil || credentials.service != nil {
 		t.Fatal("legacy startup silently created an unsupported directory coordinator")
 	}
@@ -184,11 +204,28 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 	}
 	defer loaded.Close()
 	if directory {
+		if snapshot, err := loaded.LegacyOutputGuard(ctx, path); snapshot != nil || err != outputguard.ErrGuard {
+			t.Fatal("directory startup bypassed linked-value guard admission")
+		}
 		profile, err := loaded.AccountProfile(serverID, "main")
 		if err != nil || loaded.Targets[profile].User != "edited" || loaded.Targets[profile].Usage != "human" {
 			t.Fatal("retained owner changes did not survive keeper shutdown")
 		}
-	} else if loaded.Targets["main"].User != "first" {
-		t.Fatal("legacy read-only startup changed its record")
+	} else {
+		if loaded.Targets["main"].User != "first" {
+			t.Fatal("legacy read-only startup changed its record")
+		}
+		captured, err := loaded.LegacyOutputGuard(ctx, path)
+		if err != nil {
+			t.Fatal("unchanged authenticated legacy state refused capture")
+		}
+		changed := loaded.Targets["main"]
+		changed.User = "changed"
+		loaded.Targets["main"] = changed
+		if snapshot, err := loaded.LegacyOutputGuard(ctx, path); snapshot != nil || err != outputguard.ErrGuard {
+			t.Fatal("modified legacy state granted an authenticated capture")
+		}
+		loaded.Close()
+		assertGuardMasks(t, captured, credential)
 	}
 }

@@ -1,6 +1,23 @@
 package vault
 
-import "github.com/PHPCraftdream/ssjack/internal/outputguard"
+import (
+	"context"
+
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
+)
+
+// LegacyOutputGuard captures authenticated version-1 credentials before Close.
+// Version 2 requires the coordinator's confirmed linked-value admission instead.
+func (v *Vault) LegacyOutputGuard(ctx context.Context, path string) (*outputguard.Snapshot, error) {
+	if v == nil || ctx == nil || ctx.Err() != nil || v.Version != 1 || verifyVaultCapture(ctx, path, v) != nil {
+		return nil, outputguard.ErrGuard
+	}
+	snapshot, err := credentialGuard(v)
+	if err != nil || ctx.Err() != nil {
+		return nil, outputguard.ErrGuard
+	}
+	return snapshot, nil
+}
 
 // OutputGuardAt returns a private capability for one confirmed database state.
 // Linked application values must be added separately before model admission.

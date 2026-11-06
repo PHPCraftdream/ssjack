@@ -1,8 +1,8 @@
 # Known-literal stream matcher
 
-This package is a foundation for the MCP-only output guard. It is not yet wired
-to keeper snapshots or MCP capture/serialization and does not enable filtering by
-itself. Human SSH/PTY/editor streams and private delivery protocols are outside
+This package is a foundation for the MCP-only output guard. Keeper snapshots and
+startup providers are implemented, but runtime model-job routing has not switched
+to guarded capture/serialization. This package does not enable filtering by itself. Human SSH/PTY/editor streams and private delivery protocols are outside
 its intended integration surface.
 
 `New` builds an immutable sparse byte trie with Aho-Corasick failure/output links.
@@ -53,8 +53,8 @@ Runtime integration must compose both capabilities, refresh only from confirmed
 owner state, preserve old literals needed by frozen consumers and filter before any
 original-byte base64 or textual result can reach a model. A saved revision is not
 consumer adoption. Control fields, private hydration, signed/binary protocols and
-human streams must remain unchanged. These private construction seams are not yet
-called by the keeper/MCP runtime and do not enable filtering.
+human streams must remain unchanged. These private construction seams alone do not
+route model output through filtering.
 
 `remote.NewGuardedManager` is an explicit model-job construction path. It obtains
 one capability before runner effects, uses independent stdout/stderr writers and
@@ -74,5 +74,13 @@ Each admission validates the latest confirmed state and current linked history;
 there is no per-packet unlock and no raw-value RPC. Manager close drops its history
 reference after consumer shutdown; captured immutable capabilities remain usable
 by their existing holders. This is admission-time refresh, not automatic live-stream
-adoption. Startup must seed before freezing runners or admitting private consumers;
-that ordering and runtime startup wiring remain unfinished.
+adoption. Startup must seed before exposing frozen runners or admitting private
+consumers. The real agent credential loader now seeds before starting the owner
+service, then retains the manager provider for subsequent confirmed-state admission.
+If that first seed fails, its provider remains refusing for that startup; later
+success must not silently omit credentials already frozen without initial coverage.
+Legacy version-1 startup instead captures a fixed credential snapshot from an
+unchanged authenticated Vault before closing it. It checks the retained authentication,
+canonical payload and saved ciphertext without repeating KDF, and cannot substitute
+for version-2 linked-value admission. These providers still are not passed to the
+main/application model-job managers; default-on runtime wiring remains unfinished.

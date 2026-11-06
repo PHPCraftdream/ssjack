@@ -16,6 +16,10 @@ func verifySessionAdoption(ctx context.Context, path string, v *Vault) error {
 	if v.Version != 2 {
 		return errors.New("migrate the database before opening the directory editor")
 	}
+	return verifyVaultCapture(ctx, path, v)
+}
+
+func verifyVaultCapture(ctx context.Context, path string, v *Vault) error {
 	if v.unlocked == nil || v.payloadHash == ([sha256.Size]byte{}) {
 		return errors.New("database session requires an authenticated unchanged vault")
 	}

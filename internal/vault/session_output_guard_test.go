@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
@@ -9,6 +10,17 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
+
+func TestLegacyGuardRefusesUnauthenticatedOrDirectoryState(t *testing.T) {
+	for _, state := range []*Vault{nil, New(), NewDirectory()} {
+		if snapshot, err := state.LegacyOutputGuard(context.Background(), "missing"); snapshot != nil || err != outputguard.ErrGuard {
+			t.Fatal("unauthenticated legacy or directory state granted a capability")
+		}
+	}
+	if snapshot, err := New().LegacyOutputGuard(nil, "missing"); snapshot != nil || err != outputguard.ErrGuard {
+		t.Fatal("legacy capture accepted a missing context")
+	}
+}
 
 func TestCredentialGuardPrivatelyCapturesAllCredentialClasses(t *testing.T) {
 	state := New()

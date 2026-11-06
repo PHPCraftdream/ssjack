@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -9,7 +10,48 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/launch"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 )
+
+func assertGuardMasks(t *testing.T, snapshot *outputguard.Snapshot, value []byte) {
+	t.Helper()
+	var result bytes.Buffer
+	writer, err := outputguard.NewWriter(snapshot, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range value {
+		if _, err := writer.Write([]byte{b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil || result.String() != outputguard.Marker {
+		t.Fatal("startup guard did not retain the captured credential")
+	}
+}
+
+func TestFixedGuardRefusesMissingSeedAndCancelledAdmission(t *testing.T) {
+	if snapshot, err := fixedOutputGuard(nil)(context.Background()); snapshot != nil || err != outputguard.ErrGuard {
+		t.Fatal("missing startup seed granted an unguarded capability")
+	}
+	snapshot, err := outputguard.New([][]byte{[]byte("synthetic captured credential")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := fixedOutputGuard(snapshot)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, ctx := range []context.Context{nil, ctx} {
+		if result, err := provider(ctx); result != nil || err != outputguard.ErrGuard {
+			t.Fatal("invalid context obtained a captured capability")
+		}
+	}
+	captured, err := provider(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGuardMasks(t, captured, []byte("synthetic captured credential"))
+}
 
 type ownerCloseFunc func(context.Context) error
 
