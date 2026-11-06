@@ -113,6 +113,9 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 			defer observer.Detach()
 			if cycle == "edit" {
 				nativeOwnerCommandAcceptance(t, lifetime, path, password, server, "keeper-added", observer)
+				t.Run("native-interactive-helper", func(t *testing.T) {
+					nativeInteractiveAcceptance(t, lifetime, path, password, server, observer)
+				})
 			} else {
 				metadata, err := observer.Backend().Metadata()
 				found := false
