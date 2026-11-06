@@ -69,7 +69,13 @@ the selection. A fresh session still requires explicit owner confirmation.
   suggestion. It never silently changes a running session's endpoint or identity.
 - Deleted accounts are removed from remembered lists; another account is never
   substituted. Disabling a server makes its accounts unavailable for preselection.
-- Cancel behavior and actual launch grants belong to the pending selector layer.
+- The metadata-only `internal/mcpselect` Bubble Tea model requires a separate
+  explicit Continue, including singleton and empty choices. Cancel returns no
+  choice and does not persist. It captures the SSH profile, displayed database
+  revision and exact bindings as owned metadata, never as a grant.
+- The checkbox model is not wired into startup yet. Confirmed-state preference
+  persistence, fresh bounded launch grants and remote bridges remain pending;
+  later layers must reject stale choices rather than adopt newer credentials.
 
 Edits use the existing trusted owner session candidate/save path. Account input
 buffers and metadata selections are copied, not retained from callers. Replacement,
