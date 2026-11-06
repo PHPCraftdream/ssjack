@@ -88,6 +88,14 @@ jobs:
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh/legacy-writer-refusal ' "$RUNNER_TEMP/native-owner-cli.log"
+      - name: Native selected owner archive with production KDF
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerArchiveFullProfile$' -count=1 -timeout 600s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-archive.log"
+          grep -q '^--- PASS: TestVaultOwnerArchiveFullProfile ' "$RUNNER_TEMP/native-owner-archive.log"
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build and install source on Linux or macOS
@@ -244,7 +252,7 @@ jobs:
           set -o pipefail
           tmux -V
           go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -count=1 -timeout 1200s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
-          for name in TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
+          for name in TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done
 
