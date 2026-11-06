@@ -65,14 +65,14 @@ func dnsName(host string) bool {
 }
 
 func (p *endpointPolicy) requestAllowed(request *http.Request) bool {
-	return p != nil && request != nil && request.URL != nil && request.URL.String() == p.endpoint && request.RequestURI == "" && (request.Host == "" || request.Host == request.URL.Host)
+	return p != nil && p.endpoint != "" && request != nil && request.URL != nil && request.URL.String() == p.endpoint && request.RequestURI == "" && (request.Host == "" || request.Host == request.URL.Host)
 }
 
 type lookupAddresses func(context.Context, string, string) ([]netip.Addr, error)
 type dialAddress func(context.Context, string, string) (net.Conn, error)
 
 func (p *endpointPolicy) dial(ctx context.Context, network, address string, lookup lookupAddresses, dial dialAddress) (net.Conn, error) {
-	if p == nil || ctx == nil || ctx.Err() != nil || lookup == nil || dial == nil || (network != "tcp" && network != "tcp4" && network != "tcp6") {
+	if p == nil || p.endpoint == "" || ctx == nil || ctx.Err() != nil || lookup == nil || dial == nil || (network != "tcp" && network != "tcp4" && network != "tcp6") {
 		return nil, ErrTransport
 	}
 	host, port, err := net.SplitHostPort(address)

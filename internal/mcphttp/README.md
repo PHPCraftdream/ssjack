@@ -1,10 +1,10 @@
 # Fixed remote MCP endpoint policy
 
-This pocket is an unused transport-policy foundation. No runtime calls it yet.
-It does not hold credentials, mint a session grant, implement MCP requests, launch
-a bridge or enable a remote connection. Private authentication/header custody,
-request/response body bounds, grant lifetime and joined shutdown remain separate
-integration work; this policy alone is not a usable authenticated MCP client.
+This pocket is an unused transport/header-material foundation. No runtime calls it
+yet. Private owned authentication material is implemented, but it does not mint a
+session grant, implement an HTTP exchange, launch a bridge or enable a remote
+connection. Request/response body bounds, grant lifetime and joined I/O shutdown
+remain separate integration work; this is not a usable authenticated MCP client.
 
 The fixed endpoint must be canonical HTTPS without userinfo, query, fragment or
 control bytes. DNS names are ASCII (punycode is accepted), dotted and bounded;
@@ -28,6 +28,25 @@ with system roots and TLS 1.2 or newer, and bounds dialing, TLS handshake, respo
 headers, header bytes and connections. These constraints do not relax independent
 private delivery or SSH routes. Public-only remote MCP policy is intentionally
 stricter than the encrypted record schema, which can store an unavailable endpoint.
+
+## Private authentication material
+
+The private builder reuses `mcpdirectory.ValidateAccount`, refuses disabled records
+and owns the bytes for the already supported none/Bearer/Basic/custom-header modes.
+It prepares only a cloned exact-endpoint request. Case-insensitive caller collisions
+with Authorization, Proxy-Authorization, Cookie or selected credential headers
+refuse; source headers are not modified and material retains no source request or
+caller credential buffers. Go request cloning still shares the body; the future
+exchange layer must independently own and bound request body handling.
+
+The only returned matching capability contains raw known credentials, actual
+Authorization/header literals and Basic's actual base64 credential component.
+This protects known transmitted forms without claiming generic encoded-value DLP.
+There is no public header or value getter. Closing private material clears its
+owned byte buffers and prevents reuse; existing snapshots retain their captured
+protection. Previously prepared Go request strings cannot be reliably erased or
+revoked by clearing those buffers. The future exchange owner must cancel and join
+I/O before closing material. Go erasure remains best effort, not a memory sandbox.
 
 ## Pinned SDK findings
 

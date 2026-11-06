@@ -89,6 +89,15 @@ func validAccount(a Account) bool {
 	}
 	return true
 }
+
+// ValidateAccount applies the stored-record contract without exposing values.
+func ValidateAccount(account Account) error {
+	if !validAccount(account) {
+		return ErrInvalid
+	}
+	return nil
+}
+
 func (d *Directory) Validate() error {
 	if d == nil {
 		return nil
