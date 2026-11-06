@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
@@ -173,6 +174,7 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 		}
 		assertGuardMasks(t, currentGuard, credential)
 		assertGuardMasks(t, currentGuard, []byte("synthetic rotated keeper password"))
+		verifyKeeperMCPPreference(t, ctx, manager, credentials.targets[0])
 	} else if credentials.owner != nil || credentials.service != nil {
 		t.Fatal("legacy startup silently created an unsupported directory coordinator")
 	}
@@ -208,7 +210,7 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 			t.Fatal("directory startup bypassed linked-value guard admission")
 		}
 		profile, err := loaded.AccountProfile(serverID, "main")
-		if err != nil || loaded.Targets[profile].User != "edited" || loaded.Targets[profile].Usage != "human" {
+		if err != nil || loaded.Targets[profile].User != "edited" || loaded.Targets[profile].Usage != "human" || loaded.RemoteMCP == nil || len(loaded.RemoteMCP.Last[profile]) != 1 {
 			t.Fatal("retained owner changes did not survive keeper shutdown")
 		}
 	} else {
@@ -227,5 +229,49 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 		}
 		loaded.Close()
 		assertGuardMasks(t, captured, credential)
+	}
+}
+
+func verifyKeeperMCPPreference(t *testing.T, ctx context.Context, manager *ownerdb.Manager, profile string) {
+	t.Helper()
+	var binding mcpdirectory.Binding
+	if err := manager.Edit(func(v *vault.Vault) error {
+		v.RemoteMCP = mcpdirectory.New()
+		server, err := v.RemoteMCP.AddServer("keeper-preference", "https://preference.invalid/mcp")
+		if err != nil {
+			return err
+		}
+		account, err := v.RemoteMCP.AddAccount(mcpdirectory.Account{ServerID: server, Name: "public", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "none"}})
+		if err == nil {
+			binding, err = v.RemoteMCP.CurrentBinding(account)
+		}
+		return err
+	}); err != nil || manager.Flush(ctx) != nil {
+		t.Fatal("keeper preference fixture could not persist its MCP metadata")
+	}
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, revision := snapshot.CipherDigest, snapshot.Status.Database.Revision
+	wrong := digest
+	wrong[0] ^= 128
+	if manager.RememberRemoteMCPAt(ctx, revision, wrong, profile, []mcpdirectory.Binding{binding}) == nil {
+		t.Fatal("changed ciphertext evidence admitted a preference")
+	}
+	selected := []mcpdirectory.Binding{binding}
+	if err := manager.RememberRemoteMCPAt(ctx, revision, digest, profile, selected); err != nil {
+		t.Fatal("confirmed keeper preference was refused")
+	}
+	selected[0].AccountRevision++
+	if manager.Flush(ctx) != nil {
+		t.Fatal("keeper preference did not persist with retained contexts")
+	}
+	metadata, err := manager.Metadata()
+	if err != nil || !reflect.DeepEqual(metadata.RemoteMCP.Last[profile], []mcpdirectory.Binding{binding}) {
+		t.Fatal("keeper preference borrowed input or lost its exact binding")
+	}
+	if manager.RememberRemoteMCPAt(ctx, revision, digest, profile, nil) == nil {
+		t.Fatal("old displayed revision changed a confirmed preference")
 	}
 }

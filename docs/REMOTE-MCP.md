@@ -73,9 +73,15 @@ the selection. A fresh session still requires explicit owner confirmation.
   explicit Continue, including singleton and empty choices. Cancel returns no
   choice and does not persist. It captures the SSH profile, displayed database
   revision and exact bindings as owned metadata, never as a grant.
-- The checkbox model is not wired into startup yet. Confirmed-state preference
-  persistence, fresh bounded launch grants and remote bridges remain pending;
-  later layers must reject stale choices rather than adopt newer credentials.
+- The checkbox model is not wired into startup yet. Private Session/Manager
+  `RememberRemoteMCPAt` admission checks the displayed revision, saved ciphertext
+  digest, existing stable SSH profile and exact enabled bindings before queuing
+  encrypted preference persistence. Busy/import/pending/recovery state and changed
+  ciphertext refuse. Callers must separately flush and inspect the save receipt;
+  an uncertain outcome is never automatically replayed.
+- The private admission seam does not mint a grant or expose an RPC/model operation.
+  Startup orchestration, fresh bounded launch grants and remote bridges remain
+  pending; later layers must reject stale choices rather than adopt credentials.
 
 Edits use the existing trusted owner session candidate/save path. Account input
 buffers and metadata selections are copied, not retained from callers. Replacement,

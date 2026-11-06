@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerresource"
@@ -280,4 +281,18 @@ func (m *Manager) OutputGuard(ctx context.Context) (*outputguard.Snapshot, error
 	}
 	m.guardHistory = candidate
 	return candidate, nil
+}
+
+// RememberRemoteMCPAt admits a preference only; it cannot authorize a bridge.
+func (m *Manager) RememberRemoteMCPAt(ctx context.Context, expected uint64, digest [32]byte, profile string, selected []mcpdirectory.Binding) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil || m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.imp.owns() {
+		return ErrPending
+	}
+	actual, err := cipherDigest(m.path)
+	if err != nil || actual != digest {
+		return mcpdirectory.ErrChanged
+	}
+	return m.db.RememberRemoteMCPAt(ctx, expected, digest, profile, selected)
 }
