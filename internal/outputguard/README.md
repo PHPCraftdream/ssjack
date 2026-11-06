@@ -32,8 +32,26 @@ and never closes the borrowed sink. Successful close clears pending byte buffers
 Snapshots remain immutable RAM capabilities; Go memory erasure is best effort and
 this package is not a same-user debugger or process-memory sandbox.
 
-Actual integration must obtain authorized known values privately, refresh only
-from confirmed owner state, keep old snapshots alive for their captured streams,
-and filter before any original-byte base64 or textual result can reach a model.
-It must preserve control fields, private hydration, signed/binary protocols and
-human streams rather than applying this writer indiscriminately.
+`Union` merges two validated immutable capabilities without pattern getters.
+It preserves old and new literals, deduplicates identical literals and refuses the
+whole union if unique-pattern, total-byte or trie-node limits would be exceeded.
+Repeated unchanged refresh does not accumulate duplicates. Neither input changes;
+existing streams continue to own their previously captured snapshot. Retention
+policy and publication remain the runtime owner's responsibility, not this helper.
+
+`vault.Session.OutputGuardAt` privately captures database credentials only at an
+exact saved revision and nonzero saved-ciphertext digest. It includes SSH passwords,
+private keys, proxy passwords, remote MCP authentication/header values and the linked
+installation master, including credentials not currently enabled. It refuses
+pending persistence, save errors, closing sessions and unresolved owner intents.
+It does not collect linked application values or retain the startup database password.
+`appstorecrypto.OwnerEditor.OutputGuard` separately captures selected exact committed
+bindings after clean-editor, reference, writer-history and current-state checks.
+Neither seam returns values or performs another unlock; errors are fixed `ErrGuard`.
+
+Runtime integration must compose both capabilities, refresh only from confirmed
+owner state, preserve old literals needed by frozen consumers and filter before any
+original-byte base64 or textual result can reach a model. A saved revision is not
+consumer adoption. Control fields, private hydration, signed/binary protocols and
+human streams must remain unchanged. These private construction seams are not yet
+called by the keeper/MCP runtime and do not enable filtering.

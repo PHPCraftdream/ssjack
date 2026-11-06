@@ -7,6 +7,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -86,4 +87,68 @@ func (o *OwnerEditor) AppendOwnerExport(ctx context.Context, plan *vault.OwnerEx
 	}
 	complete = true
 	return nil
+}
+
+// OutputGuard captures exact committed bindings without returning stored values.
+func (o *OwnerEditor) OutputGuard(ctx context.Context, bindings map[string]vault.SecretBinding) (snapshot *outputguard.Snapshot, err error) {
+	defer func() {
+		if err != nil {
+			snapshot, err = nil, outputguard.ErrGuard
+		}
+	}()
+	if o == nil || ctx == nil || ctx.Err() != nil {
+		return nil, outputguard.ErrGuard
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.blocked || o.dirty || o.writer == nil || !o.base.Valid() {
+		return nil, outputguard.ErrGuard
+	}
+	references := make(map[string]appstoreref.Ref)
+	if len(bindings) != 0 {
+		references, err = o.exportReferences(bindings)
+		if err != nil {
+			return nil, err
+		}
+	}
+	release, err := appstorebudget.TryAcquire(o.base.StoreID())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	tx, err := o.writer.state.directory.Lock()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Close()
+	if err := o.writer.state.checkWriterHistory(ctx, tx, o.base, nil); err != nil {
+		return nil, err
+	}
+	if err := o.verifyState(ctx, tx, o.base); err != nil {
+		return nil, err
+	}
+	patterns := make([][]byte, 0, min(len(references), outputguard.MaxPatterns))
+	total := 0
+	for _, ref := range references {
+		value := o.objects[ref.ObjectID()].value
+		if len(value) == 0 {
+			continue
+		}
+		if ctx.Err() != nil || len(patterns) == outputguard.MaxPatterns || len(value) > outputguard.MaxPatternSize || len(value) > outputguard.MaxPatternBytes-total {
+			return nil, outputguard.ErrGuard
+		}
+		patterns = append(patterns, value)
+		total += len(value)
+	}
+	snapshot, err = outputguard.New(patterns)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.verifyState(ctx, tx, o.base); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
