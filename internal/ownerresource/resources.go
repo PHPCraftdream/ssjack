@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreanchortls"
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
@@ -15,12 +16,15 @@ import (
 )
 
 type Resources struct {
-	store        *appstoreentry.Store
-	root         *os.File
-	directory    *appstorefile.Directory
-	installation *appstorecrypto.Installation
-	editor       *appstorecrypto.OwnerEditor
-	digest       [32]byte
+	consumersMu      sync.Mutex
+	consumers        map[*Consumer]struct{}
+	consumersClosing bool
+	store            *appstoreentry.Store
+	root             *os.File
+	directory        *appstorefile.Directory
+	installation     *appstorecrypto.Installation
+	editor           *appstorecrypto.OwnerEditor
+	digest           [32]byte
 }
 
 func Open(ctx context.Context, link *vault.OwnerStore) (_ *Resources, err error) {
@@ -101,6 +105,9 @@ func (r *Resources) OpenEditor(ctx context.Context) error {
 
 func (r *Resources) Close() {
 	if r == nil {
+		return
+	}
+	if r.CloseConsumers(context.Background()) != nil {
 		return
 	}
 	if r.editor != nil {

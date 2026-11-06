@@ -235,6 +235,7 @@ func TestTextAdapterConnected(t *testing.T) {
 		stopAndWait()
 		t.Fatal(err)
 	}
+	registerOwnerConsumerGrants(t, grant)
 	if _, err = ackW.Write([]byte{1}); err != nil {
 		stopAndWait()
 		t.Fatal(err)
@@ -260,7 +261,7 @@ func connectedTextChild(t *testing.T) {
 	defer grantFD.Close()
 	defer ackFD.Close()
 
-	installation, grant, placeholder := appstorecrypto.TextAdapterFixture(t)
+	installation, grant, placeholder := appstorecrypto.TextAdapterProductionFixture(t)
 	grant.RecipientUID = os.Geteuid()
 	if err := json.NewEncoder(grantFD).Encode(grant); err != nil {
 		t.Fatal(err)
@@ -457,4 +458,9 @@ func connectedTextChild(t *testing.T) {
 	if json.Unmarshal(data, &replay) != nil || replay.Result.StructuredContent.Status != "withheld" {
 		t.Fatal("replay response did not report withheld")
 	}
+	server.Close()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("shared-owner-consumer", func(t *testing.T) { verifyConnectedOwnerConsumer(t, grant) })
 }

@@ -3,6 +3,8 @@ package ownerdb
 import (
 	"context"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerresource"
@@ -186,3 +188,31 @@ func (m *Manager) abortImportLocked() error {
 }
 
 func copyIntent(pending *vault.OwnerIntent) *vault.OwnerIntent { return ownerclone.Intent(pending) }
+
+// HumanSSH is the only credential path out of the manager: a host-pin verified
+// client configuration for one human-permitted account, never raw bytes.
+func (m *Manager) HumanSSH(serverID, account string) (*ssh.ClientConfig, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing {
+		return nil, "", ErrPending
+	}
+	return m.db.HumanSSH(serverID, account)
+}
+
+// ServeText admits one fixed-grant consumer inside this keeper's installation.
+func (m *Manager) ServeText(ctx context.Context, request ownerresource.TextRequest) (*ownerresource.Consumer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil || m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.link == nil || m.imp.owns() {
+		return nil, ErrPending
+	}
+	if m.resources == nil {
+		resource, err := openResources(ctx, m.link)
+		if err != nil {
+			return nil, err
+		}
+		m.resources = resource
+	}
+	return m.resources.ServeText(ctx, request)
+}

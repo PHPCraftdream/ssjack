@@ -289,8 +289,46 @@ secret getter. A different revision or file digest refuses instead of adopting a
 new account. Later database edits do not change the captured configuration. Existing
 SSH/PTY/editor input/output and terminal-release behavior are unfiltered.
 
-This adds helper control and narrow human capture, not accepted protected installation
-sharing or the broader native cross-process/selected-value acceptance gate.
+This adds helper control and narrow human capture, not the broader native
+cross-process/selected-value acceptance gate.
+
+## Protected text-consumer lifetime
+
+For a linked version-2 database, the Linux amd64 text-adapter startup retains its
+single vault unlock, adopts the Manager and starts its authenticated owner service.
+The already captured SSH profile and credential digest remain immutable. The
+installation unlock comes from the authenticated encrypted database link; there is
+no additional installation-secret prompt, implicit relinking or grant renewal.
+Legacy and unlinked text startup retain their existing separate-installation path.
+
+`ownerresource` owns one entry Store lease, Directory and Installation. Its closed
+text-consumer request accepts only the four existing fixed-grant modes. Up to sixteen
+borrowers may own separate adapter/transport state while sharing those protected
+handles. Borrowed construction verifies installation digest, store ID, bound directory
+identity and the independently provisioned grant. It does not reopen the entry lock,
+repeat the installation KDF or expose the installation/master through owner RPC.
+Unsupported text platforms refuse; native storage support does not imply native text
+adapter support.
+
+Consumer close cancels transport and adapter work, joins the adapter, then removes
+that borrower. It never closes the parent handles. Parent shutdown stops admission
+and joins every consumer before releasing the installation or database writer role;
+a deadline or close failure leaves explicit recovery rather than a false join.
+Directory transactions retain their existing nonblocking serialization. An operation
+that encounters an active transaction may refuse; this is not automatic retry.
+
+Grant, reference, current-pointer and anchor checks are unchanged. An owner commit
+can make an old fixed grant stale, even if its old immutable snapshot remains on
+disk. A still-unused old grant must then withhold rather than silently adopting a
+new snapshot, value or environment. Existing harness/consumer environments are not
+reloaded. This sharing is strictly in-process; another process cannot borrow a Go
+pointer or bypass the held installation lease.
+
+Connected acceptance uses a real production-KDF installation, admits all four modes,
+delivers through one borrower, edits through the Manager while another unused borrower
+is live, then requires the old grant to withhold. Separate lifecycle tests require
+bounded close to retain an unfinished borrower and preserve fixed recovery errors.
+The broader actual-process keeper/helper/CLI acceptance remains a separate gate.
 
 ## Manager dispatch and helper ownership
 

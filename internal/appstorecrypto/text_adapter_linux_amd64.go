@@ -40,78 +40,7 @@ type TextAdapter struct {
 	binding      textBinding
 	used         bool
 	closed       bool
-}
-
-func NewTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextAdapter, error) {
-	return newTextAdapter(ctx, installation, grantID, profile, credentialDigest, runner, "hydrate-v1")
-}
-
-func NewReverseTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner) (*TextAdapter, error) {
-	return newTextAdapter(ctx, installation, grantID, profile, credentialDigest, runner, "reverse-copy-v1")
-}
-
-func newTextAdapter(ctx context.Context, installation *Installation, grantID, profile, credentialDigest string, runner TextAdapterRunner, expectedMode string) (*TextAdapter, error) {
-	if !validTextAdapterMode(expectedMode) || ctx == nil || installation == nil || installation.master == nil || installation.master.Closed() || runner == nil || !digestPattern.MatchString(credentialDigest) || os.Geteuid() <= 0 {
-		return nil, ErrDelivery
-	}
-	g, err := loadTextAdapterGrant(expectedMode, grantID, os.Geteuid(), time.Now())
-	if err != nil || g.Mode != expectedMode || g.Profile != profile || g.CredentialSHA256 != credentialDigest || hex.EncodeToString(installation.encodedHash[:]) != g.InstallationSHA256 || installation.Header().StoreID() == ([16]byte{}) || len(g.References) == 0 {
-		return nil, ErrDelivery
-	}
-	store, err := appstoreentry.Open(g.StorePath)
-	if err != nil {
-		return nil, ErrDelivery
-	}
-	fail := func() (*TextAdapter, error) {
-		_ = store.Close()
-		return nil, ErrDelivery
-	}
-	encoded, actual, err := store.Load()
-	if err != nil {
-		return fail()
-	}
-	defer clear(encoded)
-	dev, ino, err := store.Identity()
-	if err != nil || actual != installation.encodedHash || dev != g.DirectoryDev || ino != g.DirectoryIno || !installation.DirectoryMatches(dev, ino) || installation.Header().StoreID() != mustTextStore(g) {
-		return fail()
-	}
-	root, err := store.Root()
-	if err != nil {
-		return fail()
-	}
-	directory, err := appstorefile.Open(root, installation.Header().StoreID())
-	_ = root.Close()
-	if err != nil {
-		return fail()
-	}
-	_, anchor, err := installation.Writer(directory)
-	if err != nil {
-		_ = directory.Close()
-		return fail()
-	}
-	binding, err := newTextBinding()
-	if err != nil {
-		_ = anchor.Close()
-		_ = directory.Close()
-		return fail()
-	}
-	adapter := &TextAdapter{installation: installation, grant: g, store: store, directory: directory, anchor: anchor, runner: runner, binding: binding}
-	if adapter.check(ctx) != nil {
-		_ = adapter.Close()
-		return nil, ErrDelivery
-	}
-	return adapter, nil
-}
-
-func mustTextStore(g declarativeauthority.TextAdapterGrant) [16]byte {
-	if len(g.References) == 0 {
-		return [16]byte{}
-	}
-	r, err := appstoreplaceholder.Parse([]byte(g.References[0]))
-	if err != nil {
-		return [16]byte{}
-	}
-	return r.StoreID()
+	borrowed     bool
 }
 
 func (c *TextAdapter) isClosed() bool {
@@ -348,10 +277,10 @@ func (c *TextAdapter) Close() error {
 	if c.anchor != nil {
 		_ = c.anchor.Close()
 	}
-	if c.directory != nil {
+	if !c.borrowed && c.directory != nil {
 		_ = c.directory.Close()
 	}
-	if c.store != nil {
+	if !c.borrowed && c.store != nil {
 		return c.store.Close()
 	}
 	return nil
