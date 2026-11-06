@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerresource"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -215,4 +216,68 @@ func (m *Manager) ServeText(ctx context.Context, request ownerresource.TextReque
 		m.resources = resource
 	}
 	return m.resources.ServeText(ctx, request)
+}
+
+// OutputGuard admits a private model-job capability, never an owner RPC value.
+// History covers admitted snapshots; startup must seed before frozen consumers.
+func (m *Manager) OutputGuard(ctx context.Context) (*outputguard.Snapshot, error) {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return nil, outputguard.ErrGuard
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.imp.owns() {
+		return nil, outputguard.ErrGuard
+	}
+	metadata, status, digest, err := m.db.MetadataSnapshot()
+	if err != nil || status.Err != nil || status.Pending || status.Revision != status.SavedRevision || digest == ([32]byte{}) {
+		return nil, outputguard.ErrGuard
+	}
+	actual, err := cipherDigest(m.path)
+	if err != nil || actual != digest {
+		return nil, outputguard.ErrGuard
+	}
+	candidate, err := m.db.OutputGuardAt(status.Revision, digest)
+	if err != nil {
+		return nil, outputguard.ErrGuard
+	}
+	if m.link == nil && len(metadata.Secrets) != 0 {
+		return nil, outputguard.ErrGuard
+	}
+	if m.link != nil {
+		if m.resources == nil {
+			resource, err := openResources(ctx, m.link)
+			if err != nil {
+				return nil, outputguard.ErrGuard
+			}
+			m.resources = resource
+		}
+		if m.resources.OpenEditor(ctx) != nil {
+			return nil, outputguard.ErrGuard
+		}
+		linked, err := m.resources.Editor().OutputGuard(ctx, metadata.Secrets)
+		if err != nil {
+			return nil, outputguard.ErrGuard
+		}
+		candidate, err = outputguard.Union(candidate, linked)
+		if err != nil || m.resources.Check() != nil {
+			return nil, outputguard.ErrGuard
+		}
+	}
+	if m.guardHistory != nil {
+		candidate, err = outputguard.Union(m.guardHistory, candidate)
+		if err != nil {
+			return nil, outputguard.ErrGuard
+		}
+	}
+	_, final, finalDigest, err := m.db.MetadataSnapshot()
+	if err != nil || final.Err != nil || final.Pending || final.Revision != status.Revision || final.SavedRevision != status.Revision || finalDigest != digest || ctx.Err() != nil {
+		return nil, outputguard.ErrGuard
+	}
+	actual, err = cipherDigest(m.path)
+	if err != nil || actual != digest || ctx.Err() != nil {
+		return nil, outputguard.ErrGuard
+	}
+	m.guardHistory = candidate
+	return candidate, nil
 }

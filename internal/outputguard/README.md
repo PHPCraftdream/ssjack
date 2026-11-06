@@ -64,3 +64,15 @@ bytes. Both streams finish before a job becomes done. Provider/guard failures us
 fixed `ErrGuard`; runner failures use fixed `ErrJob`, without formatting private
 errors. The existing unguarded manager and private stream/human paths are unchanged.
 Keeper startup has not yet switched to this constructor.
+
+`ownerdb.Manager.OutputGuard` composes both private snapshots under owner admission,
+checks the exact saved ciphertext before and after construction and retains a bounded
+union of previously admitted literals. Busy/pending/import/recovery states refuse;
+construction failure never returns the old capability as a stale fallback. Linked
+state uses the retained installation/editor instead of another Store lease or KDF.
+Each admission validates the latest confirmed state and current linked history;
+there is no per-packet unlock and no raw-value RPC. Manager close drops its history
+reference after consumer shutdown; captured immutable capabilities remain usable
+by their existing holders. This is admission-time refresh, not automatic live-stream
+adoption. Startup must seed before freezing runners or admitting private consumers;
+that ordering and runtime startup wiring remain unfinished.

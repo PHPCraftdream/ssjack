@@ -53,6 +53,7 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	manager, err := ownerdb.Open(ctx, path, password)
 	must(t, err)
 	defer manager.Discard()
+	t.Run("guard-admission", func(t *testing.T) { verifyGuardAdmission(t, ctx, path, manager) })
 	encodedBefore, err := os.ReadFile(path)
 	must(t, err)
 	readonly, err := vault.Load(path, password)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -34,6 +35,7 @@ type Manager struct {
 	pending        *vault.OwnerIntent
 	confirmed      *appstorecrypto.SnapshotCommit
 	resources      *resources
+	guardHistory   *outputguard.Snapshot
 	exportRequest  *ExportRequest
 	busy           bool
 	closed         bool
@@ -287,6 +289,7 @@ func (m *Manager) stop() {
 	// Staged import material is RAM-only and is discarded on exit.
 	m.mu.Lock()
 	m.imp.reset()
+	m.guardHistory = nil
 	m.imp.phase = ImportIdle
 	m.mu.Unlock()
 }

@@ -153,6 +153,11 @@ func TestNativeOwnerFullProfile(t *testing.T) {
 	must(t, store.VerifyUnchanged(digest))
 	t.Run("owner-rpc", func(t *testing.T) { verifyOwnerRPC(t, ctx) })
 	t.Run("import-plan", func(t *testing.T) { verifyImportPlanAdmission(t, ctx) })
+	must(t, owner.Close())
+	must(t, directory.Close())
+	must(t, installation.Close())
+	must(t, store.Close())
+	t.Run("guard-linked", func(t *testing.T) { verifyLinkedGuardAdmission(t, ctx, path, binding.Header.StoreID(), password) })
 }
 
 func verifySnapshot(t *testing.T, ctx context.Context, installation *appstorecrypto.Installation, directory *appstorefile.Directory, commit appstorecrypto.SnapshotCommit, value []byte) {
