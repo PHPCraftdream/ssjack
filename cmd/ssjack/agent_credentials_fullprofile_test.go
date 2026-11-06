@@ -16,6 +16,9 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
+	"github.com/PHPCraftdream/ssjack/internal/ownerrpc"
 	"github.com/PHPCraftdream/ssjack/internal/startupsecret"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -89,13 +92,50 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 		t.Fatal("keeper startup did not consume exactly one password source")
 	}
 	var manager *ownerdb.Manager
+	defer func() {
+		cleanupCode := 0
+		var cleanupError error
+		finishAgentCredentials(credentials, &cleanupCode, &cleanupError)
+		if credentials.service != nil {
+			select {
+			case <-credentials.service.Done():
+			default:
+				t.Error("keeper fixture still has unfinished peers")
+				return
+			}
+		}
+		if manager != nil {
+			manager.Discard()
+		}
+	}()
 	if directory {
 		var ok bool
 		manager, ok = credentials.owner.(*ownerdb.Manager)
-		if !ok || manager == nil {
-			t.Fatal("directory keeper discarded its authenticated owner session")
+		if !ok || manager == nil || credentials.service == nil {
+			t.Fatal("directory keeper discarded its authenticated owner session or service")
 		}
-		defer manager.Discard()
+		binding, err := manager.OwnerBinding()
+		if err != nil {
+			t.Fatal(err)
+		}
+		connection, err := ownerlocal.Dial(ctx, path)
+		if err != nil {
+			t.Fatal("keeper did not start its owned service")
+		}
+		packet, err := manager.LocalOwnerPeer(binding)
+		if err != nil {
+			connection.Close()
+			t.Fatal(err)
+		}
+		client, err := ownerrpc.Attach(ctx, connection, packet)
+		if err != nil {
+			t.Fatal("keeper service did not authenticate its retained context")
+		}
+		reply, err := client.Execute(ctx, ownerpacket.Command{Operation: "snapshot"})
+		client.Close()
+		if err != nil || reply.CipherDigest == ([32]byte{}) {
+			t.Fatal("keeper startup service omitted saved metadata")
+		}
 		snapshot, err := manager.Snapshot()
 		if err != nil || snapshot.CipherDigest == ([32]byte{}) {
 			t.Fatal("retained owner has no authenticated saved snapshot")
@@ -113,7 +153,7 @@ func keeperLifetimeAcceptance(t *testing.T, directory bool) {
 		if err != nil || manager.Flush(ctx) != nil {
 			t.Fatal("retained owner could not edit and save without another unlock")
 		}
-	} else if credentials.owner != nil {
+	} else if credentials.owner != nil || credentials.service != nil {
 		t.Fatal("legacy startup silently created an unsupported directory coordinator")
 	}
 	// The shell-only fixture refuses exec after authenticating the frozen config.

@@ -13,8 +13,8 @@ import (
 func (s *Session) OwnerPeer(path string, binding [32]byte) (*ownerpacket.Server, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.closing || s.exportKey == nil || s.state == nil || s.state.Version != 2 || s.saveErr != nil || s.saved != s.revision || s.savedCipher == ([32]byte{}) {
-		return nil, errors.New("owner channel requires a fully saved authenticated database")
+	if s.closed || s.closing || s.exportKey == nil || s.state == nil || s.state.Version != 2 || s.savedCipher == ([32]byte{}) {
+		return nil, errors.New("owner channel requires an authenticated saved ciphertext origin")
 	}
 	encoded, err := readEncoded(path)
 	if err != nil || sha256.Sum256(encoded) != s.savedCipher {

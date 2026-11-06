@@ -17,6 +17,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownerrpc"
+	"github.com/PHPCraftdream/ssjack/internal/ownerservice"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -50,6 +51,76 @@ func (p *managerRPCPeer) close() error {
 	p.server.Close()
 	p.unlock.Close()
 	return p.result
+}
+
+func verifyOwnerService(t *testing.T, ctx context.Context, path string, manager *ownerdb.Manager) {
+	t.Helper()
+	before, err := manager.Snapshot()
+	must(t, err)
+	lockPath := path + ".lock"
+	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	must(t, err)
+	must(t, lock.Close())
+	defer os.Remove(lockPath)
+	must(t, manager.EditAt(before.Status.Database.Revision, func(*vault.Vault) error { return nil }))
+	if err := manager.Flush(ctx); err == nil {
+		t.Fatal("synthetic commit-lock refusal did not reach save failure")
+	}
+	service, err := ownerservice.Start(ctx, manager)
+	must(t, err)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := service.Close(cleanup); err != nil {
+			t.Error("native owner service did not join safely")
+		}
+	}()
+	binding, err := manager.OwnerBinding()
+	must(t, err)
+	connection, err := ownerlocal.Dial(ctx, path)
+	must(t, err)
+	defer connection.Close()
+	packet, err := manager.LocalOwnerPeer(binding)
+	must(t, err)
+	client, err := ownerrpc.Attach(ctx, connection, packet)
+	must(t, err)
+	defer client.Close()
+	snapshot, err := client.Execute(ctx, ownerpacket.Command{Operation: "snapshot"})
+	must(t, err)
+	if snapshot.Status.Database.Err == nil || !snapshot.Status.Database.Pending || snapshot.Status.Database.Revision <= snapshot.Status.Database.SavedRevision {
+		t.Fatal("service concealed failed unsaved state during authentication")
+	}
+	must(t, os.Remove(lockPath))
+	revision := snapshot.Status.Database.Revision
+	_, err = client.Execute(ctx, ownerpacket.Command{Operation: "recovery", Revision: &revision, Recovery: "retry-db"})
+	must(t, err)
+	_, err = client.Execute(ctx, ownerpacket.Command{Operation: "flush"})
+	must(t, err)
+	snapshot, err = client.Execute(ctx, ownerpacket.Command{Operation: "snapshot"})
+	must(t, err)
+	if snapshot.CipherDigest == ([32]byte{}) || snapshot.Status.Database.Err != nil || snapshot.Status.Database.Pending {
+		t.Fatal("explicit owner retry did not save the exact pending state")
+	}
+	must(t, service.Close(ctx))
+	select {
+	case <-service.Done():
+	default:
+		t.Fatal("service close returned before active peer join")
+	}
+	if _, err := manager.Snapshot(); err != nil {
+		t.Fatal("service closed its borrowed Manager")
+	}
+	if foreign, err := ownerlocal.Listen(path); !errors.Is(err, ownerlocal.ErrBusy) {
+		if foreign != nil {
+			foreign.Close()
+		}
+		t.Fatal("service shutdown released the parent's writer role")
+	}
+	must(t, manager.EditAt(snapshot.Status.Database.Revision, func(*vault.Vault) error { return nil }))
+	must(t, manager.Flush(ctx))
+	restarted, err := ownerservice.Start(ctx, manager)
+	must(t, err)
+	must(t, restarted.Close(ctx))
 }
 
 func verifyManagerRPC(t *testing.T, ctx context.Context, path string, password []byte, archive string, manager *ownerdb.Manager) {

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerservice"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -103,6 +104,11 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 			return nil, err
 		}
 		credentials.owner, adopted = owner, true
+		service, err := ownerservice.Start(ctx, owner)
+		if err != nil {
+			return credentials, err
+		}
+		credentials.service = service
 	}
 	return credentials, nil
 }

@@ -15,6 +15,61 @@ type ownerCloseFunc func(context.Context) error
 
 func (f ownerCloseFunc) Close(ctx context.Context) error { return f(ctx) }
 
+type serviceCloseProbe struct {
+	close func(context.Context) error
+	done  chan struct{}
+}
+
+func (p *serviceCloseProbe) Close(ctx context.Context) error { return p.close(ctx) }
+func (p *serviceCloseProbe) Done() <-chan struct{}           { return p.done }
+
+func TestKeeperJoinsServiceBeforeClosingParentKeyAndRole(t *testing.T) {
+	for _, mode := range []string{"joined", "service-error", "unjoined", "partial-service"} {
+		t.Run(mode, func(t *testing.T) {
+			var events []string
+			private := errors.New("synthetic-private-service-diagnostic")
+			service := &serviceCloseProbe{done: make(chan struct{})}
+			service.close = func(ctx context.Context) error {
+				events = append(events, "service-close")
+				if _, ok := ctx.Deadline(); !ok || ctx.Err() != nil {
+					t.Fatal("service cleanup omitted independent bound")
+				}
+				if mode != "unjoined" {
+					close(service.done)
+				}
+				if mode == "service-error" || mode == "unjoined" {
+					return private
+				}
+				return nil
+			}
+			credentials := &agentCredentials{service: service, owner: ownerCloseFunc(func(context.Context) error {
+				events = append(events, "owner-close")
+				return nil
+			})}
+			if mode == "partial-service" {
+				credentials.owner = nil
+			}
+			code := 0
+			var result error
+			finishAgentCredentials(credentials, &code, &result)
+			want := []string{"service-close", "owner-close"}
+			if mode == "unjoined" || mode == "partial-service" {
+				want = want[:1]
+			}
+			if !reflect.DeepEqual(events, want) {
+				t.Fatal("parent closed before service join or partial service leaked")
+			}
+			if mode == "service-error" || mode == "unjoined" {
+				if code != 1 || !errors.Is(result, errOwnerShutdown) || strings.Contains(result.Error(), private.Error()) {
+					t.Fatal("unsafe service shutdown reported success or raw diagnostics")
+				}
+			} else if code != 0 || result != nil {
+				t.Fatal("joined service changed a saved outcome")
+			}
+		})
+	}
+}
+
 func TestKeeperClosesRetainedOwnerAfterHarnessAndReportsFailure(t *testing.T) {
 	for _, mode := range []string{"success", "harness-error", "owner-error", "both-errors", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {

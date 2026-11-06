@@ -11,9 +11,9 @@ snapshot tied to one revision, authenticated vault adoption without another KDF,
 and narrow owner packet capabilities. Directory forms share one typed mutation
 implementation. A form may pin its displayed revision through a scoped backend;
 the typed remote backend now maps these operations to the closed packet union.
-Manager dispatch is now composed as an internal library, not a running keeper RPC
-service. Helper/keeper lifecycle, single-writer exclusion and cross-process startup
-integration remain unfinished.
+Directory full-mode startup now starts the bounded private service from that retained
+Manager and its held writer endpoint. Owner CLI/TUI attachment, human SSH handoff,
+protected-consumer sharing and full cross-process integration remain unfinished.
 
 The local owner backend now pins every form operation to its displayed revision.
 Metadata, database status, import counts and saved ciphertext evidence are read
@@ -41,9 +41,10 @@ with a fixed recovery error; it is never reported as a saved success.
 
 Legacy non-directory startup preserves its previous read-only credential capture;
 it does not create a directory coordinator. Declarative startup still does not
-unlock this database. This lifetime change does not itself start an owner endpoint,
-attach helpers, exclude legacy writers or share a text-adapter installation lock.
-Those remain integration requirements, not working advertised modes.
+unlock this database. Directory startup now starts the private owner service without
+another unlock, using the Manager's borrowed endpoint admission. The owned startup
+bundle stops and joins that service before closing its parent Manager. Owner CLI/TUI
+attachment and text-adapter installation sharing remain separate integration gates.
 
 ## Authority and confidentiality
 
@@ -233,6 +234,36 @@ Manager admission and helper/import-plan ownership as described below. This is n
 a running keeper service or authorization to expose a generic callback through
 MCP. The low-level native exchange fixture uses a synthetic handler; a separate
 native Manager fixture composes actual dispatch and shared forms.
+
+## Keeper service lifetime
+
+`ownerservice.Start` borrows an already authenticated Manager and its held endpoint;
+it does not acquire another listener or request/derive a password. One service owns
+one Dispatcher. Sixteen fixed slots bound accepted peers and pending admission.
+Each peer uses the existing authenticated lease and ten-second handshake limit;
+invalid authentication or unavailable saved origin closes that peer, not the keeper.
+There is no reconnect/mutation replay or standalone fallback.
+
+Service cancellation joins pending accept and closes/joins owned connections and
+lease cleanup before its Done receipt. It never closes the Manager or releases the
+writer claim itself. The startup bundle closes consumers first, then the service,
+then the parent Manager. If peers have not joined by shutdown's bound, the bundle
+returns a fixed recovery error without closing their borrowed parent key/role. A
+joined fatal service error still permits an attempted parent persistence close but
+cannot preserve a successful harness exit. Partial startup retains explicit ownership
+so the same cleanup path runs.
+
+New authentication may use the last authenticated saved ciphertext origin even
+while RAM has a failed/pending save, but only if that exact saved digest still matches
+the file. Metadata continues to report unsaved/error state and a retry requires an
+explicit owner command. Current RAM state is not falsely certified as saved. Native
+service acceptance injects a commit-lock refusal, authenticates in that failed state,
+then explicitly retries and verifies persistence without another KDF. It also stops
+an active peer, proves the parent writer/key remain usable and restarts the service.
+
+This starts the full-mode directory service, not a completed public owner CLI/TUI
+attach flow. Helper selection, frozen human SSH capture and protected installation
+sharing remain required before the whole live-update feature is accepted.
 
 ## Manager dispatch and helper ownership
 

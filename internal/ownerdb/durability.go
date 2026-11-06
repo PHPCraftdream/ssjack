@@ -266,6 +266,8 @@ func (m *Manager) Snapshot() (Snapshot, error) {
 func (m *Manager) OwnerPeer(binding [32]byte) (*ownerpacket.Server, error) {
 	return m.db.OwnerPeer(m.path, binding)
 }
+func (m *Manager) OwnerBinding() ([32]byte, error) { return m.db.OwnerBinding() }
+
 func (m *Manager) LocalOwnerPeer(binding [32]byte) (*ownerpacket.Client, error) {
 	return m.db.LocalOwnerPeer(binding)
 }
