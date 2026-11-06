@@ -1,10 +1,16 @@
-# Owner IPC primitives — integration in progress
+# Authenticated live owner coordination
 
-The native transport/packet primitives and native installation/record storage
-have separate accepted CI gates. Native production-profile owner editing passed
-on Windows, Linux and macOS at `866255d`; see `OWNER-NATIVE-STORAGE.md`. This is
-not an operator claim that live keeper coordination is available. Existing owner
-CLI and TUI behavior remains separate until coordinator integration is accepted.
+Version-2 keeper startup and trusted owner CLI/TUI share one live coordinator on
+Windows, Linux and macOS. Each helper unlocks once and authenticates over the
+protected native endpoint; it does not create another writer while the keeper is
+present. Native installation/record storage and production-profile owner editing
+have their own acceptance gates; see `OWNER-NATIVE-STORAGE.md`.
+
+Runtime acceptance at `873308d` passed full CI `42176754203` and scoped CI
+`42176752481`. Actual keeper, CLI helper, interactive helper, human SSH and writer
+refusal processes passed on all three operating systems. Actual linked/unlinked
+text-consumer CLI acceptance remains Linux amd64 only. This does not deliver the
+remote MCP bridge, launch selector, output guard or MCP archive integration.
 
 The coordinator foundation adds atomic expected-revision admission, a metadata
 snapshot tied to one revision, authenticated vault adoption without another KDF,
@@ -13,8 +19,8 @@ implementation. A form may pin its displayed revision through a scoped backend;
 the typed remote backend now maps these operations to the closed packet union.
 Directory full-mode startup now starts the bounded private service from that retained
 Manager and its held writer endpoint. Owner CLI/TUI now select authenticated remote
-attach or exclusive standalone control. Protected-consumer sharing and broader native
-cross-process integration remain separate acceptance gates.
+attach or exclusive standalone control. Linked text consumers borrow the protected
+installation lifetime; actual native process acceptance is described below.
 
 The local owner backend now pins every form operation to its displayed revision.
 Metadata, database status, import counts and saved ciphertext evidence are read
@@ -26,8 +32,8 @@ not increment that revision or run another KDF. Callbacks cannot re-enter the va
 session. Directory edits refuse while the owner worker is busy, so a queued export,
 link or import cannot silently adopt intervening connection edits.
 
-These local paths and the typed remote backend are prerequisites for RPC dispatch,
-not accepted endpoint lifecycle or complete exclusion of legacy command writers.
+The typed remote backend and Manager dispatcher enforce these scopes through the
+live service. Legacy writers must acquire the same native role before effects.
 
 ## Keeper authentication lifetime
 
@@ -44,8 +50,9 @@ Legacy non-directory startup preserves its previous read-only credential capture
 it does not create a directory coordinator. Declarative startup still does not
 unlock this database. Directory startup now starts the private owner service without
 another unlock, using the Manager's borrowed endpoint admission. The owned startup
-bundle stops and joins that service before closing its parent Manager. Owner CLI/TUI
-attachment and text-adapter installation sharing remain separate integration gates.
+bundle stops and joins that service before closing its parent Manager. Attached
+owner CLI/TUI helpers detach without closing that parent. Version-2 text startup
+also retains its coordinator, including the explicitly unlinked path below.
 
 ## Authority and confidentiality
 
@@ -133,8 +140,8 @@ Initial creation remains no-overwrite. An already-current format check is read-o
 
 Production CLI acceptance holds an occupied endpoint and requires every legacy writer
 to refuse with unchanged encrypted bytes, no new key/recovery/lock files and zero
-connections to its self-owned SSH fixture. This is writer-effect exclusion, not a
-running keeper RPC loop or completed owner CLI attachment.
+connections to its self-owned SSH fixture. Separate actual-process acceptance also
+requires valid-key rotation to refuse while a real keeper and human SSH are live.
 
 ## Packet state machine and bounds
 
@@ -177,7 +184,7 @@ The closed operation union covers directory changes, selected secret changes,
 export, link, import inspection/confirmation, explicit recovery, metadata and
 flush. Replies contain only directory/import metadata and persistence evidence;
 there is no stored-secret or master getter. Mutating requests carry an expected
-revision, whose atomic admission must be enforced by the integrated coordinator.
+revision, whose atomic admission is enforced by the integrated coordinator.
 A successful receipt is not application adoption or an environment reload.
 
 ## Typed remote forms
@@ -196,8 +203,8 @@ operation validation still applies; absolute paths are not authorization.
 Closing a remote form first requests flush, then detaches only its client peer.
 A failed flush does not claim saved success or close the keeper. The helper must
 also close its client on abandoned/error exits before closing its own unlock.
-Routing and shared-form tests do not establish live keeper attachment or helper
-lease ownership; those remain integration requirements.
+Routing and shared-form tests alone do not establish live keeper attachment or
+helper lease ownership; native dispatch and actual-process gates cover those layers.
 
 RAM import plans have a non-secret monotonic identity within the coordinator.
 Successful inspection admission allocates the next identity without changing the
@@ -231,10 +238,10 @@ server peer before closing its parent database context. The server clears decode
 private command buffers after every dispatched outcome, including failed replies.
 
 This layer accepts only the closed command/reply types. `ownerdispatch` supplies
-Manager admission and helper/import-plan ownership as described below. This is not
-a running keeper service or authorization to expose a generic callback through
-MCP. The low-level native exchange fixture uses a synthetic handler; a separate
-native Manager fixture composes actual dispatch and shared forms.
+Manager admission and helper/import-plan ownership as described below. The keeper
+service composes these layers; none authorizes a generic callback through MCP.
+The low-level native exchange fixture uses a synthetic handler; a separate native
+Manager fixture composes actual dispatch and shared forms.
 
 ## Keeper service lifetime
 
@@ -289,8 +296,9 @@ secret getter. A different revision or file digest refuses instead of adopting a
 new account. Later database edits do not change the captured configuration. Existing
 SSH/PTY/editor input/output and terminal-release behavior are unfiltered.
 
-This adds helper control and narrow human capture, not the broader native
-cross-process/selected-value acceptance gate.
+Actual-process acceptance covers helper control and narrow human capture. Selected
+value export/import and its disclosure confirmations retain their own acceptance
+requirements; human capture is not a value getter.
 
 ## Protected text-consumer lifetime
 
@@ -335,7 +343,13 @@ Connected acceptance uses a real production-KDF installation, admits all four mo
 delivers through one borrower, edits through the Manager while another unused borrower
 is live, then requires the old grant to withhold. Separate lifecycle tests require
 bounded close to retain an unfinished borrower and preserve fixed recovery errors.
-The broader actual-process keeper/helper/CLI acceptance remains a separate gate.
+The actual-process gate additionally builds ssjack itself and runs three non-root
+PTY cases: unlinked-positive, linked-positive and linked-stale. It checks coordinator
+existence before helper attachment and before answering the unlinked master prompt.
+Directory edits cannot redirect the captured SSH delivery; a linked store commit
+before the first hydrate must stale the old grant with zero SSH effects. Graceful
+exit must release both the database role and installation lease, and encrypted
+reopen must preserve the intended linked/unlinked scope.
 
 ## Manager dispatch and helper ownership
 
@@ -366,8 +380,8 @@ Native Manager acceptance uses two independently unlocked helpers, real OS
 transport and production crypto. It proves live-plan exclusion, no-effect disconnect
 cleanup, an actual shared owner form editing/saving through RPC, stale-form refusal,
 private ciphertext persistence and the coordinator remaining available after helper
-detach. Keeper startup, process-level writer exclusion and SSH handoff remain a
-separate runtime integration gate.
+detach. The separate actual-process gate covers keeper startup, process-level
+writer exclusion, human SSH handoff and graceful restart.
 
 ## Native database publication
 

@@ -1,10 +1,11 @@
-# Native owner storage — implementation in progress
+# Native owner storage
 
-The native filesystem capability layer and installation-binding port are under
-implementation. This is not acceptance of the complete application-store port:
-the filesystem/record engine passed scoped native CI at `a270545`, but private-value
-workflows, provisioning and the live owner coordinator still require acceptance.
-The existing Linux record implementation remains unchanged.
+Protected filesystem capabilities, installation bindings, ciphertext records and
+production-profile owner editing are accepted on Windows, Linux and macOS. The
+live coordinator also passed native actual-process acceptance at `873308d`, full
+CI `42176754203`; see `OWNER-IPC-PROTOCOL.md`. This does not port the Linux-only
+anchor-service deployment or Linux amd64 text adapters to other platforms. The
+existing Linux record implementation remains unchanged.
 
 ## Protected filesystem capabilities
 
@@ -93,14 +94,16 @@ port. Owner editing uses `appstorefile` commit intents, not `appstoreintentio`.
 
 Both the scoped native matrix (when this test is impacted) and the full native
 matrix require an explicit PASS from the production-profile test. An environment
-skip in the ordinary unit suite is not acceptance. Until those jobs pass, the new
-private-value test remains an unaccepted candidate.
+skip in the ordinary unit suite is not acceptance. The production-profile test
+and native owner process gates passed in full CI `42176754203` on `873308d`.
 
-## Acceptance required before shipping
+## Acceptance boundaries
 
 Native tests must cover protected creation, identity/adoption, exclusive locks,
 no-overwrite and explicit replacement, traversal/reparse/hard-link refusal,
 anonymous spools, binding preservation and root replacement. Complete acceptance
 also requires real native secret add/update/readback through the private store,
 owner CLI/TUI parity and live coordinator operation on Windows, Linux and macOS.
-Writing these checks or passing only a primitive layer is not that acceptance.
+Those runtime layers are covered separately from the primitive tests; their passed
+gates do not certify power-loss recovery, live deployment, the remote MCP bridge
+or installation on an operator machine.

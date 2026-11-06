@@ -18,8 +18,14 @@ Forms pin the database revision from the same snapshot as their displayed metada
 A stale Apply refuses before changing the directory or publishing queued owner work.
 Directory edits also refuse while the owner worker is busy, preserving the scope of
 an admitted export/import/link operation. Explicit import cancellation remains
-revision-checked and does not roll back effects already committed. This local
-backend does not itself provide the pending keeper/helper RPC integration.
+revision-checked and does not roll back effects already committed.
+
+If a keeper owns this database, the helper attaches through authenticated native
+IPC after its own single unlock. Only a proven absent endpoint permits exclusive
+standalone control. Unsafe, busy, unauthenticated or uncertain endpoints never
+trigger standalone fallback. Successful helper exit flushes and detaches its peer,
+not the keeper. Human SSH from the interactive picker captures the exact displayed
+saved revision; later owner edits do not change that captured connection.
 
 ## Syntax and selectors
 
@@ -127,8 +133,9 @@ ssjack help owner edit-account
 For the first example, the form asks for the SSH password and verified host keys
 not supplied by parameters. Supplying all metadata never supplies a password or
 removes Apply. Secret operations require the already linked/provisioned private
-application store and remain Linux-only. There is no secret getter or JSON
-plaintext output.
+application store. Protected owner storage/editing supports Windows, Linux and
+macOS; Linux amd64 text adapters retain their narrower platform boundary. There
+is no secret getter or JSON plaintext output.
 
 ## Import and recovery
 
@@ -136,9 +143,13 @@ Import still authenticates the archive in RAM, shows metadata/conflicts and
 requires exact `IMPORT`. It never silently merges or overwrites. The command
 waits for complete application; a partial import returns failure, not success.
 Per-secret encrypted intents remain recoverable. The remaining import plan lives
-only in that process's memory; a later command cannot reconstruct it after exit.
-For an import where in-process resume/abort matters, use the retained
-`--interactive` session. Abort does not roll back entries already applied.
+only in the coordinator's RAM and is lost when that coordinator exits. An attached
+helper owns its inspected plan; another helper cannot act merely by knowing its
+PlanID. Disconnect cleans up no-effect state only. A retained effectful/partial plan
+requires an explicit recovery decision against freshly displayed revision/PlanID;
+attachment never resumes it automatically. Use a retained keeper or `--interactive`
+session when in-process recovery matters. Abort does not roll back entries already
+applied.
 
 SSH connection is already available through `--server NAME --account NAME ssh`;
 commands do not connect just because metadata was displayed or a form was opened.

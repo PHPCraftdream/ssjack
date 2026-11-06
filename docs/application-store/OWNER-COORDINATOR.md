@@ -1,8 +1,9 @@
 # Trusted-local owner database coordination
 
-Implementation unit: task 277. This is not an MCP endpoint or completed terminal
-editor. The initial coordinator covers normal versioned value writes; explicit
-pending-operation reconciliation and setup/UI integration remain required.
+The trusted coordinator serves shared owner CLI/TUI forms directly or through
+authenticated native IPC. It is not an MCP endpoint. Keeper/helper lifetimes and
+actual native process acceptance are documented in
+[the owner IPC protocol](../OWNER-IPC-PROTOCOL.md).
 
 ## Ownership and lifetime
 
@@ -15,9 +16,9 @@ The application installation is unlocked lazily once and kept in the owner
 runtime. Its real master derivation and crypto profile remain unchanged. The
 installation directory identity and encoded binding are rechecked before owner
 operations. No new role/enrollment system, SSH hardening, raw secret tool or
-master getter is introduced. Linked application-store editing currently uses
-the existing supported Linux backend; unsupported platforms refuse before
-staging a secret mutation.
+master getter is introduced. Linked application-store editing uses protected
+native storage on Windows, Linux and macOS; unsupported platforms refuse before
+staging a secret mutation. Text adapters remain Linux amd64 only.
 
 There is one bounded application-operation worker and the existing bounded
 credential-database save worker. The separate workers are intentional: a writer
@@ -54,7 +55,8 @@ secret bindings through the coordinator's generic metadata-edit path.
 Import reads an owner export archive (see [export format](OWNER-EXPORT-FORMAT.md))
 through the same single owner worker. It is reachable only from the trusted
 terminal editor through `InspectImport`, `ImportStatus`, `ConfirmImport`,
-`ResumeImport` and `AbortImport`; it has no public, CLI or MCP surface.
+`ResumeImport` and `AbortImport`. Shared owner CLI/TUI forms can invoke these
+closed operations; there is no model-facing MCP import or stored-value getter.
 
 **Inspect.** `InspectImport` queues a worker job that syncs the database, reads
 the archive with `ownerarchive.ReadFile` (one unlock (four sequential Argon2id derivations) if encrypted) and stages
@@ -71,7 +73,7 @@ server name, account (credential) ID, secret alias ID, secret scope plus name,
 server/account/secret count limits, a pending owner intent, an unlinked owner
 store (when the archive has values), a non-version-2 destination, an unsupported
 value (values that are not valid UTF-8 or contain NUL are refused because the
-owner store is text-only) and `runtime-unsupported` off Linux. `ConfirmImport`
+owner store is text-only) and `runtime-unsupported` on unsupported platforms. `ConfirmImport`
 re-evaluates them and refuses with `ErrImportConflict`.
 
 **Apply order.** `ConfirmImport` queues one apply job:
@@ -140,8 +142,8 @@ a restart the owner can resolve the pending intent and must inspect the archive
 again; already imported entries then appear as conflicts rather than being
 resumed.
 
-Linked value publication keeps the Linux-only runtime boundary; other platforms
-refuse a plan with values before any change.
+Linked value publication uses the supported native storage backend. Unsupported
+platforms refuse a plan with values before any change.
 
 ## Verification
 
@@ -156,6 +158,7 @@ The same job also imports an encrypted archive through the real terminal model
 through the manager into fresh databases, then checks credentials, alias scopes,
 fresh references, imported values, conflict refusal and tampered archives.
 
-Normal-flow acceptance does not prove pending reconciliation, full terminal UI,
-exports, streaming producer/client support or live deployment. Those remaining
-units must not be reported as delivered from this component alone.
+This normal-flow component test alone does not prove pending reconciliation,
+full terminal UI, exports, streaming producer/client support or live deployment.
+Separate native owner and actual-process gates cover the accepted runtime layers;
+the remote MCP bridge and live deployment remain outside this component.
