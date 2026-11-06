@@ -45,7 +45,7 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-STOPPED")
 }
 
-func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string) {
+func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *loopbackSSH) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -115,6 +115,9 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 				nativeOwnerCommandAcceptance(t, lifetime, path, password, server, "keeper-added", observer)
 				t.Run("native-interactive-helper", func(t *testing.T) {
 					nativeInteractiveAcceptance(t, lifetime, path, password, server, observer)
+				})
+				t.Run("native-human-ssh", func(t *testing.T) {
+					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
 				})
 			} else {
 				metadata, err := observer.Backend().Metadata()

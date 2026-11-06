@@ -86,6 +86,8 @@ jobs:
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/native-command-helper ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh/legacy-writer-refusal ' "$RUNNER_TEMP/native-owner-cli.log"
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build and install source on Linux or macOS

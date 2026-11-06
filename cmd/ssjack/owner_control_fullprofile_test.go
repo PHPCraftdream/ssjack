@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -25,7 +26,9 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	public, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public())
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	defer clear(private)
+	public, err := ssh.NewPublicKey(private.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +39,17 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	defer clear(target.Password)
 	serverID, err := v.AddServer("production", "main", target)
 	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(private, "synthetic native writer refusal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(block.Bytes)
+	keyTarget := target
+	keyTarget.User, keyTarget.Password, keyTarget.PrivateKey, keyTarget.Usage = "first", nil, pem.EncodeToMemory(block), "agent"
+	defer clear(keyTarget.PrivateKey)
+	if err := v.SetAccount(serverID, "key-only", keyTarget); err != nil {
 		t.Fatal(err)
 	}
 	password := []byte("synthetic owner control password")
@@ -113,6 +127,6 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("actual-keeper-process", func(t *testing.T) {
-		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production")
+		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production", server)
 	})
 }
