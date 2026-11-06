@@ -59,11 +59,6 @@ func newPairTargetWithLimit(t *testing.T, profile string, limit int64) (*pairTar
 		t.Fatal("invalid synthetic target limit")
 	}
 	clientKey, hostKey := pairSigner(t), pairSigner(t)
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := &pairTarget{path: filepath.Join(t.TempDir(), "consumer.txt"), limit: limit, listener: listener, connections: make(map[net.Conn]bool)}
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if metadata.User() == "pair-consumer" && bytes.Equal(key.Marshal(), clientKey.PublicKey().Marshal()) {
@@ -73,6 +68,23 @@ func newPairTargetWithLimit(t *testing.T, profile string, limit int64) (*pairTar
 		},
 	}
 	config.AddHostKey(hostKey)
+	target := startPairTarget(t, limit, config)
+	clientConfig := &ssh.ClientConfig{User: "pair-consumer", Auth: []ssh.AuthMethod{sshauth.PublicKey(clientKey)}, HostKeyCallback: ssh.FixedHostKey(hostKey.PublicKey())}
+	runner, err := remote.NewCredentialStreamRunner(profile, target.listener.Addr().String(), clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sha256.Sum256(clientKey.PublicKey().Marshal())
+	return target, runner, hex.EncodeToString(identity[:])
+}
+
+func startPairTarget(t *testing.T, limit int64, config *ssh.ServerConfig) *pairTarget {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &pairTarget{path: filepath.Join(t.TempDir(), "consumer.txt"), limit: limit, listener: listener, connections: make(map[net.Conn]bool)}
 	target.workers.Add(1)
 	go func() {
 		defer target.workers.Done()
@@ -104,13 +116,7 @@ func newPairTargetWithLimit(t *testing.T, profile string, limit int64) (*pairTar
 		_ = listener.Close()
 		target.workers.Wait()
 	})
-	clientConfig := &ssh.ClientConfig{User: "pair-consumer", Auth: []ssh.AuthMethod{sshauth.PublicKey(clientKey)}, HostKeyCallback: ssh.FixedHostKey(hostKey.PublicKey())}
-	runner, err := remote.NewCredentialStreamRunner(profile, listener.Addr().String(), clientConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := sha256.Sum256(clientKey.PublicKey().Marshal())
-	return target, runner, hex.EncodeToString(identity[:])
+	return target
 }
 
 func (target *pairTarget) serve(connection net.Conn, config *ssh.ServerConfig) {
