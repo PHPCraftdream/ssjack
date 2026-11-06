@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
-	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/apptransport"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
 	"github.com/PHPCraftdream/ssjack/internal/ownerresource"
@@ -42,7 +40,7 @@ func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args 
 	return runTextAdapter(ctx, vaultPath, profile, args)
 }
 
-func runTextAdapter(ctx context.Context, vaultPath, profile string, args []string) (int, error) {
+func runTextAdapter(ctx context.Context, vaultPath, profile string, args []string) (code int, result error) {
 	if profile == "" {
 		profile = "main"
 	}
@@ -76,41 +74,19 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	if loaded.Version == 2 && loaded.OwnerStore != nil {
 		return runOwnedTextAdapter(ctx, vaultPath, loaded, ownerresource.TextRequest{Mode: grant.Mode, GrantID: args[1], Profile: profile, CredentialDigest: digest, Runner: runner}, args[2:])
 	}
+	if loaded.Version == 2 {
+		_, credentials, err := startTextOwner(ctx, vaultPath, loaded)
+		if credentials != nil {
+			defer finishAgentCredentials(credentials, &code, &result)
+		}
+		if err != nil {
+			return 1, err
+		}
+	}
 	loaded.Close()
-	store, err := appstoreentry.Open(grant.StorePath)
+	installation, err := unlockTextInstallation(ctx, grant)
 	if err != nil {
-		return 1, errAppstore
-	}
-	encoded, hash, err := store.Load()
-	if err != nil {
-		store.Close()
-		return 1, errAppstore
-	}
-	if hex.EncodeToString(hash[:]) != grant.InstallationSHA256 {
-		clear(encoded)
-		store.Close()
-		return 1, errAppstore
-	}
-	master, err := appstoreReadInput("Application-store master secret: ", false)
-	if err != nil {
-		clear(master)
-		clear(encoded)
-		store.Close()
-		return 1, errAppstore
-	}
-	installation, err := appstorecrypto.UnlockInstallation(ctx, encoded, master)
-	clear(master)
-	clear(encoded)
-	if err != nil {
-		store.Close()
-		return 1, errAppstore
-	}
-	dev, ino, err := store.Identity()
-	unchanged := store.VerifyUnchanged(hash)
-	_ = store.Close()
-	if err != nil || unchanged != nil || dev != grant.DirectoryDev || ino != grant.DirectoryIno || !installation.DirectoryMatches(dev, ino) {
-		installation.Close()
-		return 1, errAppstore
+		return 1, err
 	}
 	defer installation.Close()
 	if streaming {

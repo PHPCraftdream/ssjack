@@ -294,12 +294,19 @@ cross-process/selected-value acceptance gate.
 
 ## Protected text-consumer lifetime
 
-For a linked version-2 database, the Linux amd64 text-adapter startup retains its
-single vault unlock, adopts the Manager and starts its authenticated owner service.
-The already captured SSH profile and credential digest remain immutable. The
-installation unlock comes from the authenticated encrypted database link; there is
-no additional installation-secret prompt, implicit relinking or grant renewal.
-Legacy and unlinked text startup retain their existing separate-installation path.
+Every version-2 Linux amd64 text-adapter startup retains its single vault unlock,
+adopts the Manager and starts its authenticated owner service. The already captured
+SSH profile and credential digest remain immutable. Linked startup unlocks the
+installation through the authenticated encrypted database link, without another
+installation-secret prompt, implicit relinking or grant renewal.
+
+Unlinked version-2 startup still requests the separate installation secret through
+the trusted terminal. It does not automatically create a database link or persist
+that installation secret. Its consumer closes before the service and Manager;
+directory edits use the same live coordinator. Explicitly trying to link an already
+leased unlinked installation may refuse before effects rather than adopting the
+consumer's authority implicitly. Version-1 legacy text startup keeps its existing
+separate-installation behavior and does not gain the version-2 owner API.
 
 `ownerresource` owns one entry Store lease, Directory and Installation. Its closed
 text-consumer request accepts only the four existing fixed-grant modes. Up to sixteen

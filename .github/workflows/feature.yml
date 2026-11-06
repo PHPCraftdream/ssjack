@@ -65,6 +65,15 @@ jobs:
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh/legacy-writer-refusal ' "$RUNNER_TEMP/native-owner-cli.log"
+      - name: Text owner startup with production KDF
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultTextOwnerFullProfile$' -count=1 -timeout 180s ./cmd/ssjack | tee "$RUNNER_TEMP/text-owner.log"
+          grep -q '^--- PASS: TestVaultTextOwnerFullProfile ' "$RUNNER_TEMP/text-owner.log"
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash
