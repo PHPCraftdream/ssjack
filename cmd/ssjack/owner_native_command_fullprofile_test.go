@@ -100,7 +100,11 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			if capture.Wait(lifetime, "Vault secret:") != nil {
 				t.Fatal("native owner did not request its single vault unlock")
 			}
-			input := append(append([]byte(nil), password...), '\n')
+			ending := byte('\n')
+			if runtime.GOOS == "windows" {
+				ending = '\r'
+			}
+			input := append(append([]byte(nil), password...), ending)
 			_, err = terminal.Input.Write(input)
 			clear(input)
 			if err != nil || capture.Wait(lifetime, "Credential:") != nil {
