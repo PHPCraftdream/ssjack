@@ -176,6 +176,7 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 			if err != nil {
 				t.Fatal("joined actual keeper shutdown retained the writer role")
 			}
+			nativeServerAddress(t, lifetime, reopened, server, shell.address())
 			if err := reopened.Close(lifetime); err != nil {
 				t.Fatal(err)
 			}
