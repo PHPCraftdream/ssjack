@@ -66,24 +66,34 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 	if err != nil {
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}
-	defer loaded.Close()
+	defer func() {
+		if loaded != nil {
+			loaded.Close()
+		}
+	}()
 	grant, err := loadCLITextGrant(args[1], streaming)
 	if err != nil || (streaming && grant.Mode != "hydrate-stream-v2" && grant.Mode != "reverse-copy-stream-v2") || grant.Profile != profile || grant.CredentialSHA256 != digest {
 		return 1, errors.New("no matching active text-adapter grant")
 	}
 	if loaded.Version == 2 && loaded.OwnerStore != nil {
-		return runOwnedTextAdapter(ctx, vaultPath, loaded, ownerresource.TextRequest{Mode: grant.Mode, GrantID: args[1], Profile: profile, CredentialDigest: digest, Runner: runner}, args[2:])
+		owned := loaded
+		loaded = nil
+		return runOwnedTextAdapter(ctx, vaultPath, owned, ownerresource.TextRequest{Mode: grant.Mode, GrantID: args[1], Profile: profile, CredentialDigest: digest, Runner: runner}, args[2:])
 	}
 	if loaded.Version == 2 {
-		_, credentials, err := startTextOwner(ctx, vaultPath, loaded)
+		owned := loaded
+		loaded = nil
+		_, credentials, err := startTextOwner(ctx, vaultPath, owned)
 		if credentials != nil {
 			defer finishAgentCredentials(credentials, &code, &result)
 		}
 		if err != nil {
 			return 1, err
 		}
+	} else {
+		loaded.Close()
+		loaded = nil
 	}
-	loaded.Close()
 	installation, err := unlockTextInstallation(ctx, grant)
 	if err != nil {
 		return 1, err
