@@ -84,6 +84,7 @@ jobs:
           go test -v -mod=readonly -p 1 -run '^TestVaultOwnerControlFullProfile$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^--- PASS: TestVaultOwnerControlFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/native-command-helper ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process ' "$RUNNER_TEMP/native-owner-cli.log"
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build and install source on Linux or macOS

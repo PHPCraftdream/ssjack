@@ -33,7 +33,7 @@ func TestOwnerNativeCommandChild(t *testing.T) {
 	TestOwnerCommandPTYChild(t)
 }
 
-func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server string, control *ownercontrol.Control) {
+func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, account string, control *ownercontrol.Control) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -80,7 +80,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			}
 			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_CHILD=1", "SSJACK_OWNER_COMMAND_CHILD=1", "SSJACK_OWNER_COMMAND_CANCEL="+cancelled)
 			terminal, err := ownerterminal.Start(lifetime, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment,
-				Args: []string{"-test.run=^TestOwnerNativeCommandChild$", "--", "--vault", path, "owner", "add-account", "--server", name, "--account", "native-added", "--login", "native-user", "--auth", "password", "--usage", "agent"}})
+				Args: []string{"-test.run=^TestOwnerNativeCommandChild$", "--", "--vault", path, "owner", "add-account", "--server", name, "--account", account, "--login", "native-user", "--auth", "password", "--usage", "agent"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,7 +142,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 		t.Fatal(err)
 	}
 	defer loaded.Close()
-	profile, err := loaded.AccountProfile(server, "native-added")
+	profile, err := loaded.AccountProfile(server, account)
 	if err != nil || loaded.Targets[profile].User != "native-user" || !bytes.Equal(loaded.Targets[profile].Password, credential) {
 		t.Fatal("native helper lost its confirmed hidden credential or directory selection")
 	}

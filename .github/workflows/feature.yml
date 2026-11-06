@@ -61,6 +61,7 @@ jobs:
           go test -v -mod=readonly -p 1 -run '^TestVaultOwnerControlFullProfile$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^--- PASS: TestVaultOwnerControlFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/native-command-helper ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process ' "$RUNNER_TEMP/native-owner-cli.log"
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash
