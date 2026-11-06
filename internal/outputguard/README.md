@@ -98,3 +98,15 @@ actual owner-helper credential addition must pick up the new known literal witho
 restarting the keeper. Both edit and restart cycles require explicit PASS receipts
 on Windows/Linux/macOS; the synthetic SSH fixture accepts only its exact finite
 probe command, never a general shell command executor.
+
+`--no-output-filter` is a root startup option for one explicit full-mode `run`.
+It requires input and warning terminals outside existing broker sessions, then
+normal database authorization. A conspicuous fixed warning must be written before
+launch; failure to write it refuses. The choice uses a deliberately validated
+empty snapshot only for this additional literal guard, never as a construction
+failure fallback. It is not persisted, read from environment, forwarded to the
+harness or exposed as a runtime MCP toggle. Cryptography, permissions, grants,
+private delivery, fixed diagnostics and application bootstrap-token masking stay
+enabled. Human streams remain unfiltered regardless of this option. Terminal
+presence is a necessary boundary check, not proof of a distinct human identity;
+the password holder and trusted startup process retain the existing owner trust.

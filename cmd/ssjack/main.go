@@ -80,6 +80,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	registerStartupPassword(ctx, flags)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
+	noOutputFilter := flags.Bool("no-output-filter", false, "Disable only the MCP known-literal output guard for this trusted-terminal full-mode run")
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
 	policyPath := flags.String("policy-snapshot", "", "Absolute path to human-installed deny-only policy snapshot")
 	identityPath := flags.String("enrollment-identity", "", "Absolute path to declarative enrollment identity snapshot")
@@ -122,6 +123,14 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		}
 	})
 	command := flags.Args()
+	if *noOutputFilter {
+		if *modeFlag != string(broker.ModeFull) || len(command) < 2 || command[0] != "run" || *interactive || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "" {
+			return 1, errors.New("--no-output-filter is only available for an explicit full-mode run HARNESS")
+		}
+		if err := requireOutputFilterTerminal(); err != nil {
+			return 1, err
+		}
+	}
 	selector, named, selectionErr := startupSelection(flags, profile, *server, *account)
 	if selectionErr != nil {
 		return 1, selectionErr
@@ -314,6 +323,10 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 			return 1, errors.New("credential session is unavailable")
 		}
 		runner, streamRunner, targets, guard = credentials.runner, credentials.stream, credentials.targets, credentials.guard
+		guard, err = selectOutputGuard(guard, *noOutputFilter, os.Stderr)
+		if err != nil {
+			return 1, err
+		}
 		if named {
 			if err := bindNamedApplication(applicationOptions, targets); err != nil {
 				return 1, err
