@@ -123,6 +123,7 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal("closed standalone control retained the writer role")
 	}
+	nativeServerAddress(t, ctx, reopened, serverID, server.address())
 	if err := reopened.Close(ctx); err != nil {
 		t.Fatal(err)
 	}

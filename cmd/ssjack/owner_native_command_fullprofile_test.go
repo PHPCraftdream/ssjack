@@ -62,6 +62,9 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 	}
 	revision := control.Backend().Status().Database.Revision
 	credential := []byte("synthetic native helper credential")
+	if account == "keeper-added" {
+		credential = []byte(nativeGuardAddedCredential)
+	}
 	defer clear(credential)
 	for _, mode := range []string{"cancel", "apply"} {
 		func() {

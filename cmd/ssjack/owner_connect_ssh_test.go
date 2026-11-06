@@ -181,6 +181,9 @@ func (s *loopbackSSH) session(login string, opened ssh.NewChannel) {
 		defer close(finished)
 		var once sync.Once
 		for request := range requests {
+			if request.Type == "exec" && nativeGuardSSHReply(s, channel, request) {
+				return
+			}
 			ok := request.Type == "pty-req" || request.Type == "shell"
 			if request.Type == "shell" {
 				once.Do(func() { close(shell) })

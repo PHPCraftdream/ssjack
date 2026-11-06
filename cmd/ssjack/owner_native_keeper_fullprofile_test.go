@@ -37,12 +37,29 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
 		t.Skip("owned finite keeper harness only")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	session := nativeGuardHarnessSession(t, ctx)
+	nativeGuardHarnessCheck(t, ctx, session, false)
+	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-READY")
 	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-READY")
-	var command [1]byte
-	if _, err := io.ReadFull(os.Stdin, command[:]); err != nil || command[0] != 'q' {
-		t.Fatal("keeper harness did not receive its graceful exit request")
+	for {
+		var command [1]byte
+		if _, err := io.ReadFull(os.Stdin, command[:]); err != nil {
+			t.Fatal("keeper harness did not receive its graceful exit request")
+		}
+		switch command[0] {
+		case 'q':
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-STOPPED")
+			return
+		case 'g':
+			nativeGuardHarnessCheck(t, ctx, session, true)
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED")
+		case '\r', '\n':
+		default:
+			t.Fatal("keeper harness received an unexpected fixture command")
+		}
 	}
-	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-STOPPED")
 }
 
 func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *loopbackSSH) {
@@ -81,7 +98,7 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 				if capture.Join(cleanup) != nil {
 					t.Error("keeper terminal output did not join")
 				}
-				if capture.Contains(password) || capture.Contains([]byte("synthetic native helper credential")) {
+				if capture.Contains(password) || capture.Contains([]byte("synthetic native helper credential")) || capture.Contains([]byte(nativeGuardAddedCredential)) {
 					t.Error("actual keeper disclosed private input")
 				}
 				capture.Clear()
@@ -136,6 +153,14 @@ func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path strin
 			if err := observer.Close(lifetime); err != nil {
 				t.Fatal(err)
 			}
+			t.Run("native-mcp-guard", func(t *testing.T) {
+				if capture.Wait(lifetime, "ACTUAL-KEEPER-MCP-GUARD-READY") != nil {
+					t.Fatal("actual keeper did not guard its initial MCP job")
+				}
+				if _, err := terminal.Input.Write([]byte{'g', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED") != nil {
+					t.Fatal("actual keeper did not refresh known literals after helper edits")
+				}
+			})
 			probe, err = ownerlocal.Dial(lifetime, path)
 			if err != nil {
 				t.Fatal("helper or observer detach released the actual keeper role")

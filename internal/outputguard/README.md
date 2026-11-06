@@ -90,3 +90,11 @@ for version-2 linked-value admission. Main startup passes the same provider to
 remote and application model-job managers, not to their private StreamRunner or
 application-transport streams. Registered-application bootstrap-token masking
 remains in place inside the known-literal guard.
+
+Native acceptance drives separate actual keeper and harness processes in PTY/ConPTY.
+The harness authenticates to the real broker, calls MCP tools through the SDK and
+checks guarded SSH output in both text and decoded base64. A second job after an
+actual owner-helper credential addition must pick up the new known literal without
+restarting the keeper. Both edit and restart cycles require explicit PASS receipts
+on Windows/Linux/macOS; the synthetic SSH fixture accepts only its exact finite
+probe command, never a general shell command executor.
