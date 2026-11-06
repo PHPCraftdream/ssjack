@@ -39,6 +39,9 @@ func NewGuardedManager(parent context.Context, targets []string, runner Runner, 
 			return exit, outputguard.ErrGuard
 		}
 		if runErr != nil {
+			if err := ctx.Err(); err == context.Canceled || err == context.DeadlineExceeded {
+				return exit, err
+			}
 			return exit, ErrJob
 		}
 		return exit, nil

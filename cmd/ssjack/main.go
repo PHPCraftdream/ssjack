@@ -295,6 +295,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var err error
 	var applicationOptions *application.Options
 	var runner remote.Runner
+	var guard remote.GuardProvider
 	var streamRunner remote.StreamRunner
 	var targets []string
 	if *modeFlag == string(broker.ModeFull) {
@@ -312,7 +313,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		if credentials == nil {
 			return 1, errors.New("credential session is unavailable")
 		}
-		runner, streamRunner, targets = credentials.runner, credentials.stream, credentials.targets
+		runner, streamRunner, targets, guard = credentials.runner, credentials.stream, credentials.targets, credentials.guard
 		if named {
 			if err := bindNamedApplication(applicationOptions, targets); err != nil {
 				return 1, err
@@ -323,10 +324,10 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var manager *remote.Manager
 	var applicationManager *application.Manager
 	if *modeFlag == string(broker.ModeFull) {
-		manager = remote.NewManager(ctx, targets, runner)
+		manager = remote.NewGuardedManager(ctx, targets, runner, guard)
 		defer manager.Close()
 		if applicationOptions != nil {
-			applicationOptions.Runner = streamRunner
+			applicationOptions.Runner, applicationOptions.Guard = streamRunner, guard
 		}
 		applicationManager, err = application.New(ctx, applicationOptions)
 		if err != nil {

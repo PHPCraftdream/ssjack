@@ -88,7 +88,7 @@ func fixtureManager(t *testing.T, ctx context.Context) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := New(ctx, &Options{Directory: t.TempDir(), Command: []string{program, "-test.run=^TestApplicationProcess$", "--"}, Profile: "host.profile", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil }})
+	manager, err := New(ctx, &Options{Guard: applicationFixtureGuard(t), Directory: t.TempDir(), Command: []string{program, "-test.run=^TestApplicationProcess$", "--"}, Profile: "host.profile", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

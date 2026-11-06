@@ -1,9 +1,10 @@
 # Known-literal stream matcher
 
-This package is a foundation for the MCP-only output guard. Keeper snapshots and
-startup providers are implemented, but runtime model-job routing has not switched
-to guarded capture/serialization. This package does not enable filtering by itself. Human SSH/PTY/editor streams and private delivery protocols are outside
-its intended integration surface.
+This package implements the known-literal matcher for the MCP-only output guard.
+Full-mode keeper startup supplies retained private snapshots to guarded remote and
+registered-application job capture before model text/base64 serialization.
+Human SSH/PTY/editor streams and private delivery protocols are outside its
+integration surface.
 
 `New` builds an immutable sparse byte trie with Aho-Corasick failure/output links.
 It retains no caller buffers and offers no pattern or stored-value getter. Empty
@@ -62,8 +63,11 @@ captures only filtered bytes. Read offsets, retained-buffer loss and chunking re
 to that filtered view; rereading at arbitrary offsets cannot recover original
 bytes. Both streams finish before a job becomes done. Provider/guard failures use
 fixed `ErrGuard`; runner failures use fixed `ErrJob`, without formatting private
-errors. The existing unguarded manager and private stream/human paths are unchanged.
-Keeper startup has not yet switched to this constructor.
+errors. Known cancellation/deadline failures retain their fixed context sentinel;
+private error strings are never formatted. Full-mode keeper and registered
+application jobs use this constructor by default. A missing provider refuses jobs.
+The unguarded manager remains a separate primitive; private stream/human paths are
+unchanged and do not obtain this additional output filter.
 
 `ownerdb.Manager.OutputGuard` composes both private snapshots under owner admission,
 checks the exact saved ciphertext before and after construction and retains a bounded
@@ -82,5 +86,7 @@ success must not silently omit credentials already frozen without initial covera
 Legacy version-1 startup instead captures a fixed credential snapshot from an
 unchanged authenticated Vault before closing it. It checks the retained authentication,
 canonical payload and saved ciphertext without repeating KDF, and cannot substitute
-for version-2 linked-value admission. These providers still are not passed to the
-main/application model-job managers; default-on runtime wiring remains unfinished.
+for version-2 linked-value admission. Main startup passes the same provider to
+remote and application model-job managers, not to their private StreamRunner or
+application-transport streams. Registered-application bootstrap-token masking
+remains in place inside the known-literal guard.
