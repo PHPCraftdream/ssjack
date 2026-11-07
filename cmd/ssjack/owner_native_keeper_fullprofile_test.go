@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -194,13 +195,40 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			if capture.Wait(lifetime, "ACTUAL-KEEPER-HARNESS-STOPPED") != nil {
 				t.Fatal("harness shutdown acknowledgement was lost")
 			}
-			reopened, err := ownercontrol.Open(lifetime, path, password)
-			if err != nil {
-				t.Fatal("joined actual keeper shutdown retained the writer role")
+			cancel()
+			reopenCtx, reopenCancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer reopenCancel()
+			probe, err = ownerlocal.Dial(reopenCtx, path)
+			if err == nil {
+				_ = probe.Close()
+				t.Fatal("standalone reopen endpoint was not released")
 			}
-			nativeServerAddress(t, lifetime, reopened, server, shell.address())
-			if err := reopened.Close(lifetime); err != nil {
-				t.Fatal(err)
+			if !errors.Is(err, ownerlocal.ErrAbsent) {
+				if reopenCtx.Err() != nil {
+					t.Fatal("standalone reopen phase budget ended")
+				}
+				t.Fatal("standalone reopen endpoint was not released")
+			}
+			reopened, err := ownercontrol.Open(reopenCtx, path, password)
+			if err != nil {
+				if reopenCtx.Err() != nil {
+					t.Fatal("standalone reopen phase budget ended")
+				}
+				t.Fatal("joined keeper shutdown could not reacquire standalone control")
+			}
+			defer func() {
+				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+				defer stop()
+				if err := reopened.Close(cleanup); err != nil {
+					t.Error("standalone control cleanup failed")
+				}
+			}()
+			nativeServerAddress(t, reopenCtx, reopened, server, shell.address())
+			if err := reopened.Close(reopenCtx); err != nil {
+				if reopenCtx.Err() != nil {
+					t.Fatal("standalone reopen phase budget ended")
+				}
+				t.Fatal("standalone control close failed")
 			}
 		})
 	}
