@@ -1,16 +1,18 @@
 # Fixed remote MCP endpoint policy
 
-This pocket is an unused transport/header-material foundation. No runtime calls it
-yet. Private owned authentication material is implemented, but it does not mint a
-session grant, implement an HTTP exchange, launch a bridge or enable a remote
-connection. Request/response body bounds, grant lifetime and joined I/O shutdown
-remain separate integration work; this is not a usable authenticated MCP client.
+This pocket now constructs a lazy private authenticated HTTP capability through
+`NewUpstream`. It composes fixed endpoint/header policy with `mcpflow` body bounds,
+lease, cancellation and joined shutdown. Construction performs no network request.
+The product startup does not call it yet: selector orchestration, local grants,
+supervised bridges and harness registration remain unfinished. This capability is
+not itself evidence of owner approval or a model-facing credential getter.
 
 The fixed endpoint must be canonical HTTPS without userinfo, query, fragment or
 control bytes. DNS names are ASCII (punycode is accepted), dotted and bounded;
 IP literals must pass the public-address policy. Ports are canonical decimal.
-Requests cannot substitute the URL/path or Host override. The future HTTP client
-must install `rejectRedirect`; it must never follow even same-origin redirects.
+Requests cannot substitute the URL/path or Host override. The issued HTTP client
+installs `rejectRedirect`; exchange also refuses redirect responses before client
+redirect handling. Even same-origin redirects are not followed.
 
 Dial admission checks every answer before any connection, refuses more than 16
 answers without truncation, then dials a resolved literal rather than resolving
@@ -36,8 +38,8 @@ and owns the bytes for the already supported none/Bearer/Basic/custom-header mod
 It prepares only a cloned exact-endpoint request. Case-insensitive caller collisions
 with Authorization, Proxy-Authorization, Cookie or selected credential headers
 refuse; source headers are not modified and material retains no source request or
-caller credential buffers. Go request cloning still shares the body; the future
-exchange layer must independently own and bound request body handling.
+caller credential buffers. Go request cloning shares the body at the header-preparation seam; `mcpflow`
+independently copies, bounds and closes that source before peer effects.
 
 The only returned matching capability contains raw known credentials, actual
 Authorization/header literals and Basic's actual base64 credential component.
@@ -45,15 +47,18 @@ This protects known transmitted forms without claiming generic encoded-value DLP
 There is no public header or value getter. Closing private material clears its
 owned byte buffers and prevents reuse; existing snapshots retain their captured
 protection. Previously prepared Go request strings cannot be reliably erased or
-revoked by clearing those buffers. The future exchange owner must cancel and join
-I/O before closing material. Go erasure remains best effort, not a memory sandbox.
+revoked by clearing those buffers. The exchange owner cancels and joins
+owned I/O before closing material; failed/incomplete close retains it and reports
+failure. Go erasure remains best effort, not a memory sandbox.
 
 ## Pinned SDK findings
 
 The repository pins `github.com/modelcontextprotocol/go-sdk v1.0.0`; no dependency
 or project version was changed. Its `StreamableClientTransport.MaxRetries == 0`
-means five retries, not zero. A future upstream transport must use a negative
-value to disable SDK retries and must never replay an uncertain mutation.
+means five retries, not zero. `Take` issues one lazy transport using `-1`, an
+explicit bounded HTTP client without a cookie jar, and redirect refusal. Reuse
+refuses. Callers must close their SDK session before the upstream owner, must not
+format raw SDK errors into model output, and must never replay an uncertain mutation.
 The pinned SDK supports `2025-06-18`, `2025-03-26` and `2024-11-05`, and rejects
 unsupported initialization versions. This is not a claim of 2026 protocol support.
 The bridge must preserve that explicit compatibility boundary rather than silently
@@ -63,6 +68,10 @@ Sources: [streamable transport](https://github.com/modelcontextprotocol/go-sdk/b
 [protocol constants](https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/mcp/shared.go),
 [client initialization](https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/mcp/client.go).
 
-Tests inject only private lookup/dial functions and use in-memory connections.
-They perform no public DNS lookup or live endpoint request and add no runtime
-configuration, test bypass, credential getter or model-provider call.
+Policy tests inject private lookup/dial functions and use in-memory connections.
+A private loopback TLS fixture separately exercises the real pinned SDK with
+verified test roots and Basic/custom-header authentication. The public constructor
+still refuses that loopback endpoint; there is no public test or insecure mode.
+No test performs public DNS or provider requests, adds a credential getter or calls
+a model. Transport expiry is at most 10 minutes; it does not silently renew. Its
+owner must call Close for joined cleanup even after expiry.

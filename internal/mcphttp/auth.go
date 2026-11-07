@@ -1,14 +1,82 @@
 package mcphttp
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
+	"github.com/PHPCraftdream/ssjack/internal/mcpflow"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 )
+
+// Upstream is a private HTTP capability, not a stored preference or local grant.
+type Upstream struct {
+	mu       sync.Mutex
+	policy   *endpointPolicy
+	material *headerMaterial
+	flow     *mcpflow.Transport
+	taken    bool
+}
+
+func NewUpstream(ctx context.Context, endpoint string, account mcpdirectory.Account) (*Upstream, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, ErrTransport
+	}
+	policy, err := newEndpointPolicy(endpoint)
+	if err != nil {
+		return nil, ErrTransport
+	}
+	return newUpstream(ctx, policy, account, policy.transport())
+}
+
+func newUpstream(ctx context.Context, policy *endpointPolicy, account mcpdirectory.Account, base http.RoundTripper) (*Upstream, error) {
+	if policy == nil || policy.endpoint == "" {
+		return nil, ErrTransport
+	}
+	material, err := newHeaderMaterial(account)
+	if err != nil {
+		return nil, ErrTransport
+	}
+	flow, err := mcpflow.New(ctx, base, func(request *http.Request) (*http.Request, error) { return material.request(policy, request) }, material.close)
+	if err != nil {
+		material.close()
+		return nil, ErrTransport
+	}
+	return &Upstream{policy: policy, material: material, flow: flow}, nil
+}
+
+// Take returns one lazy SDK transport with retries explicitly disabled.
+func (u *Upstream) Take() (*mcp.StreamableClientTransport, error) {
+	if u == nil {
+		return nil, ErrTransport
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.taken || u.flow == nil || !u.flow.Available() {
+		return nil, ErrTransport
+	}
+	u.taken = true
+	return &mcp.StreamableClientTransport{Endpoint: u.policy.endpoint, MaxRetries: -1, HTTPClient: &http.Client{Transport: u.flow, CheckRedirect: rejectRedirect}}, nil
+}
+
+func (u *Upstream) OutputGuard() (*outputguard.Snapshot, error) {
+	if u == nil || u.flow == nil || !u.flow.Available() {
+		return nil, ErrTransport
+	}
+	return u.material.outputGuard()
+}
+
+func (u *Upstream) Close(ctx context.Context) error {
+	if u == nil || u.flow == nil || u.flow.Close(ctx) != nil {
+		return ErrTransport
+	}
+	return nil
+}
 
 type credentialHeader struct {
 	name  string

@@ -87,6 +87,24 @@ Edits use the existing trusted owner session candidate/save path. Account input
 buffers and metadata selections are copied, not retained from callers. Replacement,
 removal, failed candidates and vault close clear owned credential byte buffers.
 
+## Private upstream HTTP capability
+
+`mcphttp.NewUpstream` now builds a lazy private HTTP capability from a fixed public
+HTTPS endpoint and an enabled supported auth record. It does not establish owner
+approval, mint a local session grant or start networking by itself. A one-shot SDK
+transport uses explicit bounded HTTP exchange, no cookie jar, redirect refusal and
+negative `MaxRetries`. The lease is at most 10 minutes without automatic renewal;
+listening-stream resumption refuses rather than silently reconnecting.
+
+Request/response/header/active/message limits and cancel/join ownership live in
+`mcpflow`. Close only clears credential material after owned I/O joins; failed or
+incomplete cleanup reports failure and retains it. Responses cannot expose injected
+headers through `Response.Request`. SDK message bodies/errors remain private input;
+the final bridge must still apply the parsed-result guard and fixed diagnostic
+boundary. Existing stdio startup does not yet use this capability. The selector,
+preference orchestration, fresh grants and harness bridge registration remain
+unfinished, and MCP-specific archive export/import is still pending.
+
 ## Compatibility and acceptance
 
 New readers load old payloads without `remote_mcp` as an absent directory. New

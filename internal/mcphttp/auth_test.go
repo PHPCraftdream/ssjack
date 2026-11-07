@@ -2,10 +2,17 @@ package mcphttp
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
@@ -199,5 +206,73 @@ func TestAuthMaterialReusesRecordValidationBeforeOwningHeaders(t *testing.T) {
 		if material, err := newHeaderMaterial(account); material != nil || err != ErrTransport {
 			t.Fatal("invalid or disabled record created private header material")
 		}
+	}
+}
+
+func TestPrivateUpstreamUsesVerifiedTLSAndOneShotNoRetrySDKTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	account := authAccount(t, "basic", true)
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("owner:synthetic-private-auth"))
+	server := mcp.NewServer(&mcp.Implementation{Name: "bounded-fixture", Version: "dev"}, nil)
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: true})
+	var authenticated atomic.Int32
+	peer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || r.Header.Get("Authorization") != want || r.Header.Get("X-Api-Key") != "synthetic-private-header" {
+			http.Error(w, "refused", http.StatusUnauthorized)
+			return
+		}
+		authenticated.Add(1)
+		handler.ServeHTTP(w, r)
+	}))
+	defer peer.Close()
+	if upstream, err := NewUpstream(ctx, peer.URL, account); upstream != nil || err != ErrTransport {
+		t.Fatal("public constructor admitted loopback")
+	}
+	parsed, err := url.Parse(peer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := peer.Client().Transport.(*http.Transport)
+	if base.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("TLS fixture skipped verification")
+	}
+	// Only this private fixture substitutes a loopback policy and its test roots.
+	policy := &endpointPolicy{endpoint: peer.URL, host: parsed.Hostname(), port: parsed.Port()}
+	upstream, err := newUpstream(ctx, policy, account, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if upstream.Close(cleanup) != nil {
+			t.Error("private upstream failed joined cleanup")
+		}
+	}()
+	transport, err := upstream.Take()
+	if err != nil || transport.MaxRetries >= 0 || transport.HTTPClient == nil || transport.HTTPClient.Jar != nil || transport.HTTPClient.CheckRedirect == nil {
+		t.Fatal("SDK transport lost fixed ownership or no-retry policy")
+	}
+	if again, err := upstream.Take(); again != nil || err != ErrTransport {
+		t.Fatal("upstream transport was issued twice")
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "private-fixture", Version: "dev"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatal("bounded authenticated initialization failed")
+	}
+	defer session.Close()
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 0 || authenticated.Load() < 2 {
+		t.Fatal("authenticated SDK exchange failed")
+	}
+	snapshot, err := upstream.OutputGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAuthMasked(t, snapshot, want)
+	if (&Upstream{}).Close(ctx) != ErrTransport {
+		t.Fatal("zero upstream reported successful cleanup")
 	}
 }
