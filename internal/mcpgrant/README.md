@@ -1,0 +1,47 @@
+# Private captured remote MCP credentials and one-shot launch capabilities
+
+This pocket owns private captured remote-MCP credentials bound to an exact
+saved-state revision plus saved-cipher digest evidence, a finite admission
+lifetime and a construction context, and mints fresh bounded one-shot launch
+capabilities (lazy mcphttp upstreams) only for one explicit confirmed owner
+choice. It is not authorization by itself; there is no RPC or tool
+registration, no model-facing operation and no credential getters.
+
+Admission refusals: stale profile/revision, empty or oversized (more than 16)
+choices, duplicate, unknown or disabled records. Context cancellation and the
+finite lifetime are rechecked at admission, at every record boundary and
+before a launch is returned; the exact deadline instant refuses, and a
+cancelled or expired mint never returns a usable launch. Issued launches carry
+both the capture's construction parent and the caller's issuance context into
+their exchange lifetime. Exactly one successful issuance exists per capture; repeated
+issuance refuses. A failed or cancelled mint attempt also consumes the
+capture, because uncertain effects are never replayed; recapture with fresh
+evidence instead.
+
+Owned credentials are deep-copied bytes independent of caller buffers and of
+Vault adoption or close. A failed construction clears its owned copies, and
+Close clears owned bytes. Go erasure stays best effort; this is not a
+process-memory sandbox.
+
+Launch is lazy: no network occurs before the future bridge Takes and connects.
+Each minted upstream permits exactly one one-shot Take, at most 16 upstreams
+are minted, and each inherits the finite mcpflow lease (at most 10 minutes, no
+renewal). Every upstream carries a union outputguard capability covering all
+transmitted authentication literals, including Basic's encoded component. When
+mint-time cleanup cannot join completely, the retained upstreams stay
+reachable through the capture and its Close retries them instead of claiming
+joined completion; there is no unguarded fallback. Active-I/O cancellation and
+joined shutdown are established by the mcpflow and mcphttp composition tests;
+this pocket adds admission, one-shot, union-guard and retained-cleanup
+ownership above that boundary, releasing the parent-cancellation callback when
+the launch lifecycle action runs.
+
+Reuse performs no second database or install unlock and no per-operation KDF;
+records come from one already-authenticated session state.
+
+Still pending: selector orchestration, preference flush wiring, startup
+capture/issue calls, stdio/harness remote bridge consumption of Take and
+MCP-specific archive export/import. Model-facing credential getters and
+grant-issuance operations are permanently prohibited, not pending work. This
+pocket alone does not enable remote MCP startup and does not complete task
+#317.

@@ -22,4 +22,8 @@ Later input cannot change it, and caller mutations cannot change the model's
 captured metadata. The caller must still revalidate the exact SSH context and
 bindings against confirmed owner state before saving preferences or minting any
 fresh bounded capability. A stale choice must not silently adopt newer endpoints,
-credentials or policy. This package itself never performs network requests.
+credentials or policy. This package itself never performs network requests. That
+revalidation path now exists as the pre-adoption `vault.Vault.RemoteMCPCapture`
+production entry, the post-adoption `vault.Session.RemoteMCPCaptureAt` seam
+and `mcpgrant` issuance from an explicitly confirmed choice; startup wiring
+remains pending.
