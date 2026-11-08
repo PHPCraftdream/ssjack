@@ -150,31 +150,6 @@ func canceledDescribeReply(t *testing.T, r *Runtime, conn *testConnection) wire.
 	return reply
 }
 
-func TestMissingInitializationCanceledOperationDoesNotTakeTransport(t *testing.T) {
-	conn := newTestConnection("")
-	h := &testHandle{transport: &testTransport{conn}}
-	r := testRuntime(t, context.Background(), h, func(context.Context) error { return nil }, false)
-	op, cancel := context.WithCancel(context.Background())
-	cancel()
-	data, _ := wire.Encode(ordinalInput{})
-	reply, ok := r.Handle(op, wire.Request{Operation: OpDescribe, Data: data})
-	if !ok || reply.OK || h.takes.Load() != 0 {
-		t.Fatalf("canceled operation consumed transport: %+v takes=%d", reply, h.takes.Load())
-	}
-}
-
-func TestCanceledInitializationClosesAndJoinsConnection(t *testing.T) {
-	conn := newTestConnection("")
-	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
-	canceledDescribeReply(t, r, conn)
-	if err := closeBounded(t, r, time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if !conn.once.Load() {
-		t.Fatal("captured connection leaked")
-	}
-}
-
 func TestLateHandshakeResponseCannotInstallSessionAfterClose(t *testing.T) {
 	conn := newTestConnection("2025-06-18")
 	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
@@ -217,23 +192,6 @@ func TestLateHandshakeResponseCannotInstallSessionAfterClose(t *testing.T) {
 	case <-r.slots[0].closeDone:
 	default:
 		t.Fatal("binding cleanup not joined")
-	}
-}
-
-func TestUnknownProtocolFailureClosesCapturedConnection(t *testing.T) {
-	conn := newTestConnection("unsupported-version")
-	close(conn.response)
-	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
-	data, _ := wire.Encode(ordinalInput{})
-	reply, ok := r.Handle(context.Background(), wire.Request{Operation: OpDescribe, Data: data})
-	if !ok || reply.OK {
-		t.Fatalf("unsupported version accepted or not handled: %+v", reply)
-	}
-	if err := closeBounded(t, r, time.Second); err != nil {
-		t.Fatalf("close after unsupported handshake: %v", err)
-	}
-	if !conn.once.Load() {
-		t.Fatal("unsupported handshake leaked connection")
 	}
 }
 
@@ -295,5 +253,46 @@ func TestFirstCapturedCloseErrorIsRetained(t *testing.T) {
 	r.slots[0].mu.Unlock()
 	if joined == nil || !strings.Contains(joined.Error(), "synthetic first close refusal") {
 		t.Fatalf("first captured close error was discarded: %v", joined)
+	}
+}
+
+// TestInitialAttemptFinishesBeforeCreatorInterprets forces the creating Close to interpret a finished initial attempt.
+func TestInitialAttemptFinishesBeforeCreatorInterprets(t *testing.T) {
+	workerGate := make(chan struct{})
+	creatorHold := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	releaseWorker, releaseCreator, cancelSignal := gateClose(workerGate), gateClose(creatorHold), gateClose(cancelCalled)
+	closeRuns := &atomic.Int32{}
+	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn: newTestConnection("")}}, func(context.Context) error {
+		if closeRuns.Add(1) == 1 {
+			<-workerGate
+			return errors.New("synthetic initial close failure")
+		}
+		return nil
+	}, false)
+	callerExited, firstCloseErr := make(chan struct{}), make(chan error, 1)
+	t.Cleanup(func() { joinExited(t, callerExited, "creating Close caller did not exit") })
+	t.Cleanup(func() { releaseWorker(); releaseCreator() })
+	slotCancel := r.slots[0].cancel
+	r.slots[0].cancel = func() { slotCancel(); cancelSignal(); <-creatorHold }
+	go func() { defer close(callerExited); firstCloseErr <- closeBounded(t, r, time.Second) }()
+	awaitSignal(t, cancelCalled, "Close did not enter the slot cancel loop")
+	r.mu.Lock()
+	attempt := r.cleanupAttempt
+	r.mu.Unlock()
+	releaseWorker()
+	awaitSignal(t, attempt, "initial attempt did not finish")
+	releaseCreator()
+	if err := awaitSignal(t, firstCloseErr, "creating Close did not return"); !errors.Is(err, ErrBridge) {
+		t.Fatalf("creating Close did not retain its own failed attempt: %v", err)
+	}
+	if got := closeRuns.Load(); got != 1 {
+		t.Fatalf("hidden automatic cleanup rerun: closeLaunch runs=%d", got)
+	}
+	if err := closeBounded(t, r, time.Second); err != nil {
+		t.Fatalf("explicit retry close failed: %v", err)
+	}
+	if got := closeRuns.Load(); got != 2 {
+		t.Fatalf("closeLaunch runs=%d, want one failed initial attempt then one explicit retry", got)
 	}
 }

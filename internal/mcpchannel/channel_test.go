@@ -3,6 +3,7 @@ package mcpchannel
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,12 +202,40 @@ func TestInventoryAndEncodedFrameBudgets(t *testing.T) {
 	if reply.Data != string(inventory) {
 		t.Fatal("maximal raw inventory reply was truncated or altered")
 	}
-	// Ktav emits string values verbatim: this reply encodes to exactly raw+16,
-	// so 192 KiB raw can never cross wire.MaxFrame here. The encoded backstop
-	// stays defense in depth; its enforcing boundary is wire.Write itself.
+	// The pinned canonical envelope is not derivable arithmetic: assert the
+	// actual wire bytes instead of an assumed overhead constant.
 	encoded, err := wire.Encode(reply)
-	if err != nil || len(encoded) != MaxInventoryBytes+16 || len(encoded) > wire.MaxFrame {
-		t.Fatal("maximal raw inventory encoded past the wire frame maximum")
+	if err != nil {
+		t.Fatalf("maximal raw inventory reply failed to encode: %v", err)
+	}
+	if len(encoded) > wire.MaxFrame {
+		t.Fatalf("maximal raw inventory encoded past the wire frame maximum: encoded=%d maximum=%d", len(encoded), wire.MaxFrame)
+	}
+	var framed bytes.Buffer
+	if err := wire.Write(&framed, reply); err != nil {
+		t.Fatalf("maximal raw inventory reply refused by wire framing: %v", err)
+	}
+	frame := append([]byte(nil), framed.Bytes()...)
+	if header := binary.BigEndian.Uint32(frame[:4]); header != uint32(len(encoded)) {
+		t.Fatalf("framed length header did not match the encoded reply: header=%d encoded=%d", header, len(encoded))
+	}
+	if !bytes.Equal(frame[4:], []byte(encoded)) {
+		t.Fatalf("framed payload did not match the encoded reply: payload=%d encoded=%d", len(frame)-4, len(encoded))
+	}
+	var roundTrip wire.Reply
+	if err := wire.Read(&framed, &roundTrip); err != nil || roundTrip.OK != reply.OK || roundTrip.Error != reply.Error || roundTrip.Data != reply.Data {
+		t.Fatalf("maximal inventory frame did not round trip exactly: err=%v dataBytes=%d", err, len(roundTrip.Data))
+	}
+	if framed.Len() != 0 {
+		t.Fatalf("frame read left trailing bytes: trailing=%d", framed.Len())
+	}
+	binary.BigEndian.PutUint32(frame[:4], 0)
+	if err := wire.Read(bytes.NewReader(frame), new(wire.Reply)); err == nil {
+		t.Fatal("empty declared framing accepted the maximal inventory reply")
+	}
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(frame)-3))
+	if err := wire.Read(bytes.NewReader(frame), new(wire.Reply)); err == nil {
+		t.Fatal("truncated declared framing accepted the maximal inventory reply")
 	}
 	oversized := []byte(`{"text":"` + strings.Repeat("a", MaxInventoryBytes-10) + `"}`)
 	h.describe = func(context.Context) ([]byte, error) { return oversized, nil }

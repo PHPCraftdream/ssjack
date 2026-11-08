@@ -73,3 +73,25 @@ func TestWriteRefusesOversizedObjectFrame(t *testing.T) {
 		t.Fatalf("oversized frame emitted %d bytes before rejection", sink.Len())
 	}
 }
+
+func TestReadRejectsFrameSizeBeforeReadingBody(t *testing.T) {
+	big := Auth{Version: 2, Session: strings.Repeat("x", MaxFrame), Token: "a"}
+	encoded, err := Encode(big)
+	if err != nil {
+		t.Fatalf("valid oversized object failed to encode: %v", err)
+	}
+	if len(encoded) <= MaxFrame {
+		t.Fatal("fixture did not cross the wire frame maximum")
+	}
+	var frame bytes.Buffer
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(encoded)))
+	frame.Write(header[:])
+	frame.WriteString(encoded)
+	if err := Read(&frame, new(Auth)); err == nil {
+		t.Fatal("frame beyond the wire maximum was not refused although its valid body was fully present")
+	}
+	if frame.Len() != len(encoded) {
+		t.Fatal("size refusal did not happen before the body was read")
+	}
+}

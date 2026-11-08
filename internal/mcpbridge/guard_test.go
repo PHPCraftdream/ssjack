@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -287,4 +288,10 @@ func launchGatedClose(t *testing.T, r *Runtime, startClose <-chan struct{}, clos
 		<-startClose
 		closed <- closeBounded(t, r, time.Second)
 	}()
+}
+
+// gateClose returns a cleanup-safe func that closes one test gate exactly once.
+func gateClose(ch chan struct{}) func() {
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
 }

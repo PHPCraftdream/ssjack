@@ -79,7 +79,7 @@ func Open(parent context.Context, handles []UpstreamHandle, guard *outputguard.S
 		slotCtx, slotCancel := context.WithCancel(rctx)
 		r.slots = append(r.slots, &slot{binding: b, handle: handle, ctx: slotCtx, cancel: slotCancel, ioGate: make(chan struct{}, 1), initDone: make(chan struct{}), closeDone: make(chan struct{}), closeStarted: make(chan struct{})})
 	}
-	context.AfterFunc(rctx, r.startShutdown)
+	context.AfterFunc(rctx, func() { r.startShutdown() })
 	return r, nil
 }
 
@@ -184,7 +184,7 @@ func (r *Runtime) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 // remain operation-scoped and never shut down the runtime.
 func (r *Runtime) BindLifetime(ctx context.Context) {
 	if ctx != nil {
-		context.AfterFunc(ctx, r.startShutdown)
+		context.AfterFunc(ctx, func() { r.startShutdown() })
 	}
 }
 

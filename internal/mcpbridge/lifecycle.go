@@ -176,7 +176,9 @@ func (r *Runtime) failBinding(s *slot) {
 	}
 }
 
-func (r *Runtime) startShutdown() {
+// startShutdown reports the initial cleanup attempt it creates so its creator
+// waits on that exact attempt; a later Close retries one failed attempt.
+func (r *Runtime) startShutdown() (attempt chan struct{}, fresh bool) {
 	r.mu.Lock()
 	if !r.closing {
 		r.closing = true
@@ -185,13 +187,16 @@ func (r *Runtime) startShutdown() {
 	slots := append([]*slot(nil), r.slots...)
 	if !r.cleanupStarted {
 		r.cleanupStarted = true
-		r.cleanupAttempt = make(chan struct{})
+		attempt = make(chan struct{})
+		r.cleanupAttempt = attempt
+		fresh = true
 		go r.cleanupWorker()
 	}
 	r.mu.Unlock()
 	for _, s := range slots {
 		s.cancel()
 	}
+	return attempt, fresh
 }
 
 func (r *Runtime) cleanupWorker() {
@@ -266,20 +271,22 @@ func (r *Runtime) Close(ctx context.Context) error {
 	if ctx == nil {
 		return ErrBridge
 	}
-	r.startShutdown()
-	r.mu.Lock()
-	attempt := r.cleanupAttempt
-	if r.cleanupFinished && !r.cleanupTerminal {
-		attempt = make(chan struct{})
-		r.cleanupAttempt, r.cleanupFinished = attempt, false
-		r.mu.Unlock()
-		select {
-		case r.retryCleanup <- attempt:
-		case <-ctx.Done():
-			return ErrBridge
+	attempt, fresh := r.startShutdown()
+	if !fresh {
+		r.mu.Lock()
+		attempt = r.cleanupAttempt
+		if r.cleanupFinished && !r.cleanupTerminal {
+			attempt = make(chan struct{})
+			r.cleanupAttempt, r.cleanupFinished = attempt, false
+			r.mu.Unlock()
+			select {
+			case r.retryCleanup <- attempt:
+			case <-ctx.Done():
+				return ErrBridge
+			}
+		} else {
+			r.mu.Unlock()
 		}
-	} else {
-		r.mu.Unlock()
 	}
 	select {
 	case <-attempt:
