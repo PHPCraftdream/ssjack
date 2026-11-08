@@ -209,7 +209,6 @@ func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, f
 		if _, err := terminal.Input.Write([]byte(" ")); err != nil {
 			t.Fatal(err)
 		}
-		wait("[ ]")
 		_, _ = terminal.Input.Write([]byte("\t\r"))
 	case "no-record":
 		_, _ = terminal.Input.Write([]byte("\r"))
