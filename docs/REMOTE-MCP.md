@@ -1,11 +1,15 @@
 # Remote MCP directory — implementation in progress
 
-Encrypted records and shared owner CLI/TUI management are implemented. Remote MCP
-connections and launch selection are not wired yet; those layers require separate
-integration and native acceptance. The existing `ssjack mcp` command continues to
-serve its current session protocol. MCP-specific owner archive export/import is
-also pending; existing ZIP exports/imports cover SSH credentials and application
-values, not the remote MCP directory.
+Encrypted records and shared owner CLI/TUI management are implemented. Full-mode
+startup presents an explicit metadata selector after stable SSH profile selection.
+After an explicit non-empty choice and receipt-checked preference persistence, it
+prepares authenticated bounded capabilities. Empty choices persist without a
+launch. No remote bridge consumes a prepared launch; no remote MCP tool or
+connection is exposed. The Linux/amd64 startup-selector PTY test is authored, but
+is not Windows/macOS acceptance and has not been run here. Task #357 is the
+supervised bridge/harness; #318 is native bridge acceptance; #358 covers
+MCP-specific archives; #359 is the final gate. #317 remains incomplete. The
+existing `ssjack mcp` command retains its current session protocol.
 
 ## Encrypted records
 
@@ -73,21 +77,29 @@ the selection. A fresh session still requires explicit owner confirmation.
   explicit Continue, including singleton and empty choices. Cancel returns no
   choice and does not persist. It captures the SSH profile, displayed database
   revision and exact bindings as owned metadata, never as a grant.
-- The checkbox model is not wired into startup yet. Private Session/Manager
-  `RememberRemoteMCPAt` admission checks the displayed revision, saved ciphertext
-  digest, existing stable SSH profile and exact enabled bindings before queuing
+- The checkbox model is wired into full-mode startup after stable SSH profile
+  selection. It requires explicit Continue even for empty or singleton choices;
+  remembered exact bindings are suggestions only. Selector cancellation and
+  capture-refusal stop before persistence, launch issuance and child launch.
+  After receipt-checked persistence, a refused launch preparation leaves the
+  saved preference and receipt in place with no launch, child or network
+  effect; uncertain outcomes are never automatically replayed. After
+  confirmation, startup captures authenticated
+  credentials before adoption and persists/flushes the preference against the
+  original saved revision/ciphertext. A non-empty choice then issues a fresh
+  bounded launch and installs its authentication-literal guard; an empty choice
+  does not capture or issue a launch. The prepared launch is not consumed by a
+  remote bridge, so no connection or tool is exposed. `WithMCPLaunch` is a
+  sequential one-shot access path; it does not promise concurrent-call safety.
+- Model-facing credential, owner-store master, header, and grant getters, and
+  model-facing grant issuance, are permanently prohibited, not pending work.
+  Internal startup issuance of a private bounded launch does not expose a
+  model-facing grant API.
+- `RememberRemoteMCPAt` admission still checks the displayed revision, saved
+  ciphertext digest, stable SSH profile and exact enabled bindings before queuing
   encrypted preference persistence. Busy/import/pending/recovery state and changed
-  ciphertext refuse. Callers must separately flush and inspect the save receipt;
-  an uncertain outcome is never automatically replayed.
-- The private admission entries do not mint grants by themselves and expose no
-  RPC. Model-facing credential getters and grant-issuance operations are
-  permanently prohibited, not pending work. Implemented private foundations:
-  the pre-adoption `Vault.RemoteMCPCapture` authenticated entry, the
-  post-adoption `Session.RemoteMCPCaptureAt` revalidation seam and `mcpgrant`
-  issuance from an explicit confirmed choice. Pending owner startup
-  integration: selector orchestration, preference flush wiring and remote
-  bridges; later layers must reject stale choices rather than adopt
-  credentials.
+  ciphertext refuse. Startup flushes and inspects the save receipt before issuing;
+  uncertain outcomes are never automatically replayed.
 
 Edits use the existing trusted owner session candidate/save path. Account input
 buffers and metadata selections are copied, not retained from callers. Replacement,
@@ -106,11 +118,13 @@ Request/response/header/active/message limits and cancel/join ownership live in
 `mcpflow`. Close only clears credential material after owned I/O joins; failed or
 incomplete cleanup reports failure and retains it. Responses cannot expose injected
 headers through `Response.Request`. SDK message bodies/errors remain private input;
-the final bridge must still apply the parsed-result guard and fixed diagnostic
-boundary. Existing stdio startup does not yet use this capability. The selector,
-preference orchestration, harness bridge registration and startup wiring for
-the private grants below remain unfinished, and MCP-specific archive
-export/import is still pending.
+any future bridge must apply the parsed-result guard and fixed diagnostic boundary.
+The startup known-literal output guard is not a parsed-result or diagnostic
+boundary: `--no-output-filter` explicitly disables only that guard for a trusted
+terminal, and human SSH sessions remain unfiltered. The prepared guard and launch
+are not consumed by a bridge. Task #357 is supervised bridge/harness integration;
+#318 native bridge acceptance is pending. MCP archive export/import is task #358;
+#359 is the final gate, and #317 is incomplete.
 
 ## Private captured credentials and fresh launch capabilities
 
@@ -144,16 +158,20 @@ unknown and repeated issuance refuse. A failed or cancelled mint consumes the
 capture because uncertain partial effects are never replayed; cleanup that
 cannot join completely keeps the retained upstreams reachable through the
 capture, whose close retries them instead of claiming joined completion, and a
-failed construction clears its owned copies. Active-I/O cancellation and
-joined shutdown are established by the mcpflow and mcphttp composition tests;
-this layer adds admission, one-shot, union-guard and retained-cleanup
-ownership above that boundary.
+failed construction clears its owned copies. Test source covers active-I/O cancellation and joined shutdown in the mcpflow
+and mcphttp composition layers; this layer adds admission, one-shot, union-guard
+and retained-cleanup ownership above that boundary.
 
-Pending owner startup integration: selector orchestration, preference flush
-wiring, bridge consumption of the issued transports and MCP-specific archive
-export/import. Permanently prohibited rather than pending: model-facing
-credential getters and grant-issuance operations. This capability path alone
-does not wire remote MCP startup and does not complete task #317.
+The private capture, admission, one-shot, union-guard and retained-cleanup
+ownership is covered by authored unit/composition test source; those tests were
+not run here, and no CI result is claimed.
+
+Runtime acceptance is pending. Task #357 is supervised bridge/harness integration;
+#318 is native bridge acceptance. The current acceptance-test source includes a
+Linux/amd64 selector/startup PTY test only: it does not exercise a consuming bridge,
+and it is not Windows/macOS acceptance. It has not been run here. Task #358 covers
+MCP-specific archive export/import, and #359 is the final gate. Task #317 remains
+incomplete.
 
 ## Compatibility and acceptance
 
@@ -163,13 +181,14 @@ dangling SSH selection contexts refuse; there is no lossy decode-and-save path.
 Older strict readers reject the additional root field rather than removing it.
 No external container/profile/project version is changed by this addition.
 
-Unit tests cover canonical round trips, unknown fields, URL/header restrictions,
+Test source covers canonical round trips, unknown fields, URL/header restrictions,
 credential ownership and cleanup, metadata isolation, per-account selections,
-rename stability and stale/disabled/deleted choices. Vault tests cover owned
-metadata and atomic size refusal. The mandatory production directory test also
-checks encrypted MCP persistence and real-profile reload, and the mandatory
-production capture test drives the authenticated real-ciphertext origin path. These are not substitutes
-for cross-process runtime and native bridge acceptance. The owner parity suite
+rename stability and stale/disabled/deleted choices. Vault test source covers owned
+metadata and atomic size refusal. The mandatory production directory test source
+also checks encrypted MCP persistence and real-profile reload, and the mandatory
+production capture test source drives the authenticated real-ciphertext origin
+path. These tests are not substitutes for cross-process runtime and native bridge
+acceptance, and no CI acceptance result is asserted here. The owner parity suite
 includes all MCP management pages and compares private MCP effects as well as the
 existing SSH effects. Additional owner tests exercise cancel, rejected secret or
 confirmation prefills, stale displayed revisions and wrong removal confirmations.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
@@ -25,6 +26,18 @@ type agentCredentials struct {
 	targets []string
 	owner   ownerSession
 	service ownerService
+	capture *mcpgrant.Capture
+	// mcpLaunch remains owned here for cleanup; launch access is one-shot.
+	mcpLaunch     *mcpgrant.Launch
+	mcpLaunchUsed bool
+}
+
+func (credentials *agentCredentials) WithMCPLaunch(use func(*mcpgrant.Launch) error) error {
+	if credentials == nil || use == nil || credentials.mcpLaunch == nil || credentials.mcpLaunchUsed {
+		return errors.New("remote MCP launch is unavailable")
+	}
+	credentials.mcpLaunchUsed = true
+	return use(credentials.mcpLaunch)
 }
 
 func fixedOutputGuard(snapshot *outputguard.Snapshot) remote.GuardProvider {
@@ -45,8 +58,22 @@ func finishAgentCredentials(credentials *agentCredentials, code *int, result *er
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	failed := false
+	if credentials.mcpLaunch != nil {
+		if credentials.mcpLaunch.Close(ctx) != nil {
+			*code, *result = 1, errOwnerShutdown
+			return
+		}
+		credentials.mcpLaunch = nil
+	}
+	if credentials.capture != nil {
+		if credentials.capture.Close(ctx) != nil {
+			*code, *result = 1, errOwnerShutdown
+			return
+		}
+		credentials.capture = nil
+	}
 	if credentials.service != nil {
-		failed = credentials.service.Close(ctx) != nil
+		failed = credentials.service.Close(ctx) != nil || failed
 		select {
 		case <-credentials.service.Done():
 		default:

@@ -1,9 +1,9 @@
 # Explicit remote MCP checkbox model
 
-This is a metadata-only Bubble Tea model, not startup integration, persistence,
-authentication, a session grant or a remote bridge. No credential values enter
-its input or result. The caller supplies the selected stable SSH profile, exact
-displayed database revision and an authenticated metadata snapshot.
+This package is a metadata-only Bubble Tea model, not itself startup integration,
+persistence, authentication, a session grant or a remote bridge. No credential
+values enter its input or result. The caller supplies the selected stable SSH
+profile, exact displayed database revision and an authenticated metadata snapshot.
 
 First use starts unchecked, including a singleton. Remembered checks survive only
 when the current enabled server/account IDs and both revisions exactly match the
@@ -22,8 +22,14 @@ Later input cannot change it, and caller mutations cannot change the model's
 captured metadata. The caller must still revalidate the exact SSH context and
 bindings against confirmed owner state before saving preferences or minting any
 fresh bounded capability. A stale choice must not silently adopt newer endpoints,
-credentials or policy. This package itself never performs network requests. That
-revalidation path now exists as the pre-adoption `vault.Vault.RemoteMCPCapture`
-production entry, the post-adoption `vault.Session.RemoteMCPCaptureAt` seam
-and `mcpgrant` issuance from an explicitly confirmed choice; startup wiring
-remains pending.
+credentials or policy. This package itself never performs network requests.
+The selector is wired into full-mode startup after stable SSH profile selection.
+Remembered exact bindings are suggestions only; explicit Continue is required for
+empty and singleton choices. Cancellation/refusal stops before persistence,
+capture, private launch issuance, and child launch. Following confirmation, startup
+saves and verifies the preference receipt; only a non-empty choice prepares a
+bounded launch and guard. No remote bridge consumes that launch. The Linux/amd64
+selector/startup PTY acceptance source is authored but has not been run and is not
+Windows/macOS acceptance. Task #357 is supervised bridge/harness integration;
+#318 native bridge acceptance remains pending, #358 covers MCP archive
+export/import, and #359 is the final gate. Task #317 remains incomplete.

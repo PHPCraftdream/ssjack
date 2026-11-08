@@ -30,18 +30,22 @@ renewal). Every upstream carries a union outputguard capability covering all
 transmitted authentication literals, including Basic's encoded component. When
 mint-time cleanup cannot join completely, the retained upstreams stay
 reachable through the capture and its Close retries them instead of claiming
-joined completion; there is no unguarded fallback. Active-I/O cancellation and
-joined shutdown are established by the mcpflow and mcphttp composition tests;
-this pocket adds admission, one-shot, union-guard and retained-cleanup
-ownership above that boundary, releasing the parent-cancellation callback when
-the launch lifecycle action runs.
+joined completion; there is no unguarded fallback. Test source covers active-I/O
+cancellation and joined shutdown in the mcpflow and mcphttp composition layers;
+this pocket adds admission, one-shot, union-guard and retained-cleanup ownership
+above that boundary, releasing the parent-cancellation callback when the launch
+lifecycle action runs.
 
 Reuse performs no second database or install unlock and no per-operation KDF;
 records come from one already-authenticated session state.
 
-Still pending: selector orchestration, preference flush wiring, startup
-capture/issue calls, stdio/harness remote bridge consumption of Take and
-MCP-specific archive export/import. Model-facing credential getters and
-grant-issuance operations are permanently prohibited, not pending work. This
-pocket alone does not enable remote MCP startup and does not complete task
-#317.
+Startup prepares this bounded launch only after the actual terminal selector
+confirms a non-empty choice and encrypted preference persistence is flushed and
+receipted. The launch and its authentication-literal guard remain owned by the
+startup credentials through shutdown. Empty confirmed choices persist without a
+launch. No remote bridge consumes `Take` yet; task #357 is supervised
+bridge/harness integration, so no remote connection or tool is exposed. The
+Linux/amd64 selector/startup PTY acceptance source is authored but has not been
+run and is not Windows/macOS acceptance; native bridge acceptance remains task
+#318. Task #358 covers MCP archive export/import; #359 is the final gate. Task
+#317 remains incomplete.

@@ -267,8 +267,11 @@ jobs:
           set -o pipefail
           tmux -V
           go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -count=1 -timeout 1200s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
-          for name in TestVaultOutputFilterFullProfile TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
+          for name in TestVaultOutputFilterFullProfile TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestVaultRemoteMCPStartupFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
+          done
+          for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory remote MCP startup full-profile acceptance did not report PASS: $name"; exit 1; }
           done
 
   text-pair:

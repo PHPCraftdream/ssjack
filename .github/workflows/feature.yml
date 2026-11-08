@@ -99,6 +99,18 @@ jobs:
           set -o pipefail
           go test -v -mod=readonly -p 1 -run '^TestVaultTextOwnerFullProfile$' -count=1 -timeout 180s ./cmd/ssjack | tee "$RUNNER_TEMP/text-owner.log"
           grep -q '^--- PASS: TestVaultTextOwnerFullProfile ' "$RUNNER_TEMP/text-owner.log"
+      - name: Remote MCP startup with production KDF
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultRemoteMCPStartupFullProfile$' -count=1 -timeout 900s ./cmd/ssjack | tee "$RUNNER_TEMP/remote-mcp-startup.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-startup.log"
+          for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report PASS: $name"; exit 1; }
+          done
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash
