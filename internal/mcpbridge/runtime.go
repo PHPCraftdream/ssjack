@@ -77,7 +77,7 @@ func Open(parent context.Context, handles []UpstreamHandle, guard *outputguard.S
 		namespaces[bindingNamespace(b)] = struct{}{}
 		accounts[b.AccountID] = struct{}{}
 		slotCtx, slotCancel := context.WithCancel(rctx)
-		r.slots = append(r.slots, &slot{binding: b, handle: handle, ctx: slotCtx, cancel: slotCancel, ioGate: make(chan struct{}, 1), initDone: make(chan struct{}), closeDone: make(chan struct{})})
+		r.slots = append(r.slots, &slot{binding: b, handle: handle, ctx: slotCtx, cancel: slotCancel, ioGate: make(chan struct{}, 1), initDone: make(chan struct{}), closeDone: make(chan struct{}), closeStarted: make(chan struct{})})
 	}
 	context.AfterFunc(rctx, r.startShutdown)
 	return r, nil

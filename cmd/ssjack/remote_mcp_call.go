@@ -5,9 +5,8 @@ import (
 	"context"
 	"encoding/json"
 
-	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func remoteMCPTool(registration *remoteMCPRegistration, client *mcpchannel.Client, name string) mcp.ToolHandler {

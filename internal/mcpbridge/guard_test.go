@@ -6,11 +6,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
+	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 func maskGuard(t *testing.T) *outputguard.Snapshot {
@@ -234,4 +236,55 @@ func TestMaskResultBoundsEscapedOutput(t *testing.T) {
 	if _, err := maskResult(guard, &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: control}}}); !errors.Is(err, errResultSize) {
 		t.Fatalf("escape-expanded output exceeded its bound without refusal: %v", err)
 	}
+}
+
+// awaitSignal joins one owned worker or gate with the shared one-second budget.
+func awaitSignal[T any](t *testing.T, signal <-chan T, message string) T {
+	t.Helper()
+	select {
+	case value := <-signal:
+		return value
+	case <-time.After(time.Second):
+		t.Fatal(message)
+	}
+	var zero T
+	return zero
+}
+
+// describeAsync launches one describe operation worker that closes exited on
+// return, used by runtime lifecycle tests.
+func describeAsync(t *testing.T, r *Runtime, op context.Context, exited chan struct{}, result chan wire.Reply) {
+	t.Helper()
+	data, err := wire.Encode(ordinalInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		defer close(exited)
+		reply, _ := r.Handle(op, wire.Request{Operation: OpDescribe, Data: data})
+		result <- reply
+	}()
+}
+
+// joinExited bounded-asserts one worker exit; cleanup-safe because it uses
+// t.Error instead of t.Fatal, so every joined worker is reported.
+func joinExited(t *testing.T, exited <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Error(message)
+	}
+}
+
+// launchGatedClose runs the single owned shutdown worker: it waits for the
+// startClose gate, closes the runtime bounded, reports the result, and only
+// then releases its exit signal.
+func launchGatedClose(t *testing.T, r *Runtime, startClose <-chan struct{}, closed chan<- error, closeExited chan<- struct{}) {
+	t.Helper()
+	go func() {
+		defer close(closeExited)
+		<-startClose
+		closed <- closeBounded(t, r, time.Second)
+	}()
 }

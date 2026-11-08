@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
 type fragmentedMCPInput struct {
@@ -24,6 +27,10 @@ func (r *fragmentedMCPInput) Read(p []byte) (int, error) {
 	return n, nil
 }
 func (*fragmentedMCPInput) Close() error { return nil }
+
+type nopWriteCloser struct{ *bytes.Buffer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 func readBoundedMCP(t *testing.T, input io.ReadCloser) ([]byte, error) {
 	t.Helper()
@@ -219,5 +226,37 @@ func TestBoundedMCPStdioCloseUnblocksAndJoinsRead(t *testing.T) {
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatal("repeated reader close returned an unexpected error")
+	}
+}
+
+func TestMCPStdioConnectionDecodesFramesAndBatches(t *testing.T) {
+	frame := []byte(`{"jsonrpc":"2.0","id":"known-literal","method":"ping"}` + "\n")
+	batch := []byte(`[{"jsonrpc":"2.0","method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping"}]` + "\n")
+	stream := append(append([]byte(nil), frame...), batch...)
+	connection := newMCPStdioTransport(io.NopCloser(bytes.NewReader(stream)), nopWriteCloser{bytes.NewBuffer(nil)})
+	first, err := connection.Read(context.Background())
+	if err != nil {
+		t.Fatal("single bounded frame did not decode")
+	}
+	request, ok := first.(*jsonrpc.Request)
+	if !ok || request.Method != "ping" || request.ID.Raw() != "known-literal" {
+		t.Fatal("single frame did not decode as the original request")
+	}
+	second, err := connection.Read(context.Background())
+	if err != nil {
+		t.Fatal("batch head did not decode")
+	}
+	if notification, ok := second.(*jsonrpc.Request); !ok || notification.ID.IsValid() {
+		t.Fatal("batch head lost its notification shape")
+	}
+	third, err := connection.Read(context.Background())
+	if err != nil {
+		t.Fatal("queued batch message did not decode")
+	}
+	if call, ok := third.(*jsonrpc.Request); !ok || call.ID.Raw() != int64(2) {
+		t.Fatal("queued batch message lost its id")
+	}
+	if _, err := connection.Read(context.Background()); err != io.EOF {
+		t.Fatal("connection did not end at EOF")
 	}
 }

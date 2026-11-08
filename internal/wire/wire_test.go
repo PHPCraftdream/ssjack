@@ -55,3 +55,21 @@ func TestTokens(t *testing.T) {
 		t.Fatal("tokens must be independent 256-bit values")
 	}
 }
+
+func TestWriteRefusesOversizedObjectFrame(t *testing.T) {
+	big := Auth{Version: 2, Session: strings.Repeat("x", MaxFrame), Token: "a"}
+	encoded, err := Encode(big)
+	if err != nil {
+		t.Fatal("valid object envelope failed to encode")
+	}
+	if len(encoded) <= MaxFrame {
+		t.Fatal("test envelope did not cross the wire frame maximum")
+	}
+	var sink bytes.Buffer
+	if err := Write(&sink, big); err == nil {
+		t.Fatal("accepted an oversized object frame")
+	}
+	if sink.Len() != 0 {
+		t.Fatalf("oversized frame emitted %d bytes before rejection", sink.Len())
+	}
+}

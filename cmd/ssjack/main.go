@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	project "github.com/PHPCraftdream/ssjack"
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
@@ -431,7 +429,7 @@ func runMCP(ctx context.Context) (int, error) {
 	}
 	connCtx, cancel := context.WithCancel(ctx)
 	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
-	runErr := server.Run(connCtx, &mcp.IOTransport{Reader: newBoundedMCPStdioReader(os.Stdin), Writer: mcpStdioWriter{os.Stdout}})
+	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
 	cancel()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), remoteMCPRegistrationBudget)
 	cleanupErr := registration.Close(cleanupCtx)

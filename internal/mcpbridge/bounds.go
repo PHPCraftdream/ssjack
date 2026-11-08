@@ -101,6 +101,7 @@ type slot struct {
 	ioGate         chan struct{}
 	closeOnce      sync.Once
 	closeDone      chan struct{}
+	closeStarted   chan struct{}
 	closeErr       error
 }
 
@@ -108,4 +109,30 @@ func bindingNamespace(binding mcpdirectory.Binding) string {
 	identity := fmt.Sprintf("%d:%s|%d:%s|%d|%d", len(binding.ServerID), binding.ServerID, len(binding.AccountID), binding.AccountID, binding.ServerRevision, binding.AccountRevision)
 	digest := sha256.Sum256([]byte(identity))
 	return "mcp" + hex.EncodeToString(digest[:6]) + "_"
+}
+
+// lateCaptureClose publishes a connection captured by the initializing client
+// and closes it immediately when slot shutdown already began, unblocking a
+// wedged Client.Connect. The close error is retained under the slot mutex.
+func (s *slot) lateCaptureClose(conn mcp.Connection) {
+	if conn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.conn = conn
+	lateClose := false
+	select {
+	case <-s.closeStarted:
+		lateClose = true
+	default:
+	}
+	s.mu.Unlock()
+	if !lateClose {
+		return
+	}
+	if closeErr := conn.Close(); closeErr != nil {
+		s.mu.Lock()
+		s.closeErr = errors.Join(s.closeErr, closeErr)
+		s.mu.Unlock()
+	}
 }

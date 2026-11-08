@@ -194,12 +194,23 @@ func TestRawJSONPreservesLargeIntegersAndRejectsDuplicateKeys(t *testing.T) {
 func TestInventoryAndEncodedFrameBudgets(t *testing.T) {
 	inventory := []byte(`{"text":"` + strings.Repeat("a", MaxInventoryBytes-11) + `"}`)
 	h := handlerFunc{describe: func(context.Context) ([]byte, error) { return inventory, nil }}
-	if !channelHandler(h)(context.Background(), request("describe")).OK {
+	reply := channelHandler(h)(context.Background(), request("describe"))
+	if !reply.OK {
 		t.Fatal("192 KiB raw inventory refused")
 	}
-	tooLarge := []byte(`{"text":"` + strings.Repeat(`\"`, (MaxInventoryBytes-11)/2) + `"}`)
-	h.describe = func(context.Context) ([]byte, error) { return tooLarge, nil }
+	if reply.Data != string(inventory) {
+		t.Fatal("maximal raw inventory reply was truncated or altered")
+	}
+	// Ktav emits string values verbatim: this reply encodes to exactly raw+16,
+	// so 192 KiB raw can never cross wire.MaxFrame here. The encoded backstop
+	// stays defense in depth; its enforcing boundary is wire.Write itself.
+	encoded, err := wire.Encode(reply)
+	if err != nil || len(encoded) != MaxInventoryBytes+16 || len(encoded) > wire.MaxFrame {
+		t.Fatal("maximal raw inventory encoded past the wire frame maximum")
+	}
+	oversized := []byte(`{"text":"` + strings.Repeat("a", MaxInventoryBytes-10) + `"}`)
+	h.describe = func(context.Context) ([]byte, error) { return oversized, nil }
 	if channelHandler(h)(context.Background(), request("describe")).OK {
-		t.Fatal("Ktav-oversized inventory reply accepted")
+		t.Fatal("oversized inventory reply accepted")
 	}
 }

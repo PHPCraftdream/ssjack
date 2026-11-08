@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,6 +50,7 @@ type testConnection struct {
 	response chan struct{}
 	version  string
 	once     atomic.Bool
+	closeErr error
 }
 
 func newTestConnection(version string) *testConnection {
@@ -89,14 +92,18 @@ func (c *testConnection) Write(_ context.Context, m jsonrpc.Message) error {
 	return nil
 }
 func (c *testConnection) Close() error {
-	if c.once.CompareAndSwap(false, true) {
+	first := c.once.CompareAndSwap(false, true)
+	if first {
 		close(c.closed)
+	}
+	if first && c.closeErr != nil {
+		return c.closeErr
 	}
 	return nil
 }
 func (*testConnection) SessionID() string { return "test" }
 
-func testRuntime(t *testing.T, parent context.Context, h UpstreamHandle, closeLaunch func(context.Context) error) *Runtime {
+func testRuntime(t *testing.T, parent context.Context, h UpstreamHandle, closeLaunch func(context.Context) error, wantSticky bool) *Runtime {
 	t.Helper()
 	guard, err := outputguard.New([][]byte{[]byte(secretLiteral)})
 	if err != nil {
@@ -109,8 +116,8 @@ func testRuntime(t *testing.T, parent context.Context, h UpstreamHandle, closeLa
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := r.Close(ctx); err != nil {
-			t.Errorf("Close: %v", err)
+		if err := r.Close(ctx); wantSticky != errors.Is(err, ErrBridge) {
+			t.Errorf("sticky close mismatch: %v", err)
 		}
 	})
 	return r
@@ -121,12 +128,24 @@ func closeBounded(t *testing.T, r *Runtime, d time.Duration) error {
 	defer cancel()
 	return r.Close(ctx)
 }
-func describeRequest(t *testing.T, r *Runtime) wire.Reply {
+
+// canceledDescribeReply drives one canceled describe and joins its worker.
+func canceledDescribeReply(t *testing.T, r *Runtime, conn *testConnection) wire.Reply {
 	t.Helper()
-	data, _ := wire.Encode(ordinalInput{})
-	reply, ok := r.Handle(context.Background(), wire.Request{Operation: OpDescribe, Data: data})
-	if !ok {
-		t.Fatal("Describe not handled")
+	op, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan wire.Reply, 1)
+	exited := make(chan struct{})
+	describeAsync(t, r, op, exited, result)
+	t.Cleanup(func() {
+		joinExited(t, exited, "operation worker did not exit after cancel")
+	})
+	awaitSignal(t, conn.started, "Connect read did not start")
+	cancel()
+	reply := awaitSignal(t, result, "operation did not return")
+	awaitSignal(t, exited, "operation worker did not exit")
+	if reply.OK {
+		t.Fatal("canceled initialization succeeded")
 	}
 	return reply
 }
@@ -134,7 +153,7 @@ func describeRequest(t *testing.T, r *Runtime) wire.Reply {
 func TestMissingInitializationCanceledOperationDoesNotTakeTransport(t *testing.T) {
 	conn := newTestConnection("")
 	h := &testHandle{transport: &testTransport{conn}}
-	r := testRuntime(t, context.Background(), h, func(context.Context) error { return nil })
+	r := testRuntime(t, context.Background(), h, func(context.Context) error { return nil }, false)
 	op, cancel := context.WithCancel(context.Background())
 	cancel()
 	data, _ := wire.Encode(ordinalInput{})
@@ -146,26 +165,8 @@ func TestMissingInitializationCanceledOperationDoesNotTakeTransport(t *testing.T
 
 func TestCanceledInitializationClosesAndJoinsConnection(t *testing.T) {
 	conn := newTestConnection("")
-	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil })
-	data, _ := wire.Encode(ordinalInput{})
-	op, cancel := context.WithCancel(context.Background())
-	result := make(chan wire.Reply, 1)
-	go func() { reply, _ := r.Handle(op, wire.Request{Operation: OpDescribe, Data: data}); result <- reply }()
-	select {
-	case <-conn.started:
-	case <-time.After(time.Second):
-		cancel()
-		t.Fatal("Connect read did not start")
-	}
-	cancel()
-	select {
-	case reply := <-result:
-		if reply.OK {
-			t.Fatalf("canceled initialization succeeded: %+v", reply)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("operation did not return")
-	}
+	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
+	canceledDescribeReply(t, r, conn)
 	if err := closeBounded(t, r, time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -176,57 +177,44 @@ func TestCanceledInitializationClosesAndJoinsConnection(t *testing.T) {
 
 func TestLateHandshakeResponseCannotInstallSessionAfterClose(t *testing.T) {
 	conn := newTestConnection("2025-06-18")
-	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil })
-	data, err := wire.Encode(ordinalInput{})
-	if err != nil {
+	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
+	result := make(chan wire.Reply, 1)
+	operationExited := make(chan struct{})
+	closed := make(chan error, 1)
+	closeExited := make(chan struct{})
+	startClose := make(chan struct{})
+	var startCloseOnce sync.Once
+	startCloseNow := func() { startCloseOnce.Do(func() { close(startClose) }) }
+	var responseOnce sync.Once
+	responseNow := func() { responseOnce.Do(func() { close(conn.response) }) }
+	t.Cleanup(func() {
+		responseNow()
+		startCloseNow()
+		joinExited(t, closeExited, "close worker did not exit after gates released")
+		joinExited(t, operationExited, "operation worker did not exit after gates released")
+	})
+	describeAsync(t, r, context.Background(), operationExited, result)
+	launchGatedClose(t, r, startClose, closed, closeExited)
+	awaitSignal(t, conn.request, "initialize request was not written")
+	startCloseNow()
+	awaitSignal(t, r.ctx.Done(), "Close did not cancel the pending handshake")
+	responseNow()
+	if err := awaitSignal(t, closed, "Close did not join handshake"); err != nil {
 		t.Fatal(err)
 	}
-	result := make(chan wire.Reply, 1)
-	go func() {
-		reply, _ := r.Handle(context.Background(), wire.Request{Operation: OpDescribe, Data: data})
-		result <- reply
-	}()
-	select {
-	case <-conn.request:
-	case <-time.After(time.Second):
-		t.Fatal("initialize request was not written")
+	if reply := awaitSignal(t, result, "operation outlived Close"); reply.OK {
+		t.Fatalf("late handshake succeeded: %+v", reply)
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- closeBounded(t, r, time.Second) }()
-	select {
-	case <-r.ctx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("Close did not cancel the pending handshake")
-	}
-	close(conn.response)
-	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Close did not join handshake")
-	}
-	select {
-	case reply := <-result:
-		if reply.OK {
-			t.Fatalf("late handshake succeeded: %+v", reply)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("operation outlived Close")
-	}
-	s := r.slots[0]
-	s.mu.Lock()
-	session, failed, done := s.session, s.failed, s.closeDone
-	s.mu.Unlock()
-	if !failed {
-		t.Fatalf("late handshake was not marked failed: session=%v failed=%v", session != nil, failed)
+	awaitSignal(t, closeExited, "close worker did not exit")
+	awaitSignal(t, operationExited, "operation worker did not exit")
+	if !r.slots[0].failed {
+		t.Fatal("late handshake was not marked failed")
 	}
 	if !conn.once.Load() {
 		t.Fatal("late handshake connection did not close")
 	}
 	select {
-	case <-done:
+	case <-r.slots[0].closeDone:
 	default:
 		t.Fatal("binding cleanup not joined")
 	}
@@ -235,14 +223,77 @@ func TestLateHandshakeResponseCannotInstallSessionAfterClose(t *testing.T) {
 func TestUnknownProtocolFailureClosesCapturedConnection(t *testing.T) {
 	conn := newTestConnection("unsupported-version")
 	close(conn.response)
-	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil })
-	if reply := describeRequest(t, r); reply.OK {
-		t.Fatalf("unsupported version accepted: %+v", reply)
+	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, false)
+	data, _ := wire.Encode(ordinalInput{})
+	reply, ok := r.Handle(context.Background(), wire.Request{Operation: OpDescribe, Data: data})
+	if !ok || reply.OK {
+		t.Fatalf("unsupported version accepted or not handled: %+v", reply)
 	}
 	if err := closeBounded(t, r, time.Second); err != nil {
 		t.Fatalf("close after unsupported handshake: %v", err)
 	}
 	if !conn.once.Load() {
 		t.Fatal("unsupported handshake leaked connection")
+	}
+}
+
+func TestShutdownJoinsLateCapturedConnection(t *testing.T) {
+	conn := newTestConnection("")
+	entered, release := make(chan struct{}), make(chan struct{})
+	h := &testHandle{transport: &testTransport{conn}, beforeTake: func() error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	r := testRuntime(t, context.Background(), h, func(context.Context) error { return nil }, false)
+	result := make(chan wire.Reply, 1)
+	operationExited := make(chan struct{})
+	closeExited := make(chan struct{})
+	startClose := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseNow := func() { releaseOnce.Do(func() { close(release) }) }
+	var startCloseOnce sync.Once
+	startCloseNow := func() { startCloseOnce.Do(func() { close(startClose) }) }
+	t.Cleanup(func() {
+		startCloseNow()
+		releaseNow()
+		joinExited(t, closeExited, "close worker did not exit after gates released")
+		joinExited(t, operationExited, "operation worker did not exit after gates released")
+	})
+	describeAsync(t, r, context.Background(), operationExited, result)
+	go func() {
+		defer close(closeExited)
+		<-startClose
+		if err := closeBounded(t, r, time.Second); err != nil {
+			t.Error(err)
+		}
+	}()
+	awaitSignal(t, entered, "blocked take did not enter before shutdown")
+	startCloseNow()
+	awaitSignal(t, r.slots[0].closeStarted, "close did not begin before late capture")
+	releaseNow()
+	awaitSignal(t, closeExited, "close worker did not exit")
+	if reply := awaitSignal(t, result, "operation did not return after late capture"); reply.OK {
+		t.Fatal("late captured initialization succeeded")
+	}
+	awaitSignal(t, operationExited, "operation worker did not exit")
+	if !conn.once.Load() {
+		t.Fatal("late captured connection was not closed")
+	}
+}
+
+func TestFirstCapturedCloseErrorIsRetained(t *testing.T) {
+	conn := newTestConnection("")
+	conn.closeErr = errors.New("synthetic first close refusal")
+	r := testRuntime(t, context.Background(), &testHandle{transport: &testTransport{conn}}, func(context.Context) error { return nil }, true)
+	canceledDescribeReply(t, r, conn)
+	if err := closeBounded(t, r, time.Second); !errors.Is(err, ErrBridge) {
+		t.Fatal("genuine first captured close error did not keep cleanup sticky")
+	}
+	r.slots[0].mu.Lock()
+	joined := r.slots[0].closeErr
+	r.slots[0].mu.Unlock()
+	if joined == nil || !strings.Contains(joined.Error(), "synthetic first close refusal") {
+		t.Fatalf("first captured close error was discarded: %v", joined)
 	}
 }

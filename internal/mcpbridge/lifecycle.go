@@ -16,11 +16,7 @@ type capturingTransport struct {
 
 func (t *capturingTransport) Connect(context.Context) (mcp.Connection, error) {
 	conn, err := t.base.Connect(t.slot.ctx)
-	if conn != nil {
-		t.slot.mu.Lock()
-		t.slot.conn = conn
-		t.slot.mu.Unlock()
-	}
+	t.slot.lateCaptureClose(conn)
 	return conn, err
 }
 
@@ -134,8 +130,25 @@ func (r *Runtime) initialize(s *slot, initCtx context.Context, cancel context.Ca
 	}
 }
 
+// closeOwned closes the captured connection before joining the initializer; a
+// wedged Client.Connect unwinds only after that close. Late captures close via
+// the capturer, whose error is retained.
 func (s *slot) closeOwned() {
 	defer close(s.closeDone)
+	s.mu.Lock()
+	close(s.closeStarted)
+	pending := s.conn
+	preclose := false
+	select {
+	case <-s.initDone:
+	default:
+		preclose = true
+	}
+	s.mu.Unlock()
+	var firstCloseErr error
+	if preclose && pending != nil {
+		firstCloseErr = pending.Close()
+	}
 	<-s.initDone
 	s.mu.Lock()
 	session, conn := s.session, s.conn
@@ -148,7 +161,7 @@ func (s *slot) closeOwned() {
 		closeErr = conn.Close()
 	}
 	s.mu.Lock()
-	s.closeErr = errors.Join(closeErr, waitErr)
+	s.closeErr = errors.Join(s.closeErr, firstCloseErr, closeErr, waitErr)
 	s.mu.Unlock()
 }
 

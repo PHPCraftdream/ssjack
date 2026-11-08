@@ -26,6 +26,7 @@ var (
 	errMCPStdioInvalidMessage     = errors.New("invalid MCP stdio message")
 	errMCPStdioUnsupportedVersion = errors.New("unsupported MCP protocol version")
 	errMCPStdioUnsupportedMethod  = errors.New("unsupported MCP method")
+	errMCPStdioWriterClosed       = errors.New("MCP stdio writer is closed")
 )
 
 type boundedMCPStdioReader struct {
@@ -203,7 +204,3 @@ func (r *boundedMCPStdioReader) Close() error {
 	})
 	return r.closeErr
 }
-
-type mcpStdioWriter struct{ io.Writer }
-
-func (mcpStdioWriter) Close() error { return nil }
