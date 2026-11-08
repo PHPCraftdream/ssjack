@@ -3,13 +3,16 @@
 Encrypted records and shared owner CLI/TUI management are implemented. Full-mode
 startup presents an explicit metadata selector after stable SSH profile selection.
 After an explicit non-empty choice and receipt-checked preference persistence, it
-prepares authenticated bounded capabilities. Empty choices persist without a
-launch. No remote bridge consumes a prepared launch; no remote MCP tool or
-connection is exposed. The Linux/amd64 startup-selector PTY test is authored, but
-is not Windows/macOS acceptance and has not been run here. Task #357 is the
-supervised bridge/harness; #318 is native bridge acceptance; #358 covers
-MCP-specific archives; #359 is the final gate. #317 remains incomplete. The
-existing `ssjack mcp` command retains its current session protocol.
+hands the freshly prepared bounded launch, with its union guard, to the
+supervised bridge runtime (`internal/mcpbridge`), which exposes the selected
+remote MCPs only to this child harness invocation through the existing
+per-launch stdio bridge. Empty choices persist without a launch or bridge.
+The Linux/amd64 startup-selector and consuming-bridge PTY test source is
+authored, but is not Windows/macOS acceptance and has not been run here. Task
+#357's supervised bridge/harness runtime is implemented in this tree; #318 is
+native bridge acceptance; #358 covers MCP-specific archives; #359 is the final
+gate. #317 remains incomplete. The existing `ssjack mcp` command retains its
+current session protocol.
 
 ## Encrypted records
 
@@ -88,9 +91,14 @@ the selection. A fresh session still requires explicit owner confirmation.
   credentials before adoption and persists/flushes the preference against the
   original saved revision/ciphertext. A non-empty choice then issues a fresh
   bounded launch and installs its authentication-literal guard; an empty choice
-  does not capture or issue a launch. The prepared launch is not consumed by a
-  remote bridge, so no connection or tool is exposed. `WithMCPLaunch` is a
-  sequential one-shot access path; it does not promise concurrent-call safety.
+  does not capture or issue a launch. The confirmed non-empty launch is consumed
+  by the supervised bridge runtime: upstream sessions establish lazily when the
+  harness bridge child first asks, so an untouched session performs no upstream
+  network, and the model sees only the selected bindings' inventory under
+  digest-based namespaces (`mcp` + hex(SHA-256 of the binding identity)[:6] +
+  `_`, `internal/mcpbridge/bounds.go` `bindingNamespace`). `WithMCPLaunch` is a
+  sequential one-shot access path; it
+  does not promise concurrent-call safety.
 - Model-facing credential, owner-store master, header, and grant getters, and
   model-facing grant issuance, are permanently prohibited, not pending work.
   Internal startup issuance of a private bounded launch does not expose a
@@ -117,13 +125,14 @@ listening-stream resumption refuses rather than silently reconnecting.
 Request/response/header/active/message limits and cancel/join ownership live in
 `mcpflow`. Close only clears credential material after owned I/O joins; failed or
 incomplete cleanup reports failure and retains it. Responses cannot expose injected
-headers through `Response.Request`. SDK message bodies/errors remain private input;
-any future bridge must apply the parsed-result guard and fixed diagnostic boundary.
+headers through `Response.Request`. SDK message bodies/errors remain private input; the consuming bridge applies the
+parsed-result guard and fixed diagnostic boundary (see below).
 The startup known-literal output guard is not a parsed-result or diagnostic
 boundary: `--no-output-filter` explicitly disables only that guard for a trusted
 terminal, and human SSH sessions remain unfiltered. The prepared guard and launch
-are not consumed by a bridge. Task #357 is supervised bridge/harness integration;
-#318 native bridge acceptance is pending. MCP archive export/import is task #358;
+are consumed by the supervised bridge runtime. Task #357's supervised
+bridge/harness integration is implemented here; #318 native bridge acceptance is
+pending. MCP archive export/import is task #358;
 #359 is the final gate, and #317 is incomplete.
 
 ## Private captured credentials and fresh launch capabilities
@@ -166,12 +175,107 @@ The private capture, admission, one-shot, union-guard and retained-cleanup
 ownership is covered by authored unit/composition test source; those tests were
 not run here, and no CI result is claimed.
 
-Runtime acceptance is pending. Task #357 is supervised bridge/harness integration;
-#318 is native bridge acceptance. The current acceptance-test source includes a
-Linux/amd64 selector/startup PTY test only: it does not exercise a consuming bridge,
-and it is not Windows/macOS acceptance. It has not been run here. Task #358 covers
+Task #357's supervised bridge/harness integration is implemented here; #318 is
+native bridge acceptance. The Linux/amd64 PTY acceptance source now drives a
+consuming bridge through a real MCP harness probe over stdio with unreachable
+fixture endpoints, exercising the real child bridge, keeper and fixed-failure
+path; it remains Linux/amd64-only, is not Windows/macOS acceptance, and has not
+been run here. Task #358 covers
 MCP-specific archive export/import, and #359 is the final gate. Task #317 remains
 incomplete.
+
+## Supervised remote MCP bridge runtime
+
+The bridge runtime lives only in the startup process. After the receipted
+non-empty confirmation, startup mints the one-shot launch, hands its upstream
+handles and union guard to the runtime, and transfers one-shot access:
+`WithMCPLaunch` refuses afterwards. Upstream credentials never leave the startup
+process; they appear in no environment, argv, file, log or diagnostic.
+
+The child bridge process (`ssjack mcp`) exposes the confirmed remote tools as
+namespaced stdio MCP tools on the existing single per-launch
+`ssjack` server. The startup-process runtime internally handles exactly three
+bounded keeper operations (`mcp_remote_bindings`, `mcp_remote_describe`,
+`mcp_remote_call`; `internal/mcpbridge/bounds.go:23-25`), but the child's
+channel wire admits only `describe` and `call` per binding
+(`internal/mcpchannel/channel.go:240-260`): binding ordinal selection is
+server-side and never caller-selected, with one broker per confirmed binding.
+The brokers are NEW per-binding pinned-TLS loopback listeners
+(`internal/mcpchannel`): up to 16 independent listeners with pinned
+certificates, a per-binding random session token with bootstrap TTL, and a
+mandatory token-only output guard. These brokers are distinct from
+the existing one-use SSH bootstrap keeper and from the per-launch keeper
+session. Nothing is registered beyond those channels; there is no persistent
+or global client config, no
+URL/account/header/method selection, and only the frozen selected bindings are
+visible.
+
+Sessions are lazy: no upstream network occurs before the child bridge first
+asks. Inventory is discovered once per binding and frozen. SDK protocol-version
+negotiation refuses unknown versions (2025-06-18, 2025-03-26 and 2024-11-05 are
+supported).
+
+Bounds: at most 16 bindings and 64 tools per binding; upstream tool names at
+most 48 bytes, descriptions at most 4096 bytes and schemas at most 16 KiB;
+child arguments at most 48 KiB raw (canonical re-encode at most 56 KiB); masked
+results at most 64 KiB; a 20 s per-operation budget below the 30 s broker
+client deadline; and an 18 s bound on first-use initialization. Pagination
+cursors, empty, partial, oversized or invalid-name inventories permanently
+refuse that binding with fixed diagnostics; nothing is silently truncated.
+
+The parsed-result guard masks text content, structured-content string leaves
+and inventory prose with the runtime's configured output guard — the mandatory
+snapshot unioned from the channel and bootstrap tokens plus the caller-supplied
+known-output snapshot installed via `ConfigureOutput` before the first message —
+covering every transmitted literal
+including Basic's encoded component. Non-text content is replaced by the fixed
+placeholder `[remote MCP content omitted]`. Schema strings and object keys
+whose masked form would differ are refused, never rewritten, because
+rewriting could change control semantics; this is a bounded refusal, not a
+generic DLP layer. SDK transport and error bodies stay
+behind fixed diagnostics (`remote MCP tool call failed` and similar). Failed or
+timed-out calls are never automatically replayed; an explicit later model call
+is a new bounded request. Under trusted-terminal `--no-output-filter`, only
+the known-literal portion of the guard is disabled — including known upstream
+literals — while channel/bootstrap tokens, fixed error boundaries and all
+size/budget bounds remain mandatory in that mode.
+
+Shutdown order: keeper disconnect (handler-context supervision) or harness exit
+cancels and joins SDK sessions first, then the launch close callback joins the
+HTTP owners and clears credentials, then the existing credential owner cleanup
+runs (capture, service, owner). Incomplete cleanup retains
+state and reports the fixed failure; no grant is reissued. Of the failures,
+unfinished joins and launch-callback failures are retryable with a later
+Close using a fresh context, while terminal slot cleanup errors are retained
+and every later Close reports the fixed failure
+(`internal/mcpbridge/lifecycle.go:224–235, :259`).
+
+The runtime's mandatory output guard is exactly the channel/bootstrap-token
+union from `mcpchannel` combined with the caller-supplied known-literal
+snapshot installed at startup (`ConfigureOutput`); the channel token guard is
+never disabled by any flag.
+
+Each binding is a distinct namespace, session and failure domain. The local
+transport to the child is the new per-binding pinned-TLS loopback brokers
+described above (one-use token, pinned TLS, loopback peer check), distinct
+from the SSH bootstrap capability.
+
+Number precision boundaries: call arguments are decoded and re-encoded by
+`internal/mcpjson` with `json.Number` before reaching the SDK, so integers in
+model-supplied arguments are not widened to float64 by the bridge. Upstream
+structured results are decoded by the pinned SDK, whose own decoding may apply
+float64 semantics; the child bridge re-extracts `structuredContent` as raw
+JSON lexemes from the parent's masked result
+(`cmd/ssjack/remote_mcp_call.go`), so lexemes are preserved from the parent's
+output through the child to the harness — not necessarily from the upstream
+wire.
+
+Test source covers in-memory SDK composition (masking, bounds, custody,
+no-replay, cancel/join/close ordering, disconnect supervision), command
+lifetime (bridge closes before owner, retained failure, one-shot refusal), and
+Linux/amd64 PTY scenarios driving a real MCP client probe over stdio through
+the real child bridge and keeper against unreachable fixture endpoints. These
+tests were authored, not run here, and no CI acceptance result is claimed.
 
 ## Compatibility and acceptance
 

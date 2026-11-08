@@ -143,16 +143,21 @@ func TestScopedEnvironmentDoesNotForwardMainBootstrap(t *testing.T) {
 	base := []string{
 		"PATH=original", "SSJACK_ENV_TOKEN=main-secret", "ssjack_session=old", "SSJACK_ENDPOINT=old",
 		"SSJACK_CERTIFICATE_SHA256=old", "SSJACK_BOOTSTRAP_FILE=old", "SSJACK_APP_TOKEN=old-child",
-		"SSJACK_APP_ENDPOINT=old", "ssjack_app_certificate_sha256=old", "UNRELATED=value",
+		"SSJACK_APP_ENDPOINT=old", "ssjack_app_certificate_sha256=old", "SSJACK_REMOTE_MCP_CHANNELS=stale",
+		"ssjack_remote_mcp_channels=inherited", "UNRELATED=value",
 	}
+	parent := append([]string(nil), base...)
 	out := Environment(base, bootstrap)
-	if len(out) != 5 || !strings.Contains(strings.Join(out, "\n"), EnvToken+"=child-token") {
+	joined := strings.Join(out, "\n")
+	if len(out) != 5 || !strings.Contains(joined, EnvEndpoint+"=endpoint") ||
+		!strings.Contains(joined, EnvToken+"=child-token") || !strings.Contains(joined, EnvPin+"=pin") {
 		t.Fatalf("unexpected environment: %v", out)
 	}
-	if strings.Contains(strings.Join(out, "\n"), "main-secret") || strings.Contains(strings.Join(out, "\n"), "old") {
+	if strings.Contains(joined, "main-secret") || strings.Contains(joined, "old") ||
+		strings.Contains(joined, "stale") || strings.Contains(joined, "inherited") {
 		t.Fatal("inherited capability was forwarded")
 	}
-	if !strings.Contains(strings.Join(base, "\n"), "main-secret") {
+	if strings.Join(base, "\n") != strings.Join(parent, "\n") {
 		t.Fatal("parent environment was mutated")
 	}
 }

@@ -155,7 +155,7 @@ func TestResponseFailuresNeverExposeDiagnosticsOrRedirect(t *testing.T) {
 				}
 				_, err = io.ReadAll(response.Body)
 			}
-			if err != ErrExchange || calls.Load() != 1 {
+			if !errors.Is(err, ErrExchange) || err.Error() != ErrExchange.Error() || calls.Load() != 1 {
 				t.Fatal("failure leaked diagnostics, redirected or replayed")
 			}
 		})

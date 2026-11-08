@@ -20,9 +20,131 @@ func TestVaultRemoteMCPStartupFullProfile(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	if os.Getenv("SSJACK_TEST_REMOTE_MCP_CONNECTED") == "1" {
+		for _, scenario := range []string{"connected-basic", "connected-bypass", "connected-active-cancel", "connected-empty", "connected-cancel"} {
+			t.Run(scenario, func(t *testing.T) { remoteMCPConnectedStartupPTY(t, ctx, scenario) })
+		}
+		return
+	}
 	for _, scenario := range []string{"continue", "receipt-remembered", "empty", "no-record", "absent-directory", "cancel", "esc", "ctrl-c", "stale-ciphertext", "mcp-nonterminal-refusal", "issue-refusal", "prepared-launch-no-output-filter"} {
 		t.Run(scenario, func(t *testing.T) { remoteMCPStartupPTY(t, ctx, scenario) })
 	}
+}
+
+func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
+	defer cancel()
+	fixture := newRemoteMCPStartupFixture(t, ctx, scenario)
+	defer clear(fixture.password)
+	terminal, capture := remoteMCPStartupStart(t, ctx, fixture)
+	defer remoteMCPTeardown(t, terminal, capture, fixture.password)
+	remoteMCPStartupDrive(t, ctx, scenario, fixture, terminal, capture)
+	switch scenario {
+	case "connected-empty":
+		if terminal.Wait(ctx) != nil {
+			t.Fatal("confirmed empty connected run did not exit")
+		}
+		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
+			t.Fatal("empty connected run omitted its positive harness marker")
+		}
+		if fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0 {
+			t.Fatal("confirmed empty choice contacted or called an upstream")
+		}
+	case "connected-cancel":
+		if terminal.Wait(ctx) != nil {
+			t.Fatal("cancelled connected run did not exit")
+		}
+		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte("REMOTE-MCP-CONNECTED-CANCEL-VERIFIED")) {
+			t.Fatal("connected cancellation omitted its positive refusal marker")
+		}
+		if fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0 {
+			t.Fatal("cancelled selection contacted or called an upstream")
+		}
+	default:
+		if terminal.Wait(ctx) != nil {
+			t.Fatal("connected startup child did not exit")
+		}
+		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
+			t.Fatal("connected harness did not report its exact positive scenario marker")
+		}
+		if fixture.connected.authorized.Load() == 0 || fixture.connected.rejected.Load() != 0 {
+			t.Fatal("verified TLS upstream did not accept only the selected private credential")
+		}
+		wantCalls := int32(2)
+		if scenario == "connected-active-cancel" || scenario == "connected-bypass" {
+			wantCalls = 3
+		}
+		if fixture.connected.calls.Load() != wantCalls {
+			t.Fatal("connected fixture call count showed replay or missing call")
+		}
+		if scenario == "connected-active-cancel" {
+			waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer waitCancel()
+			select {
+			case <-fixture.connected.waitStarted:
+			case <-waitCtx.Done():
+				t.Fatal("active call never reached the upstream cancellation barrier")
+			}
+			select {
+			case <-fixture.connected.waitFinish:
+			case <-waitCtx.Done():
+				t.Fatal("upstream cancellation handler did not finish")
+			}
+			if fixture.connected.waitCalls.Load() != 1 || fixture.connected.waitDone.Load() != 1 {
+				t.Fatal("active cancellation was replayed or left an uncertain upstream handler")
+			}
+		} else if fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0 {
+			t.Fatal("inactive cancellation scenario touched the waiting tool")
+		}
+	}
+	if scenario != "connected-bypass" {
+		for _, secret := range [][]byte{[]byte("synthetic startup Basic credential"), []byte("synthetic MCP custom header"), []byte("synthetic-mcp-owner"), []byte("synthetic-unselected-account-secret")} {
+			if capture.Contains(secret) {
+				t.Fatal("connected acceptance output exposed credential material")
+			}
+		}
+	}
+	if scenario == "connected-bypass" && !capture.Contains([]byte(outputFilterWarning)) {
+		t.Fatal("connected explicit bypass omitted its warning")
+	}
+	after, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal("connected encrypted database readback failed")
+	}
+	if scenario == "connected-cancel" {
+		if !bytes.Equal(fixture.expectedCiphertext, after) {
+			t.Fatal("prelaunch cancellation changed encrypted preference bytes")
+		}
+	} else if bytes.Equal(fixture.expectedCiphertext, after) {
+		t.Fatal("confirmed connected selection did not persist its receipt")
+	}
+	clear(after)
+	loaded, loadErr := vault.Load(fixture.path, fixture.password)
+	if loadErr != nil {
+		t.Fatal("connected encrypted database could not be reloaded for receipt inspection")
+	}
+	defer loaded.Close()
+	switch scenario {
+	case "connected-basic", "connected-bypass", "connected-active-cancel":
+		// Compare the raw persisted map: Suggested filters stale entries, so
+		// it would let an extra stale remembered binding slip through.
+		got, exists := loaded.RemoteMCP.Last[fixture.profile]
+		if !exists || !reflect.DeepEqual(got, fixture.selected) {
+			t.Fatal("connected scenario did not persist the exact raw confirmed selection")
+		}
+	case "connected-empty":
+		got, exists := loaded.RemoteMCP.Last[fixture.profile]
+		if !exists || len(got) != 0 {
+			t.Fatal("connected empty choice was not persisted as an empty preference")
+		}
+	case "connected-cancel":
+		got, exists := loaded.RemoteMCP.Last[fixture.profile]
+		if exists && len(got) != 0 {
+			t.Fatal("connected cancellation recorded a preference despite unchanged ciphertext")
+		}
+	}
+	t.Log("REMOTE-MCP-CONNECTED-OBSERVED:" + scenario)
 }
 
 func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) {
@@ -55,7 +177,7 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 		if capture.Contains([]byte("REMOTE-MCP-HARNESS-RAN")) {
 			t.Fatal("prepared-launch fixture invoked a fake bridge/harness")
 		}
-		if !capture.Contains([]byte("Remote MCP launch is prepared; no remote bridge is available.")) || capture.Contains([]byte("#357")) {
+		if !capture.Contains([]byte("Remote MCP bridge is active for this session's selected connections.")) || capture.Contains([]byte("#357")) {
 			t.Fatal("prepared-launch warning did not accurately describe the available capability")
 		}
 	} else if shouldLaunch {

@@ -22,6 +22,21 @@ const (
 
 var ErrExchange = errors.New("remote MCP exchange unavailable; do not replay uncertain operations")
 
+// errDefiniteResponse marks a transport error that already carries definite peer-response evidence: rejected headers, declared or actual size limits, or a non-2xx POST status. It never carries peer body text, header values, or IDs, and it never escapes as a public diagnostic.
+var errDefiniteResponse = errors.New("definite peer response evidence")
+
+// DefiniteResponse reports whether err carries definite peer-response evidence that must stay a fixed refusal even when shutdown overlaps.
+func DefiniteResponse(err error) bool { return errors.Is(err, errDefiniteResponse) }
+
+// definiteError carries the private definite-response marker while keeping the
+// public fixed diagnostic text byte-identical to ErrExchange.
+type definiteError struct{}
+
+func (definiteError) Error() string   { return ErrExchange.Error() }
+func (definiteError) Unwrap() []error { return []error{ErrExchange, errDefiniteResponse} }
+
+func definiteRefusal() error { return definiteError{} }
+
 type Transport struct {
 	mu                                          sync.Mutex
 	ctx                                         context.Context
@@ -228,10 +243,14 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	headers, valid := responseHeaders(response.Header)
 	allowedEmpty := request.Method != http.MethodPost && (response.StatusCode == 404 || response.StatusCode == 405)
-	if !valid || response.ContentLength > MaxResponse || response.StatusCode < 200 || response.StatusCode >= 300 && !allowedEmpty || ctx.Err() != nil {
+	definite := !valid || response.ContentLength > MaxResponse || response.StatusCode < 200 || response.StatusCode >= 300 && !allowedEmpty
+	if definite || ctx.Err() != nil {
 		cancel()
 		finish(response.Body.Close() != nil)
-		return nil, ErrExchange
+		if definite {
+			return nil, definiteRefusal() // refused evidence survives shutdown overlap, text unchanged
+		}
+		return nil, ErrExchange // cancellation carried no response evidence
 	}
 	response.Request, response.Trailer, response.Header = nil, nil, headers
 	response.Status = strconv.Itoa(response.StatusCode) + " " + http.StatusText(response.StatusCode)

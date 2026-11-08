@@ -4,8 +4,9 @@ This pocket now constructs a lazy private authenticated HTTP capability through
 `NewUpstream`. It composes fixed endpoint/header policy with `mcpflow` body bounds,
 lease, cancellation and joined shutdown. Construction performs no network request.
 The private grant layer (`mcpgrant`) composes `NewUpstream` lazily at explicit
-issuance; the product startup still does not call it, and selector orchestration,
-supervised bridges and harness registration remain unfinished. This capability is
+issuance; the supervised bridge runtime (`internal/mcpbridge`) composes it
+through the grant layer at explicit issuance, and the product startup activates
+it only for a receipted non-empty choice. This capability is
 not itself evidence of owner approval or a model-facing credential getter.
 
 The fixed endpoint must be canonical HTTPS without userinfo, query, fragment or

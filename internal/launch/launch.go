@@ -16,6 +16,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
+	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -34,6 +35,7 @@ type Options struct {
 	Stdin        io.Reader
 	Stdout       io.Writer
 	Stderr       io.Writer
+	RemoteMCP    string
 }
 
 func Environment(base []string, bootstrap broker.Bootstrap, executable string) []string {
@@ -46,7 +48,7 @@ func Environment(base []string, bootstrap broker.Bootstrap, executable string) [
 		}
 		switch {
 		case strings.EqualFold(name, broker.EnvToken), strings.EqualFold(name, broker.EnvFile),
-			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin),
+			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin), strings.EqualFold(name, mcpchannel.Env),
 			strings.EqualFold(name, "SSJACK_APP_ENDPOINT"), strings.EqualFold(name, "SSJACK_APP_TOKEN"), strings.EqualFold(name, "SSJACK_APP_CERTIFICATE_SHA256"), strings.EqualFold(name, "SSJACK_VAULT_PASSWORD"):
 			continue
 		case strings.EqualFold(name, "PATH"):
@@ -99,6 +101,9 @@ func EnsureMCP(root string) error {
 func Run(ctx context.Context, opts Options) (int, error) {
 	if opts.Mode == "" {
 		opts.Mode = broker.ModeFull
+	}
+	if err := validateRemoteMCP(opts.Mode, opts.RemoteMCP); err != nil {
+		return 1, err
 	}
 	if opts.Synthetic != nil && (opts.Mode != broker.ModeDeclarative || opts.Metadata != nil || opts.Policy != nil || opts.Identity != nil || opts.Handler != nil) {
 		return 1, errors.New("synthetic session cannot be combined with enrollment identity or policy")
@@ -189,6 +194,7 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	}
 	command.Dir = root
 	command.Env = uiplugin.Environment(Environment(os.Environ(), bootstrap, opts.Executable), pluginDirectory)
+	command.Env = mcpchannel.Environment(command.Env, opts.RemoteMCP)
 	command.Stdin, command.Stdout, command.Stderr = opts.Stdin, opts.Stdout, opts.Stderr
 	if err := command.Start(); err != nil {
 		return 1, fmt.Errorf("failed to start harness: %w", err)

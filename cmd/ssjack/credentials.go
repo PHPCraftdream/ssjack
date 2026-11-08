@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/mcpselect"
@@ -197,7 +198,25 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 					return credentials, errors.New("remote MCP launch preparation failed")
 				}
 				credentials.mcpLaunch = launch
-				fmt.Fprintln(os.Stderr, "Remote MCP launch is prepared; no remote bridge is available.")
+				launchGuard, guardErr := launch.Guard()
+				if guardErr != nil {
+					// A failed guard take consumes the launch; leave it on the
+					// credentials so finish still closes it.
+					return credentials, errors.New("remote MCP launch preparation failed")
+				}
+				handles := make([]mcpbridge.UpstreamHandle, 0, len(launch.Upstreams()))
+				for _, upstream := range launch.Upstreams() {
+					handles = append(handles, &mcpbridge.LaunchUpstream{Upstream: upstream})
+				}
+				runtime, openErr := mcpbridge.Open(ctx, handles, launchGuard, launch.Close, choice.Bindings)
+				if openErr != nil {
+					// Open is pure validation; the launch stays owned by the
+					// credentials and finish closes it.
+					return credentials, errors.New("remote MCP launch preparation failed")
+				}
+				credentials.mcpBridge = runtime
+				credentials.mcpLaunchUsed = true // ownership transferred to the bridge
+				fmt.Fprintln(os.Stderr, "Remote MCP bridge is active for this session's selected connections.")
 			}
 		}
 		baseGuard, guardErr := owner.OutputGuard(ctx)

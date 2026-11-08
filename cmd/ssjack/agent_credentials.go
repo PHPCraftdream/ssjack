@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
+	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
@@ -27,9 +29,13 @@ type agentCredentials struct {
 	owner   ownerSession
 	service ownerService
 	capture *mcpgrant.Capture
-	// mcpLaunch remains owned here for cleanup; launch access is one-shot.
+	// While a bridge runtime is active, launch cleanup ownership is exercised
+	// through the bridge's close callback; mcpLaunch stays set only so the
+	// merged output guard keeps resolving.
+	mcpBridge     *mcpbridge.Runtime
 	mcpLaunch     *mcpgrant.Launch
 	mcpLaunchUsed bool
+	channels      *mcpchannel.ChannelSet
 }
 
 func (credentials *agentCredentials) WithMCPLaunch(use func(*mcpgrant.Launch) error) error {
@@ -58,6 +64,22 @@ func finishAgentCredentials(credentials *agentCredentials, code *int, result *er
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	failed := false
+	if credentials.channels != nil {
+		if credentials.channels.Close(ctx) != nil {
+			*code, *result = 1, errOwnerShutdown
+			return
+		}
+		credentials.channels = nil
+	}
+	if credentials.mcpBridge != nil {
+		if credentials.mcpBridge.Close(ctx) != nil {
+			*code, *result = 1, errOwnerShutdown
+			return
+		}
+		// Bridge close already joined the SDK sessions and closed the launch;
+		// clearing both prevents double close.
+		credentials.mcpBridge, credentials.mcpLaunch = nil, nil
+	}
 	if credentials.mcpLaunch != nil {
 		if credentials.mcpLaunch.Close(ctx) != nil {
 			*code, *result = 1, errOwnerShutdown

@@ -111,6 +111,15 @@ jobs:
           for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report PASS: $name"; exit 1; }
           done
+      - name: Connected remote MCP startup with production KDF
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
+          done
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash

@@ -40,7 +40,6 @@ The tests use bounded fake HTTP peers, controlled in-memory body barriers and no
 public endpoints. They cover exact/overflow bounds, source ownership, response
 sanitization, no replay, admission limits, cancelled/unconsumed bodies, incomplete
 join and failed cleanup. Real TLS/SDK composition is exercised in mcphttp tests.
-The remote selector and startup grant wiring, supervised bridges and harness
-integration remain unfinished; the private grant layer composes this pocket only
-at explicit issuance, and this pocket alone still does not enable the remote MCP
-product path.
+The remote selector and startup grant wiring exist, and the supervised bridge
+runtime composes this pocket through the grant layer at explicit issuance; this
+pocket alone still does not enable the remote MCP product path.

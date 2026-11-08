@@ -23,7 +23,7 @@ Vault adoption or close. A failed construction clears its owned copies, and
 Close clears owned bytes. Go erasure stays best effort; this is not a
 process-memory sandbox.
 
-Launch is lazy: no network occurs before the future bridge Takes and connects.
+Launch is lazy: no network occurs before the supervised bridge Takes and connects.
 Each minted upstream permits exactly one one-shot Take, at most 16 upstreams
 are minted, and each inherits the finite mcpflow lease (at most 10 minutes, no
 renewal). Every upstream carries a union outputguard capability covering all
@@ -41,10 +41,11 @@ records come from one already-authenticated session state.
 
 Startup prepares this bounded launch only after the actual terminal selector
 confirms a non-empty choice and encrypted preference persistence is flushed and
-receipted. The launch and its authentication-literal guard remain owned by the
-startup credentials through shutdown. Empty confirmed choices persist without a
-launch. No remote bridge consumes `Take` yet; task #357 is supervised
-bridge/harness integration, so no remote connection or tool is exposed. The
+receipted. The launch and its authentication-literal guard stay owned by the
+startup credentials through shutdown; the supervised bridge runtime consumes
+the one-shot upstream handles through Take and the guard through an explicit
+close callback, so exactly one consumer exists. Empty confirmed choices persist
+without a launch. The
 Linux/amd64 selector/startup PTY acceptance source is authored but has not been
 run and is not Windows/macOS acceptance; native bridge acceptance remains task
 #318. Task #358 covers MCP archive export/import; #359 is the final gate. Task

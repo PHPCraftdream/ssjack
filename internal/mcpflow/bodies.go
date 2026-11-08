@@ -85,7 +85,10 @@ func (b *responseBody) Read(destination []byte) (int, error) {
 		return 0, nil
 	}
 	n, err := b.source.Read(destination[:min(len(destination), b.left+1)])
-	if n > b.left || b.closed.Load() {
+	overrun := n > b.left
+	if overrun {
+		n, err = 0, definiteRefusal() // size evidence survives shutdown overlap, text unchanged
+	} else if b.closed.Load() {
 		n, err = 0, ErrExchange
 	} else {
 		b.left -= n
@@ -95,7 +98,7 @@ func (b *responseBody) Read(destination []byte) (int, error) {
 	}
 	b.readMu.Unlock()
 	if err != nil {
-		if closeErr := b.Close(); closeErr != nil {
+		if closeErr := b.Close(); closeErr != nil && !overrun {
 			return n, ErrExchange
 		}
 	}

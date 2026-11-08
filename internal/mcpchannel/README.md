@@ -1,0 +1,13 @@
+# Internal remote MCP channels
+
+`Open(ctx, count, ttl, handlerForOrdinal)` creates one pinned-TLS loopback binding per selected handler. Each descriptor has a random session and token; the token is one-use and consumed on attachment. Descriptor expiry is rounded up to Unix seconds only for serialization; the server enforces its actual bootstrap expiry. The runtime has a hard ten-minute lease, while bootstrap lifetime is additionally bounded by `ttl` and the parent deadline.
+
+The callback API is deliberately independent of the MCP bridge: `Handler` provides `Describe(ctx)` and `Call(ctx, tool, rawJSON)`. Channel requests admit only `describe` and `call`; operation selection and ordinal-to-handler binding remain server-side. The call envelope transports arguments as a JSON string so Ktav framing cannot coerce JSON numbers or hide duplicate keys. Runtime validation rejects invalid, duplicate-key, or excessively nested argument JSON before forwarding the original bytes.
+
+`ChannelSet.Descriptors()` returns copies for `EncodeDescriptors`, which produces the strict JSON value for `SSJACK_REMOTE_MCP_CHANNELS`. `DecodeDescriptors` checks the complete descriptor set before connection, including cross-field credential collisions and canonical loopback ports. `Environment(base, encoded)` returns a child-only environment with inherited channel variables removed case-insensitively. Pass this only to the selected harness invocation.
+
+`OutputGuard()` is mandatory and opaque: its immutable snapshot masks every local bootstrap token and exposes no token getter. `GuardWith(existing)` unions it with another valid outputguard snapshot; do not bypass it for trusted execution. Descriptor credentials are local broker bootstrap material only, never upstream credentials.
+
+Child clients use `Connect(ctx, descriptor)`, then `Describe(ctx)` or `Call(ctx, tool, inputJSON)`, and `Close()`. Request, inventory, argument, and result limits are separate; every actual encoded Ktav frame is bounded by the wire protocol frame maximum. Errors are fixed diagnostics. A channel is one-use: there is no reconnect or retry after cancellation or I/O failure. `ChannelSet.Done()` indicates all underlying `broker.Close()` calls have returned. `Close(ctx)` cancels all channels, joins them, and reports `ErrCleanup` on timeout while retaining state for a later retry.
+
+This is a distinct remote-MCP channel descriptor protocol at version 1. It wraps the broker wire transport, whose authentication protocol remains version 2; neither version nor authority is interchangeable with the SSH bootstrap. It does not provide native MCP transport on port 318 or execute tools itself; calls are forwarded only to the supplied handler.

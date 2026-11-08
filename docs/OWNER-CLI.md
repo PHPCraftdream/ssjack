@@ -105,9 +105,10 @@ Reserved Authorization, routing, framing and MCP headers cannot be overridden.
 
 Display-only renames preserve remembered choices. Endpoint/policy/credential edits
 invalidate prior preselection; active sessions do not silently adopt edits. The
-launch checkbox selector, actual remote bridge and MCP-specific ZIP export/import
-remain separate integration work. Existing exports/imports do **not** include MCP
-credentials or remembered choices.
+launch checkbox selector and the supervised remote MCP bridge are
+implemented; native bridge acceptance remains task #318, and MCP-specific ZIP
+export/import remains separate integration work. Existing exports/imports do
+**not** include MCP credentials or remembered choices.
 
 ```sh
 ssjack owner add-mcp-server --name docs --url https://docs.example/mcp

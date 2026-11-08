@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -29,7 +28,7 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 	defer startup.Close()
 	ctx = context.WithValue(ctx, startupPasswordKey{}, startup)
 	credentials, err := loadAgentCredentials(ctx, path, profile)
-	if err != nil || credentials == nil || credentials.capture == nil || credentials.mcpLaunch == nil || credentials.owner == nil || credentials.service == nil {
+	if err != nil || credentials == nil || credentials.capture == nil || credentials.mcpBridge == nil || credentials.mcpLaunch == nil || credentials.owner == nil || credentials.service == nil {
 		if credentials != nil {
 			code := 0
 			var cleanupErr error
@@ -42,6 +41,9 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 	}
 	if len(credentials.targets) != 1 || credentials.targets[0] != profile {
 		t.Fatal("startup selected a different SSH identity than the fixture")
+	}
+	if credentials.mcpBridge == nil {
+		t.Fatal("production direct loader did not activate its supervised remote MCP bridge")
 	}
 	launch := credentials.mcpLaunch
 	cleaned := false
@@ -63,7 +65,7 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 			t.Error("prepared launch owner service did not join")
 			ok = false
 		}
-		if credentials.capture != nil || credentials.mcpLaunch != nil {
+		if credentials.capture != nil || credentials.mcpLaunch != nil || credentials.mcpBridge != nil || credentials.channels != nil {
 			t.Error("prepared launch credential handles remained after cleanup")
 			ok = false
 		}
@@ -132,30 +134,12 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 		t.Fatal("owner receipt did not match the parent's exact fixture binding")
 	}
 
-	// Take is lazy. The transport is not connected or used for a request.
-	upstreamCount := 0
-	if err := credentials.WithMCPLaunch(func(got *mcpgrant.Launch) error {
-		if got != launch {
-			return errors.New("unexpected launch object")
-		}
-		handles := got.Upstreams()
-		if len(handles) != 1 || handles[0] == nil {
-			return errors.New("real launch omitted its one selected upstream")
-		}
-		upstreamCount = len(handles)
-		transport, takeErr := handles[0].Take()
-		if takeErr != nil || transport == nil {
-			return errors.New("real upstream refused its first lazy one-shot take")
-		}
-		if again, secondErr := handles[0].Take(); again != nil || secondErr == nil {
-			return errors.New("real upstream accepted a second take")
-		}
-		if guard, guardErr := got.Guard(); guardErr != nil || guard == nil {
-			return errors.New("real launch guard did not survive adoption and first use")
-		}
-		return nil
-	}); err != nil || upstreamCount == 0 {
-		t.Fatal("one-shot production launch use failed")
+	handles := launch.Upstreams()
+	if len(handles) != 1 || handles[0] == nil {
+		t.Fatal("real launch lost its minted upstream handle while the bridge owns it")
+	}
+	if accessErr := credentials.WithMCPLaunch(func(*mcpgrant.Launch) error { return nil }); accessErr == nil || accessErr.Error() != "remote MCP launch is unavailable" {
+		t.Fatal("bridge ownership did not consume one-shot launch access")
 	}
 	clear(basicPair)
 	clear(basicFull)

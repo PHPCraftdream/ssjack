@@ -20,6 +20,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoretextstream"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
+	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -299,7 +300,7 @@ func Environment(base []string, bootstrap Bootstrap) []string {
 }
 
 func IsEnvironmentName(name string) bool {
-	for _, secret := range []string{EnvEndpoint, EnvToken, EnvPin, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, broker.EnvFile} {
+	for _, secret := range []string{EnvEndpoint, EnvToken, EnvPin, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, broker.EnvFile, mcpchannel.Env} {
 		if strings.EqualFold(name, secret) {
 			return true
 		}

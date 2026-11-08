@@ -5,8 +5,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/binary"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +26,8 @@ type remoteMCPStartupFixture struct {
 	profile            string
 	password           []byte
 	selected           []mcpdirectory.Binding
+	connected          *remoteMCPConnectedServer
+	connectedRoute     string
 	expectedCiphertext []byte
 	expectedFinal      []byte
 	executable         string
@@ -63,7 +63,40 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	}
 	profile := v.Servers[profileID].Accounts["main"]
 	var selected []mcpdirectory.Binding
-	if scenario != "no-record" && scenario != "absent-directory" {
+	var connectedServer *remoteMCPConnectedServer
+	var encodedRoute string
+	if remoteMCPConnectedScenario(scenario) {
+		otherTarget := target
+		otherTarget.PrivateKey = nil
+		otherTarget.Password = []byte(connectPassword)
+		otherTarget.User = "second"
+		if err := v.SetAccount(profileID, "secondary", otherTarget); err != nil {
+			t.Fatal("cannot prepare an unselected SSH account")
+		}
+		profile = v.Servers[profileID].Accounts["main"]
+		connected, route := newRemoteMCPConnectedServer(t, []byte(connectPassword))
+		endpoint := remoteMCPConnectedEndpoint
+		server, err := v.RemoteMCP.AddServer("coordinator", endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selectedID := "00000000000000000000000000000001"
+		unselectedID := "00000000000000000000000000000002"
+		v.RemoteMCP.Accounts[selectedID] = mcpdirectory.Account{ServerID: server, Name: "main", Enabled: true, Revision: 1, Auth: mcpdirectory.Authentication{Kind: "basic", Username: "synthetic-mcp-owner", Secret: []byte("synthetic startup Basic credential")}, Headers: []mcpdirectory.Header{{Name: "X-Api-Key", Value: []byte("synthetic MCP custom header")}}}
+		v.RemoteMCP.Accounts[unselectedID] = mcpdirectory.Account{ServerID: server, Name: "secondary", Enabled: true, Revision: 1, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: []byte("synthetic-unselected-account-secret")}}
+		if err := v.RemoteMCP.Validate(); err != nil {
+			t.Fatal("connected fixture directory did not validate")
+		}
+		if len(v.RemoteMCP.Accounts) != 2 || v.RemoteMCP.Accounts[selectedID].Name != "main" || v.RemoteMCP.Accounts[unselectedID].Name != "secondary" {
+			t.Fatal("connected fixture did not contain the exact selected and unselected accounts")
+		}
+		binding, err := v.RemoteMCP.CurrentBinding(selectedID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected = []mcpdirectory.Binding{binding}
+		connectedServer, encodedRoute = connected, route
+	} else if scenario != "no-record" && scenario != "absent-directory" {
 		endpoint := "https://coordinator.invalid/mcp"
 		if scenario == "issue-refusal" {
 			endpoint = "https://127.0.0.1:8443/mcp"
@@ -87,7 +120,11 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 		}
 		selected = []mcpdirectory.Binding{binding}
 	}
-	if scenario == "receipt-remembered" || scenario == "empty" || scenario == "prepared-launch-no-output-filter" {
+	if scenario == "connected-empty" {
+		if err := v.RememberRemoteMCP(profileID, "main", nil); err != nil {
+			t.Fatal(err)
+		}
+	} else if scenario == "receipt-remembered" || scenario == "empty" || scenario == "prepared-launch-no-output-filter" {
 		if err := v.RememberRemoteMCP(profileID, "main", selected); err != nil {
 			t.Fatal(err)
 		}
@@ -113,13 +150,33 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	if err != nil {
 		t.Fatal(err)
 	}
+	var args []string
+	args = []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
 	environment := nativeStartupEnvironment()
 	environment = append(environment, "SSJACK_REMOTE_MCP_STARTUP_CHILD=1", "SSJACK_REMOTE_MCP_STARTUP_SCENARIO="+scenario)
+	if remoteMCPConnectedScenario(scenario) {
+		if scenario != "connected-cancel" {
+			environment = append(environment, remoteMCPConnectedScenarioEnv+"="+scenario, "SSJACK_REMOTE_MCP_EXPECTED_NAMESPACE="+remoteMCPConnectedNamespace(selected[0]))
+		} else {
+			environment = append(environment, remoteMCPConnectedScenarioEnv+"=connected-cancel")
+		}
+		environment = append(environment, remoteMCPConnectedRouteEnv+"="+encodedRoute)
+		args = []string{"-test.run=^TestNativeRemoteMCPConnectedStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPConnectedHarness$"}
+		if scenario == "connected-bypass" {
+			args = append(args[:2], append([]string{"--no-output-filter"}, args[2:]...)...)
+		}
+	}
+	if scenario == "connected-cancel" {
+		// Keep the child scenario explicit for the pre-launch refusal test.
+		environment = append(environment, remoteMCPConnectedScenarioEnv+"=connected-cancel")
+	}
 	if scenario == "prepared-launch-no-output-filter" {
 		environment = append(environment, "SSJACK_REMOTE_MCP_EXPECTED_BINDING="+fmt.Sprintf("%s/%s/%d/%d", selected[0].ServerID, selected[0].AccountID, selected[0].ServerRevision, selected[0].AccountRevision))
 	}
-	args := []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
-	return &remoteMCPStartupFixture{scenario: scenario, path: path, profile: profile, password: append([]byte(nil), password...), selected: selected, expectedCiphertext: expectedCiphertext, expectedFinal: expectedCiphertext, executable: executable, ptyBridge: ptyBridge, environment: environment, args: args}
+	if !remoteMCPConnectedScenario(scenario) {
+		args = []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
+	}
+	return &remoteMCPStartupFixture{scenario: scenario, path: path, profile: profile, password: append([]byte(nil), password...), selected: selected, connected: connectedServer, connectedRoute: encodedRoute, expectedCiphertext: expectedCiphertext, expectedFinal: expectedCiphertext, executable: executable, ptyBridge: ptyBridge, environment: environment, args: args}
 }
 
 func remoteMCPStartupStart(t *testing.T, ctx context.Context, fixture *remoteMCPStartupFixture) (*ownerterminal.Terminal, *ownerterminal.Capture) {
@@ -141,7 +198,7 @@ func remoteMCPTeardown(t *testing.T, terminal *ownerterminal.Terminal, capture *
 	if err := capture.Join(cleanup); err != nil {
 		t.Error("terminal output cleanup did not join")
 	}
-	for _, secret := range [][]byte{password, []byte("synthetic-mcp-startup-secret"), []byte("synthetic startup Basic credential"), []byte("synthetic MCP custom header"), []byte("synthetic-mcp-owner")} {
+	for _, secret := range [][]byte{password, []byte("synthetic-mcp-startup-secret"), []byte("synthetic startup Basic credential"), []byte("synthetic MCP custom header"), []byte("synthetic-mcp-owner"), []byte("synthetic-unselected-account-secret")} {
 		if capture.Contains(secret) {
 			t.Error("terminal disclosed startup credential")
 		}
@@ -198,21 +255,39 @@ func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, f
 		fixture.expectedFinal = mutated
 		clear(origin)
 	}
+	if scenario == "connected-empty" && (fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0) {
+		t.Fatal("confirmed empty choice contacted or called an upstream")
+	}
+	if scenario == "connected-cancel" && (fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0) {
+		t.Fatal("cancelled selection contacted or called an upstream")
+	}
 	switch scenario {
+	case "connected-basic", "connected-bypass", "connected-active-cancel":
+		if _, err := terminal.Input.Write([]byte(" ")); err != nil {
+			t.Fatal("cannot toggle confirmed account")
+		}
+		if _, err := terminal.Input.Write([]byte("\t\t\r")); err != nil {
+			t.Fatal("cannot confirm selected account")
+		}
+	case "connected-empty":
+		if _, err := terminal.Input.Write([]byte("\t\t\r")); err != nil {
+			t.Fatal("cannot confirm empty account choice")
+		}
+	case "connected-cancel":
+		if _, err := terminal.Input.Write([]byte("q")); err != nil {
+			t.Fatal("cannot cancel before account launch")
+		}
 	case "cancel":
 		_, _ = terminal.Input.Write([]byte("q"))
 	case "esc":
 		_, _ = terminal.Input.Write([]byte{27})
 	case "ctrl-c":
 		_, _ = terminal.Input.Write([]byte{3})
-	case "empty":
-		if _, err := terminal.Input.Write([]byte(" ")); err != nil {
-			t.Fatal(err)
-		}
-		_, _ = terminal.Input.Write([]byte("\t\r"))
-	case "no-record":
-		_, _ = terminal.Input.Write([]byte("\r"))
 	case "continue", "stale-ciphertext", "issue-refusal":
+		_, _ = terminal.Input.Write([]byte(" \t\r"))
+	case "receipt-remembered":
+		_, _ = terminal.Input.Write([]byte("\t\r"))
+	case "empty":
 		_, _ = terminal.Input.Write([]byte(" \t\r"))
 	case "prepared-launch-no-output-filter":
 		_, _ = terminal.Input.Write([]byte("\t\r"))
@@ -220,43 +295,6 @@ func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, f
 		// Nonterminal refusal uses the production loader directly; an absent
 		// directory intentionally has no selector or mandatory interaction.
 	default:
-		if scenario == "receipt-remembered" {
-			_, _ = terminal.Input.Write([]byte("\t\r"))
-		} else {
-			_, _ = terminal.Input.Write([]byte("\r"))
-		}
+		_, _ = terminal.Input.Write([]byte("\r"))
 	}
-}
-
-// remoteMCPDeterministicSSHKeyPEM builds an unencrypted OpenSSH ed25519 private
-// key literal with fixed zero check bytes. Production ssh.MarshalPrivateKey
-// randomizes those check bytes on every call; this fixture and its oracle must
-// rebuild the byte-identical stored credential, so the checks are fixed.
-func remoteMCPDeterministicSSHKeyPEM(private ed25519.PrivateKey, comment string) []byte {
-	sshString := func(value []byte) []byte {
-		out := make([]byte, 4+len(value))
-		binary.BigEndian.PutUint32(out, uint32(len(value)))
-		copy(out[4:], value)
-		return out
-	}
-	algorithm := sshString([]byte("ssh-ed25519"))
-	publicPart := append(append([]byte(nil), algorithm...), sshString(private[32:])...)
-	check := make([]byte, 4)
-	section := append([]byte(nil), check...)
-	section = append(section, check...)
-	section = append(section, algorithm...)
-	section = append(section, sshString(private[32:])...)
-	section = append(section, sshString(private)...)
-	section = append(section, sshString([]byte(comment))...)
-	for pad := byte(1); len(section)%8 != 0; pad++ {
-		section = append(section, pad)
-	}
-	blob := append([]byte(nil), []byte("openssh-key-v1\x00")...)
-	blob = append(blob, sshString([]byte("none"))...)
-	blob = append(blob, sshString([]byte("none"))...)
-	blob = append(blob, sshString(nil)...)
-	blob = append(blob, 0, 0, 0, 1)
-	blob = append(blob, sshString(publicPart)...)
-	blob = append(blob, sshString(section)...)
-	return pem.EncodeToMemory(&pem.Block{Type: "OPENSSH PRIVATE KEY", Bytes: blob})
 }
