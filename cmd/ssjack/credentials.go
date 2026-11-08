@@ -185,7 +185,7 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 			diskDigest, diskErr := credentialCipherDigest(path)
 			var savedPreference []mcpdirectory.Binding
 			preferenceExists := false
-			if metadata.RemoteMCP != nil {
+			if metadata.RemoteMCP.Last != nil {
 				savedPreference, preferenceExists = metadata.RemoteMCP.Last[selected]
 			}
 			if receiptErr != nil || diskErr != nil || databaseStatus.Err != nil || databaseStatus.Pending || databaseStatus.Revision != 1 || databaseStatus.SavedRevision != 1 || savedDigest == ([32]byte{}) || diskDigest != savedDigest || !preferenceExists || !slices.Equal(savedPreference, choice.Bindings) {
