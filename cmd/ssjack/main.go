@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	project "github.com/PHPCraftdream/ssjack"
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
@@ -22,6 +20,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
+	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -39,8 +38,7 @@ func main() {
 	}
 	os.Exit(code)
 }
-
-func run(ctx context.Context, args []string) (int, error) {
+func runWithStartupPassword(ctx context.Context, args []string) (code int, result error) {
 	if handled, err := handleHelp(args, os.Stdout); handled {
 		if err != nil {
 			return 1, err
@@ -78,8 +76,10 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 	flags := flag.NewFlagSet("ssjack", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	registerStartupPassword(ctx, flags)
 	ttl := flags.Duration("bootstrap-timeout", 2*time.Minute, "Initial MCP attachment deadline")
 	modeFlag := flags.String("mode", "full", "Keeper mode: full or declarative (partial, deny-all)")
+	noOutputFilter := flags.Bool("no-output-filter", false, "Disable only the MCP known-literal output guard for this trusted-terminal full-mode run")
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
 	policyPath := flags.String("policy-snapshot", "", "Absolute path to human-installed deny-only policy snapshot")
 	identityPath := flags.String("enrollment-identity", "", "Absolute path to declarative enrollment identity snapshot")
@@ -91,6 +91,9 @@ func run(ctx context.Context, args []string) (int, error) {
 	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
 	vaultPath := flags.String("vault", ".ssh/credentials.ssjack.ktav", "Encrypted profile database")
+	interactive := flags.Bool("interactive", false, "Open the trusted-terminal connection picker and owner database editor")
+	server := flags.String("server", "", "Select a named server from the directory database")
+	account := flags.String("account", "", "Select a named SSH account on --server")
 	version := flags.Bool("version", false, "Print version, commit, and platform")
 	licenses := flags.Bool("licenses", false, "Print project licenses and third-party notices")
 	var profile string
@@ -101,6 +104,9 @@ func run(ctx context.Context, args []string) (int, error) {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0, nil
 		}
+		return 1, err
+	}
+	if err := validateStartupPassword(ctx); err != nil {
 		return 1, err
 	}
 	metadataSupplied, policySupplied, identitySupplied := false, false, false
@@ -116,6 +122,30 @@ func run(ctx context.Context, args []string) (int, error) {
 		}
 	})
 	command := flags.Args()
+	if *noOutputFilter {
+		if *modeFlag != string(broker.ModeFull) || len(command) < 2 || command[0] != "run" || *interactive || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "" {
+			return 1, errors.New("--no-output-filter is only available for an explicit full-mode run HARNESS")
+		}
+		if err := requireOutputFilterTerminal(); err != nil {
+			return 1, err
+		}
+	}
+	selector, named, selectionErr := startupSelection(flags, profile, *server, *account)
+	if selectionErr != nil {
+		return 1, selectionErr
+	}
+	if *interactive {
+		conflict := len(command) != 0
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name != "interactive" && f.Name != "vault" && f.Name != "server" && f.Name != "account" && f.Name != "vault-password" {
+				conflict = true
+			}
+		})
+		if conflict {
+			return 1, errors.New("--interactive accepts only --vault, --server, --account and --vault-password; no command")
+		}
+		return runInteractive(ctx, *vaultPath, *server, *account)
+	}
 	if (metadataSupplied || policySupplied || identitySupplied) && (len(command) == 0 || command[0] != "run" || *version || *licenses || *generatePath != "" || *protectPath != "" || *keyOutput != "") {
 		return 1, errors.New("--enrollment-metadata, --policy-snapshot, and --enrollment-identity are only available for declarative run")
 	}
@@ -138,6 +168,12 @@ func run(ctx context.Context, args []string) (int, error) {
 	if err := vault.ValidateName(profile); err != nil {
 		return 1, err
 	}
+	if named {
+		if *modeFlag != string(broker.ModeFull) || *generatePath != "" || *protectPath != "" || *keyOutput != "" || !namedCommandAllowed(command) {
+			return 1, errors.New("--server/--account select SSH, check, rotate, text-adapter or a full-mode harness; use --interactive for directory editing")
+		}
+		profile = selector
+	}
 	if *generatePath != "" || *protectPath != "" || *keyOutput != "" {
 		if flags.NArg() != 0 {
 			return 1, errors.New("key-file operations cannot launch another command")
@@ -149,6 +185,8 @@ func run(ctx context.Context, args []string) (int, error) {
 		return 1, errors.New("specify a command; default profile is main")
 	}
 	switch command[0] {
+	case "owner":
+		return runOwnerCommand(ctx, flags, *vaultPath, *server, *account, command[1:])
 	case "text-adapter":
 		return runTextAdapterCommand(ctx, *vaultPath, profile, command[1:])
 	case "ssh":
@@ -259,33 +297,54 @@ func run(ctx context.Context, args []string) (int, error) {
 	} else if identitySupplied {
 		return 1, errors.New("--enrollment-identity requires --enrollment-metadata")
 	}
-
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}
 	var err error
 	var applicationOptions *application.Options
 	var runner remote.Runner
+	var guard remote.GuardProvider
 	var streamRunner remote.StreamRunner
 	var targets []string
+	var remoteMCPDescriptor string
 	if *modeFlag == string(broker.ModeFull) {
 		applicationOptions, err = registeredClawwright(*clawwrightDirectory, *clawwrightEntry, *clawwrightContainer, *clawwrightUser, profile, nil)
 		if err != nil {
 			return 1, err
 		}
-		runner, streamRunner, targets, err = cliLoadAgentCredentials(*vaultPath, profile)
+		credentials, err := cliLoadAgentCredentials(ctx, *vaultPath, profile)
+		if credentials != nil {
+			defer finishAgentCredentials(credentials, &code, &result)
+		}
 		if err != nil {
 			return 1, err
+		}
+		if credentials == nil {
+			return 1, errors.New("credential session is unavailable")
+		}
+		runner, streamRunner, targets, guard = credentials.runner, credentials.stream, credentials.targets, credentials.guard
+		guard, err = selectOutputGuard(guard, *noOutputFilter, os.Stderr)
+		if err != nil {
+			return 1, err
+		}
+		guard, remoteMCPDescriptor, err = prepareRemoteMCPChannels(ctx, credentials, guard, *ttl)
+		if err != nil {
+			return 1, errors.New("remote MCP channel setup failed")
+		}
+		if named {
+			if err := bindNamedApplication(applicationOptions, targets); err != nil {
+				return 1, err
+			}
 		}
 	}
 	var handler broker.Handler
 	var manager *remote.Manager
 	var applicationManager *application.Manager
 	if *modeFlag == string(broker.ModeFull) {
-		manager = remote.NewManager(ctx, targets, runner)
+		manager = remote.NewGuardedManager(ctx, targets, runner, guard)
 		defer manager.Close()
 		if applicationOptions != nil {
-			applicationOptions.Runner = streamRunner
+			applicationOptions.Runner, applicationOptions.Guard = streamRunner, guard
 		}
 		applicationManager, err = application.New(ctx, applicationOptions)
 		if err != nil {
@@ -312,7 +371,7 @@ func run(ctx context.Context, args []string) (int, error) {
 	} else {
 		fmt.Fprintln(os.Stderr, "Starting declarative session. MCP access will attach once to this session.")
 	}
-	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, RemoteMCP: remoteMCPDescriptor, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {
@@ -334,6 +393,16 @@ func runHook(args []string) (int, error) {
 }
 
 func runMCP(ctx context.Context) (int, error) {
+	encodedChannels, suppliedChannels := os.LookupEnv(mcpchannel.Env)
+	_ = os.Unsetenv(mcpchannel.Env)
+	var descriptors []mcpchannel.Descriptor
+	if suppliedChannels {
+		var err error
+		descriptors, err = mcpchannel.DecodeDescriptors(encodedChannels)
+		if err != nil {
+			return 1, errors.New("remote MCP channel descriptors are invalid")
+		}
+	}
 	bootstrap := broker.Bootstrap{
 		Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint),
 		Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken),
@@ -347,7 +416,7 @@ func runMCP(ctx context.Context) (int, error) {
 	client, err := broker.ConnectBootstrap(ctx, bootstrap)
 	bootstrap.Token = ""
 	if err != nil {
-		return 1, err
+		return 1, errors.New("MCP session attachment failed")
 	}
 	defer client.Close()
 	descriptor, err := broker.Describe(ctx, client)
@@ -358,8 +427,18 @@ func runMCP(ctx context.Context) (int, error) {
 	if err != nil {
 		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
-	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
-		return 1, err
+	connCtx, cancel := context.WithCancel(ctx)
+	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
+	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
+	cancel()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), remoteMCPRegistrationBudget)
+	cleanupErr := registration.Close(cleanupCtx)
+	cleanupCancel()
+	if cleanupErr != nil {
+		return 1, errors.New("MCP bridge cleanup did not complete")
+	}
+	if runErr != nil {
+		return 1, errors.New("MCP bridge session failed")
 	}
 	return 0, nil
 }

@@ -42,6 +42,101 @@ jobs:
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Repeat MCP inventory-refusal cleanup evidence
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git diff --quiet "$BASE" HEAD -- internal/mcpbridge internal/mcpruntimetest internal/mcpsdkclosetest internal/mcpfixturetest; then
+            go test -v -mod=readonly -race -run '^(TestPaginationAndOversizedInventoryAreRefused|TestCloseJoinsBlockedOperationBeforeRetryingCleanup)$' -count=100 -timeout 180s ./internal/mcpruntimetest
+            go test -v -mod=readonly -race -count=10 -timeout 180s ./internal/mcpfixturetest
+            go test -v -mod=readonly -race -run '^TestRawConnectionCloseErrors$' -count=10 -timeout 180s ./internal/mcpsdkclosetest
+          fi
+      - name: Native owner with production KDF
+        if: steps.scope.outputs.nativeowner == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestNativeOwnerFullProfile$' -count=1 -timeout 600s ./internal/nativeownercheck | tee "$RUNNER_TEMP/native-owner.log"
+          grep -q '^--- PASS: TestNativeOwnerFullProfile ' "$RUNNER_TEMP/native-owner.log"
+      - name: Native owner CLI helper with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile)$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^--- PASS: TestVaultOwnerControlFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^--- PASS: TestVaultKeeperLifetimeFullProfile ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultKeeperLifetimeFullProfile/directory ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultKeeperLifetimeFullProfile/legacy ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/native-command-helper ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q '^    --- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-mcp-guard ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/restart/native-mcp-guard ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh ' "$RUNNER_TEMP/native-owner-cli.log"
+          grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh/legacy-writer-refusal ' "$RUNNER_TEMP/native-owner-cli.log"
+      - name: Native output-filter bypass with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultOutputFilterFullProfile$' -count=1 -timeout 300s ./cmd/ssjack | tee "$RUNNER_TEMP/native-output-filter.log"
+          grep -q '^--- PASS: TestVaultOutputFilterFullProfile ' "$RUNNER_TEMP/native-output-filter.log"
+          grep -q -- '--- PASS: TestVaultOutputFilterFullProfile/bypass/native-mcp-guard ' "$RUNNER_TEMP/native-output-filter.log"
+          grep -q -- '--- PASS: TestVaultOutputFilterFullProfile/bypass/native-human-ssh ' "$RUNNER_TEMP/native-output-filter.log"
+      - name: Native selected owner archive with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerArchiveFullProfile$' -count=1 -timeout 600s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-archive.log"
+          grep -q '^--- PASS: TestVaultOwnerArchiveFullProfile ' "$RUNNER_TEMP/native-owner-archive.log"
+      - name: Text owner startup with production KDF
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultTextOwnerFullProfile$' -count=1 -timeout 180s ./cmd/ssjack | tee "$RUNNER_TEMP/text-owner.log"
+          grep -q '^--- PASS: TestVaultTextOwnerFullProfile ' "$RUNNER_TEMP/text-owner.log"
+      - name: Remote MCP startup with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultRemoteMCPStartupFullProfile$' -count=1 -timeout 900s ./cmd/ssjack | tee "$RUNNER_TEMP/remote-mcp-startup.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-startup.log"
+          for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report PASS: $name"; exit 1; }
+            grep -q -- "REMOTE-MCP-STARTUP-OBSERVED:$name" "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report observed evidence: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )' "$RUNNER_TEMP/remote-mcp-startup.log"; then
+            echo 'Remote MCP startup acceptance reported a skipped top-level test or scenario'
+            exit 1
+          fi
+      - name: Connected remote MCP startup with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
+          for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
+          done
       - name: Scoped app-store CLI acceptance (Linux private overlay)
         if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
         shell: bash
@@ -53,7 +148,7 @@ jobs:
           suffix=''
           if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/ssjack-install-fixture$suffix" ./tests/fixtures/installbinary
-          bash -n install.sh tests/installers.sh tests/installers-local.sh
+          bash -n install.sh build.sh tests/installers.sh tests/installers-local.sh
       - name: Test changed Unix installer
         if: steps.scope.outputs.installers == 'true' && runner.os != 'Windows'
         shell: bash
@@ -66,6 +161,40 @@ jobs:
         if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: .\tests\installers.ps1 -Fixture (Join-Path $env:RUNNER_TEMP 'ssjack-install-fixture.exe')
+      - name: Build and install changed source on Linux or macOS
+        if: steps.scope.outputs.installers == 'true' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh ./build.sh --install-dir "$RUNNER_TEMP/native source install"
+          identity="$("$RUNNER_TEMP/native source install/ssjack" --version)"
+          printf '%s\n' "$identity"
+          case "$identity" in *"$(git rev-parse HEAD)"*) ;; *) exit 1 ;; esac
+      - name: Build and install changed source with Windows PowerShell
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install classic'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
+      - name: Build and install changed source with PowerShell Core
+        if: steps.scope.outputs.installers == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'native source install core'
+          .\build.ps1 -InstallDir $prefix -NoPathUpdate
+          $identity = & (Join-Path $prefix 'ssjack.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
+      - name: Retain native remote MCP acceptance logs
+        if: always() && steps.scope.outputs.appstorecli == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-remote-mcp-${{ runner.os }}-${{ runner.arch }}-feature
+          path: |
+            ${{ runner.temp }}/remote-mcp-startup.log
+            ${{ runner.temp }}/remote-mcp-connected.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain selection evidence
         if: always()
         uses: actions/upload-artifact@v4

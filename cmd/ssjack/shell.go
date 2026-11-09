@@ -7,24 +7,35 @@ import (
 	"os"
 	"time"
 
+	"github.com/muesli/cancelreader"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
 	"github.com/PHPCraftdream/ssjack/internal/remote"
-	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func runVaultShell(ctx context.Context, path, name string) (int, error) {
-	if err := vault.ValidateName(name); err != nil {
+	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
 	}
 	inputFD, outputFD := int(os.Stdin.Fd()), int(os.Stdout.Fd())
 	if !term.IsTerminal(inputFD) || !term.IsTerminal(outputFD) {
 		return 1, errors.New("interactive SSH requires terminal input and output")
 	}
-	config, address, _, err := readVaultCredential(path, name, "human")
+	config, address, _, err := readVaultCredential(ctx, path, name, "human")
 	if err != nil {
 		return 1, err
 	}
+	return runShell(ctx, config, address)
+}
+
+// runShell hands the real terminal to one SSH session. Callers must own the
+// terminal exclusively, e.g. after a Bubble Tea program has exited.
+func runShell(ctx context.Context, config *ssh.ClientConfig, address string) (code int, err error) {
+	if config == nil || address == "" {
+		return 1, errors.New("interactive SSH requires a client configuration and address")
+	}
+	inputFD, outputFD := int(os.Stdin.Fd()), int(os.Stdout.Fd())
 	width, height, err := term.GetSize(outputFD)
 	if err != nil {
 		return 1, errors.New("failed to read terminal dimensions")
@@ -34,6 +45,35 @@ func runVaultShell(ctx context.Context, path, name string) (int, error) {
 	if terminalType == "" {
 		terminalType = "xterm-256color"
 	}
+	// cancelreader on Windows changes the console input mode inside NewReader,
+	// before MakeRaw captures its state, so the true pre-handoff mode must be
+	// captured before the reader exists. Registered first, this restore runs
+	// last: after the raw restore and the conditional Close below. It only sets
+	// the mode on the stdin handle (no close), so it is safe when the reader is
+	// deliberately leaked; on Unix it is an idempotent restore.
+	original, err := term.GetState(inputFD)
+	if err != nil {
+		return 1, errors.New("failed to read terminal input settings")
+	}
+	defer func() {
+		if restoreErr := term.Restore(inputFD, original); restoreErr != nil && err == nil {
+			code, err = 1, errors.New("failed to restore terminal input settings")
+		}
+	}()
+	// remote.Shell owns the stdin pump and cancels and joins it when the session
+	// ends. Order on exit: raw-mode restore, then Close only when no Read or
+	// Cancel can still be in flight (otherwise the reader is left to process
+	// exit), then the restore of the state captured above.
+	input, err := cancelreader.NewReader(os.Stdin)
+	if err != nil {
+		return 1, errors.New("failed to prepare cancellable terminal input")
+	}
+	inputStuck := false
+	defer func() {
+		if !inputStuck {
+			_ = input.Close()
+		}
+	}()
 	resizeCtx, cancel := context.WithCancel(ctx)
 	resize, stopped := watchTerminalSize(resizeCtx, outputFD, size)
 	defer func() { cancel(); <-stopped }()
@@ -50,8 +90,9 @@ func runVaultShell(ctx context.Context, path, name string) (int, error) {
 	}, func(ready func() error) (int, error) {
 		code, err := remote.Shell(ctx, remote.ShellOptions{
 			Address: address, Config: config, Term: terminalType, Size: size,
-			Resize: resize, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Ready: ready,
+			Resize: resize, Stdin: input, Stdout: os.Stdout, Stderr: os.Stderr, Ready: ready,
 		})
+		inputStuck = errors.Is(err, remote.ErrInputNotReleased)
 		if code < 0 {
 			code = 1
 		}

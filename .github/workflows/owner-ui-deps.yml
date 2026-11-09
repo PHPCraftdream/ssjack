@@ -1,0 +1,126 @@
+name: Resolve owner UI dependencies
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/named-server-directory]
+    paths: [.github/workflows/owner-ui-deps.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record existing dependency selections
+        run: |
+          cp go.mod "$RUNNER_TEMP/before.go.mod"
+          go list -mod=readonly -m -json all > "$RUNNER_TEMP/before-modules.json"
+      - name: Resolve the explicitly requested Bubble Tea framework
+        run: |
+          go get charm.land/bubbletea/v2@v2.0.10
+          go mod download all
+          go list -m -json all > "$RUNNER_TEMP/after-modules.json"
+      - name: Verify existing versions were not raised
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def modules(name):
+              text = (Path(os.environ["RUNNER_TEMP"]) / name).read_text()
+              decoder = json.JSONDecoder()
+              result = {}
+              while text.strip():
+                  text = text.lstrip()
+                  module, length = decoder.raw_decode(text)
+                  if not module.get("Main"):
+                      result[module["Path"]] = module["Version"]
+                  text = text[length:]
+              return result
+
+          before = modules("before-modules.json")
+          after = modules("after-modules.json")
+          changed = [name for name, version in before.items() if after.get(name) != version]
+          if changed:
+              raise SystemExit("Existing module selections changed: " + ", ".join(sorted(changed)))
+          original = (Path(os.environ["RUNNER_TEMP"]) / "before.go.mod").read_text()
+          current = Path("go.mod").read_text()
+          for directive in ("module ", "go ", "toolchain "):
+              old = [line for line in original.splitlines() if line.startswith(directive)]
+              new = [line for line in current.splitlines() if line.startswith(directive)]
+              if old != new:
+                  raise SystemExit("Unrequested module/toolchain directive change")
+          if after.get("charm.land/bubbletea/v2") != "v2.0.10":
+              raise SystemExit("Bubble Tea pin mismatch")
+          PY
+      - name: Collect linked framework inventory for every release target
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go list -mod=readonly -deps -json ./cmd/ssjack charm.land/bubbletea/v2 > "$RUNNER_TEMP/linked-${target%/*}-${target#*/}.json"
+          done
+      - name: Collect exact module license sources for review
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def records(name):
+              text = (Path(os.environ["RUNNER_TEMP"]) / name).read_text()
+              decoder = json.JSONDecoder()
+              result = {}
+              while text.strip():
+                  text = text.lstrip()
+                  item, length = decoder.raw_decode(text)
+                  if not item.get("Main"):
+                      result[item["Path"]] = item
+                  text = text[length:]
+              return result
+
+          added = []
+          for name, item in sorted(records("after-modules.json").items()):
+              directory = Path(item["Dir"])
+              sources = sorted(path for path in directory.iterdir()
+                               if path.is_file() and path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING")))
+              if not sources:
+                  raise SystemExit("No upstream license source for " + name)
+              source = next((path for path in sources if path.name == "LICENSE"), sources[0])
+              raw = source.read_bytes().decode("utf-8")
+              normalized = raw.replace("\r\n", "\n").strip()
+              additional = {path.name: path.read_bytes().decode("utf-8")
+                            for path in sources if path != source}
+              for filename in ("PATENTS", "NOTICE", "COPYRIGHT"):
+                  extra = Path(item["Dir"]) / filename
+                  if extra.is_file():
+                      additional[filename] = extra.read_bytes().decode("utf-8")
+              added.append({"additional": additional, "path": name, "version": item["Version"],
+                            "license_file": source.name, "text": raw,
+                            "source_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+                            "license_sha256": hashlib.sha256(normalized.encode()).hexdigest()})
+          output = Path(os.environ["RUNNER_TEMP"]) / "added-module-licenses.json"
+          output.write_text(json.dumps(added, indent=2) + "\n")
+          PY
+      - name: Preserve reviewable manifests and dependency graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-ui-dependencies
+          path: |
+            go.mod
+            go.sum
+            ${{ runner.temp }}/after-modules.json
+            ${{ runner.temp }}/added-module-licenses.json
+            ${{ runner.temp }}/linked-*.json
+          if-no-files-found: error
+          retention-days: 7

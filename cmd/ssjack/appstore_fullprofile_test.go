@@ -41,7 +41,7 @@ func appstoreCLIAcceptance(t *testing.T) {
 	if !appstoreentry.Supported() {
 		t.Skip("appstore unsupported on this platform")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	storeID := [16]byte{1}
 	ledgerPath := t.TempDir()
@@ -248,6 +248,9 @@ func appstoreCLIAcceptance(t *testing.T) {
 	assertNoAppstoreSecrets(t, repeatOut+repeatStderr, master, secret, string(clientDER), base64.StdEncoding.EncodeToString(clientDER))
 	if repeatErr == nil && repeatCode == 0 || cursor != 1 {
 		t.Fatal("repeat first-entry put did not refuse before secret prompt")
+	}
+	if os.Getenv("SSJACK_TEST_FULL_KDF") == "1" {
+		ownerDatabaseAcceptance(t, ctx, storeDir, master, ref)
 	}
 }
 

@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,87 +12,24 @@ import (
 	"strconv"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
-	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/apptransport"
-	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
-	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/PHPCraftdream/ssjack/internal/ownerresource"
 )
-
-// credentialIdentity hashes stable public credential identity, never vault bytes.
-func credentialIdentity(profile string, target vault.Target) (string, error) {
-	key, err := ssh.ParsePrivateKey(target.PrivateKey)
-	if err != nil {
-		return "", errors.New("invalid credential key")
-	}
-	pins := append([]string(nil), target.HostKeys...)
-	for i := range pins {
-		for j := i + 1; j < len(pins); j++ {
-			if pins[j] < pins[i] {
-				pins[i], pins[j] = pins[j], pins[i]
-			}
-		}
-	}
-	identity := struct {
-		Profile  string   `json:"profile"`
-		Address  string   `json:"address"`
-		User     string   `json:"user"`
-		HostKeys []string `json:"host_keys"`
-		Signer   string   `json:"ssh_signer_fingerprint"`
-	}{profile, target.Address, target.User, pins, ssh.FingerprintSHA256(key.PublicKey())}
-	raw, err := json.Marshal(identity)
-	if err != nil {
-		return "", errors.New("cannot encode credential identity")
-	}
-	canonical, err := canonicaljson.Canonicalize(raw)
-	if err != nil {
-		return "", errors.New("cannot canonicalize credential identity")
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-func readVaultTextCredential(path, profile string) (remote.StreamRunner, string, error) {
-	secret, err := readSecret("Vault secret: ")
-	if err != nil {
-		return nil, "", err
-	}
-	v, err := vault.Load(path, secret)
-	clear(secret)
-	if err != nil {
-		return nil, "", err
-	}
-	defer v.Close()
-	selected, err := chooseCredential(v, profile)
-	if err != nil {
-		return nil, "", err
-	}
-	target := v.Targets[selected]
-	if err = target.RequireUsage("agent"); err != nil {
-		return nil, "", err
-	}
-	config, err := target.ClientConfig()
-	if err != nil {
-		return nil, "", err
-	}
-	digest, err := credentialIdentity(selected, target)
-	if err != nil {
-		return nil, "", err
-	}
-	runner, err := remote.NewCredentialStreamRunner(selected, target.Address, config)
-	if err != nil {
-		return nil, "", err
-	}
-	return runner, digest, nil
-}
 
 func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args []string) (int, error) {
 	if len(args) > 0 && args[0] == "register" {
 		return registerTextAdapter(ctx, args[1:])
+	}
+	if len(args) > 0 && args[0] == "register-stream" {
+		return registerTextAdapterMode(ctx, args[1:], "hydrate-stream-v2")
+	}
+	if len(args) > 0 && args[0] == "register-reverse-stream" {
+		return registerTextAdapterMode(ctx, args[1:], "reverse-copy-stream-v2")
+	}
+	if len(args) > 0 && args[0] == "revoke-stream" {
+		return revokeTextStreamAdapter(ctx, args[1:])
 	}
 	if len(args) > 0 && args[0] == "register-reverse" {
 		return registerReverseTextAdapter(ctx, args[1:])
@@ -105,7 +40,7 @@ func runTextAdapterCommand(ctx context.Context, vaultPath, profile string, args 
 	return runTextAdapter(ctx, vaultPath, profile, args)
 }
 
-func runTextAdapter(ctx context.Context, vaultPath, profile string, args []string) (int, error) {
+func runTextAdapter(ctx context.Context, vaultPath, profile string, args []string) (code int, result error) {
 	if profile == "" {
 		profile = "main"
 	}
@@ -113,63 +48,60 @@ func runTextAdapter(ctx context.Context, vaultPath, profile string, args []strin
 		if len(args) != 1 || rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 			return 1, errors.New("text-adapter identity requires an unlocked vault in a non-root terminal")
 		}
-		_, digest, err := readVaultTextCredential(vaultPath, profile)
+		_, _, digest, err := readVaultTextCredential(ctx, vaultPath, profile)
 		if err != nil {
 			return 1, errors.New("cannot derive credential identity")
 		}
 		fmt.Fprintln(os.Stdout, digest)
 		return 0, nil
 	}
-	if len(args) < 3 || args[0] != "serve" {
-		return 1, errors.New("usage: ssjack [-p PROFILE] text-adapter serve GRANT_ID HARNESS [ARGS...] | identity")
+	streaming := len(args) > 0 && args[0] == "serve-stream"
+	if len(args) < 3 || (args[0] != "serve" && !streaming) {
+		return 1, errors.New("usage: ssjack [-p PROFILE] text-adapter serve|serve-stream GRANT_ID HARNESS [ARGS...] | identity")
 	}
 	if rejectAppstoreBrokerEnv() != nil || os.Geteuid() <= 0 {
 		return 1, errors.New("text adapter requires a non-root terminal outside broker sessions")
 	}
-	runner, digest, err := readVaultTextCredential(vaultPath, profile)
+	loaded, runner, profile, digest, err := openVaultTextCredential(ctx, vaultPath, profile)
 	if err != nil {
 		return 1, errors.New("cannot unlock text-adapter credential")
 	}
-	grant, err := declarativeauthority.LoadTextAdapter(args[1], os.Geteuid(), time.Now())
-	if err != nil || grant.Profile != profile || grant.CredentialSHA256 != digest {
+	defer func() {
+		if loaded != nil {
+			loaded.Close()
+		}
+	}()
+	grant, err := loadCLITextGrant(args[1], streaming)
+	if err != nil || (streaming && grant.Mode != "hydrate-stream-v2" && grant.Mode != "reverse-copy-stream-v2") || grant.Profile != profile || grant.CredentialSHA256 != digest {
 		return 1, errors.New("no matching active text-adapter grant")
 	}
-	store, err := appstoreentry.Open(grant.StorePath)
+	if loaded.Version == 2 && loaded.OwnerStore != nil {
+		owned := loaded
+		loaded = nil
+		return runOwnedTextAdapter(ctx, vaultPath, owned, ownerresource.TextRequest{Mode: grant.Mode, GrantID: args[1], Profile: profile, CredentialDigest: digest, Runner: runner}, args[2:])
+	}
+	if loaded.Version == 2 {
+		owned := loaded
+		loaded = nil
+		_, credentials, err := startTextOwner(ctx, vaultPath, owned)
+		if credentials != nil {
+			defer finishAgentCredentials(credentials, &code, &result)
+		}
+		if err != nil {
+			return 1, err
+		}
+	} else {
+		loaded.Close()
+		loaded = nil
+	}
+	installation, err := unlockTextInstallation(ctx, grant)
 	if err != nil {
-		return 1, errAppstore
-	}
-	encoded, hash, err := store.Load()
-	if err != nil {
-		store.Close()
-		return 1, errAppstore
-	}
-	if hex.EncodeToString(hash[:]) != grant.InstallationSHA256 {
-		clear(encoded)
-		store.Close()
-		return 1, errAppstore
-	}
-	master, err := appstoreReadInput("Application-store master secret: ", false)
-	if err != nil {
-		clear(master)
-		clear(encoded)
-		store.Close()
-		return 1, errAppstore
-	}
-	installation, err := appstorecrypto.UnlockInstallation(ctx, encoded, master)
-	clear(master)
-	clear(encoded)
-	if err != nil {
-		store.Close()
-		return 1, errAppstore
-	}
-	dev, ino, err := store.Identity()
-	unchanged := store.VerifyUnchanged(hash)
-	_ = store.Close()
-	if err != nil || unchanged != nil || dev != grant.DirectoryDev || ino != grant.DirectoryIno || !installation.DirectoryMatches(dev, ino) {
-		installation.Close()
-		return 1, errAppstore
+		return 1, err
 	}
 	defer installation.Close()
+	if streaming {
+		return runTextStreamHarness(ctx, installation, grant.Mode, args[1], profile, digest, runner, args[2:])
+	}
 	var adapter *appstorecrypto.TextAdapter
 	if grant.Mode == "reverse-copy-v1" {
 		adapter, err = appstorecrypto.NewReverseTextAdapter(ctx, installation, args[1], profile, digest, runner)
@@ -212,7 +144,7 @@ func registerReverseTextAdapter(ctx context.Context, args []string) (int, error)
 }
 
 func registerTextAdapterMode(_ context.Context, args []string, mode string) (int, error) {
-	if mode != "hydrate-v1" && mode != "reverse-copy-v1" {
+	if mode != "hydrate-v1" && mode != "reverse-copy-v1" && mode != "hydrate-stream-v2" && mode != "reverse-copy-stream-v2" {
 		return 1, errors.New("invalid text-adapter mode")
 	}
 	if os.Geteuid() != 0 {
@@ -294,7 +226,12 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 		grant.References = append(grant.References, ref)
 	}
 	grant.Mode = mode
-	if err = declarativeauthority.ValidateTextAdapterGrant(grant, time.Now()); err != nil {
+	validate := declarativeauthority.ValidateTextAdapterGrant
+	register := declarativeauthority.RegisterTextAdapter
+	if mode == "hydrate-stream-v2" || mode == "reverse-copy-stream-v2" {
+		validate, register = declarativeauthority.ValidateTextStreamGrant, declarativeauthority.RegisterTextStream
+	}
+	if err = validate(grant, time.Now()); err != nil {
 		return 1, errors.New("invalid grant metadata")
 	}
 	metadata, err := json.MarshalIndent(grant, "", "  ")
@@ -303,15 +240,23 @@ func registerTextAdapterMode(_ context.Context, args []string, mode string) (int
 	}
 	fmt.Fprintln(os.Stderr, string(metadata))
 	phrase := "APPROVE TEXT ADAPTER " + grant.ID
+	if mode == "hydrate-stream-v2" {
+		phrase = "APPROVE STREAM TEXT ADAPTER " + grant.ID
+		fmt.Fprintln(os.Stderr, "Approve only the exact streamed target command/file and references, with finite 64 MiB bounds; no raw fallback or automatic retry is authorized.")
+	}
 	if mode == "reverse-copy-v1" {
 		phrase = "APPROVE REVERSE TEXT COPY " + grant.ID
 		fmt.Fprintln(os.Stderr, "Approve only the exact source command and file for a reference-only selected copy; raw fallback and live-file rewrites are not authorized.")
+	}
+	if mode == "reverse-copy-stream-v2" {
+		phrase = "APPROVE REVERSE STREAM TEXT COPY " + grant.ID
+		fmt.Fprintln(os.Stderr, "Approve only the exact streamed source command/file and references, with finite 64 MiB bounds; no raw fallback, source rewrite or automatic retry is authorized.")
 	}
 	fmt.Fprintln(os.Stderr, "Independently confirm the credential digest, file, command, and references before repeating the approval phrase.")
 	if err = confirmVisibleValue("Type exact approval phrase", phrase); err != nil {
 		return 1, err
 	}
-	if err = declarativeauthority.RegisterTextAdapter(grant); err != nil {
+	if err = register(grant); err != nil {
 		return 1, err
 	}
 	fmt.Fprintln(os.Stdout, grant.ID)

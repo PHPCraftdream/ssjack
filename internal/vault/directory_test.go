@@ -1,0 +1,283 @@
+package vault
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+)
+
+func directoryFixture(t *testing.T) (*Vault, string) {
+	t.Helper()
+	v := New()
+	target := testTarget(t)
+	defer clear(target.PrivateKey)
+	if err := v.InitializeDirectory("production", target); err != nil {
+		v.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(v.Close)
+	id, err := v.ServerID("production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v, id
+}
+
+func directoryRef(t *testing.T, version byte) string {
+	t.Helper()
+	r, err := appstoreref.New([16]byte{1}, [16]byte{2}, [16]byte{version}, [16]byte{4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := appstoreplaceholder.Encode(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func TestDirectoryInitializationPreservesProfileAndRefusesExistingRecords(t *testing.T) {
+	v, server := directoryFixture(t)
+	profile, err := v.AccountProfile(server, "main")
+	if err != nil || profile != "production" || v.Version != 2 {
+		t.Fatal("initial directory changed the selected profile identity")
+	}
+	before := ownTarget(v.Targets[profile])
+	defer clear(before.PrivateKey)
+	if err := v.InitializeDirectory("another", before); err == nil {
+		t.Fatal("initialization replaced an existing directory")
+	}
+	encoded, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := unmarshal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decoded.Close()
+	if !reflect.DeepEqual(decoded.Targets[profile], before) || !reflect.DeepEqual(decoded.Servers, v.Servers) {
+		t.Fatal("version 2 roundtrip lost initial credentials or account metadata")
+	}
+	legacy := New()
+	defer legacy.Close()
+	legacy.Targets["existing"] = ownTarget(before)
+	if err := legacy.InitializeDirectory("another", before); err == nil || legacy.Version != 1 || len(legacy.Targets) != 1 {
+		t.Fatal("initialization converted or modified a populated legacy database")
+	}
+}
+
+func TestDirectoryInitializationValidatesAndOwnsCredentials(t *testing.T) {
+	v := New()
+	defer v.Close()
+	target := testTarget(t)
+	defer clear(target.PrivateKey)
+	if err := v.InitializeDirectory("invalid/name", target); err == nil || v.Version != 1 || len(v.Targets) != 0 || v.Servers != nil || v.Secrets != nil {
+		t.Fatal("invalid initialization changed the database")
+	}
+	if err := v.InitializeDirectory("initial", target); err != nil {
+		t.Fatal(err)
+	}
+	owned := v.Targets["initial"].PrivateKey
+	before := append([]byte(nil), owned...)
+	defer clear(before)
+	clear(target.PrivateKey)
+	if !bytes.Equal(v.Targets["initial"].PrivateKey, before) {
+		t.Fatal("initial directory retained caller-owned credential bytes")
+	}
+	v.Close()
+	if len(v.Targets) != 0 || !bytes.Equal(owned, make([]byte, len(owned))) {
+		t.Fatal("closed directory retained credential records or private bytes")
+	}
+}
+
+func TestDirectoryAccountsAndStableRename(t *testing.T) {
+	v, id := directoryFixture(t)
+	target := ownTarget(v.Targets["production"])
+	defer clear(target.PrivateKey)
+	target.User = "operator"
+	if err := v.SetAccount(id, "operator", target); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := v.AccountProfile(id, "operator")
+	if err != nil || profile == "production" || v.Targets[profile].User != "operator" {
+		t.Fatal("second account did not retain its separate identity")
+	}
+	clear(target.PrivateKey)
+	if v.Targets[profile].Validate() != nil {
+		t.Fatal("account retained caller-owned key memory")
+	}
+	if err := v.RenameServer(id, "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := v.ServerID("renamed")
+	if err != nil || got != id {
+		t.Fatal("rename changed server identity")
+	}
+	if _, err := v.ServerID("production"); err == nil {
+		t.Fatal("old name still resolved")
+	}
+	if _, err := v.AccountProfile(id, "missing"); err == nil {
+		t.Fatal("missing account silently selected another identity")
+	}
+}
+
+func TestDirectoryNamedSecretScopesAndVersions(t *testing.T) {
+	v, server := directoryFixture(t)
+	global := SecretBinding{Name: "token", Ref: directoryRef(t, 3)}
+	globalID, err := v.BindSecret("", global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := SecretBinding{Name: "token", ServerID: server, Ref: directoryRef(t, 5)}
+	localID, err := v.BindSecret("", local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, want := range map[string]string{"": global.Ref, server: local.Ref} {
+		got, err := v.NamedReference(scope, "token")
+		if err != nil || got != want {
+			t.Fatal("scope selected the wrong immutable reference")
+		}
+	}
+	if _, err := v.BindSecret("", local); err == nil {
+		t.Fatal("duplicate scoped name was accepted")
+	}
+	local.Name, local.Ref = "renamed", directoryRef(t, 6)
+	gotID, err := v.BindSecret(localID, local)
+	if err != nil || gotID != localID || v.Secrets[globalID] != global {
+		t.Fatal("secret edit changed identity or another scope")
+	}
+	if _, err := v.NamedReference(server, "token"); err == nil {
+		t.Fatal("missing local secret fell back to a global value")
+	}
+	encoded, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := unmarshal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decoded.Close()
+	if !reflect.DeepEqual(decoded.Secrets, v.Secrets) {
+		t.Fatal("named reference roundtrip changed metadata")
+	}
+}
+
+func TestDirectoryPasswordRoundtripAndCleanup(t *testing.T) {
+	v, server := directoryFixture(t)
+	target := v.Targets["production"]
+	target.PrivateKey, target.Password, target.User = nil, []byte("synthetic-password"), "password-user"
+	defer clear(target.Password)
+	if err := v.SetAccount(server, "password", target); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := unmarshal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := decoded.AccountProfile(server, "password")
+	if err != nil {
+		decoded.Close()
+		t.Fatal(err)
+	}
+	got := decoded.Targets[profile]
+	if !bytes.Equal(got.Password, target.Password) || len(got.PrivateKey) != 0 {
+		decoded.Close()
+		t.Fatal("password authentication changed during serialization")
+	}
+	decoded.Close()
+	if !bytes.Equal(got.Password, make([]byte, len(got.Password))) {
+		t.Fatal("password memory was not cleared")
+	}
+}
+
+// TestEmptyDirectoryRoundtrip proves a version 2 database with zero servers,
+// credentials and secrets survives the codec: Ktav writes "{}" and decoding must
+// yield non-nil empty maps, which validate requires for version 2.
+func TestEmptyDirectoryRoundtrip(t *testing.T) {
+	v := NewDirectory()
+	defer v.Close()
+	link := OwnerStore{Directory: t.TempDir(), StoreID: ownerID(1), Master: []byte("synthetic empty master")}
+	for _, linked := range []bool{false, true} {
+		if linked {
+			if err := v.LinkOwnerStore(link); err != nil {
+				t.Fatal(err)
+			}
+		}
+		encoded, err := marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := unmarshal(encoded)
+		clear(encoded)
+		if err != nil {
+			t.Fatal("empty version 2 database did not decode")
+		}
+		if decoded.Version != 2 || decoded.Targets == nil || decoded.Servers == nil || decoded.Secrets == nil ||
+			len(decoded.Targets) != 0 || len(decoded.Servers) != 0 || len(decoded.Secrets) != 0 {
+			decoded.Close()
+			t.Fatal("empty version 2 database lost its non-nil empty maps")
+		}
+		if err := decoded.validate(); err != nil {
+			decoded.Close()
+			t.Fatal(err)
+		}
+		if linked && (decoded.OwnerStore == nil || decoded.OwnerStore.Directory != link.Directory || decoded.OwnerStore.StoreID != link.StoreID) {
+			decoded.Close()
+			t.Fatal("empty linked database lost its owner store link")
+		}
+		decoded.Close()
+	}
+}
+
+// TestEmptyVersionOneKeepsNilDirectory keeps the version 1 contract: no
+// directory maps may appear when decoding a database without them.
+func TestEmptyVersionOneKeepsNilDirectory(t *testing.T) {
+	v := New()
+	defer v.Close()
+	encoded, err := marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := unmarshal(encoded)
+	clear(encoded)
+	if err != nil {
+		t.Fatal("empty version 1 database did not decode")
+	}
+	defer decoded.Close()
+	if decoded.Version != 1 || decoded.Targets == nil || decoded.Servers != nil || decoded.Secrets != nil {
+		t.Fatal("version 1 decoding gained directory maps")
+	}
+}
+
+func TestOwnerRevisionRefusalIsAtomicBeforeMutation(t *testing.T) {
+	v, server := directoryFixture(t)
+	session := newSession(v, func(context.Context, []byte) error { return nil }, func() {})
+	t.Cleanup(session.Discard)
+	if err := session.ApplyAt(0, func(v *Vault) error { return v.RenameServer(server, "first") }); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err := session.ApplyAt(0, func(v *Vault) error { called = true; return v.RenameServer(server, "stale-overwrite") })
+	if !errors.Is(err, ErrOwnerRevision) || called {
+		t.Fatal("stale owner revision reached a mutation")
+	}
+	metadata, status, _, err := session.MetadataSnapshot()
+	if err != nil || status.Revision != 1 || len(metadata.Servers) != 1 || metadata.Servers[0].Name != "first" {
+		t.Fatal("stale owner command changed the atomically observed revision")
+	}
+}

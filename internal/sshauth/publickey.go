@@ -18,12 +18,16 @@ func PublicKey(signer ssh.Signer) ssh.AuthMethod {
 	return &publicKeyAuth{AuthMethod: ssh.PublicKeys(signer), signer: signer}
 }
 
-// ForConnection creates fresh signing evidence; it is never reused across dials.
+// ForConnection creates fresh credential-use evidence for each dial.
 func ForConnection(config *ssh.ClientConfig) (*ssh.ClientConfig, func() bool, error) {
-	if config == nil || len(config.Auth) != 1 {
-		return nil, nil, errors.New("SSH requires exactly one selected public-key identity")
+	selected, _, err := connectionMethod(config)
+	if err != nil {
+		return nil, nil, err
 	}
-	method, ok := config.Auth[0].(*publicKeyAuth)
+	if method, ok := selected.(*passwordAuth); ok {
+		return passwordForConnection(config, method)
+	}
+	method, ok := selected.(*publicKeyAuth)
 	if !ok || method == nil || method.signer == nil {
 		return nil, nil, errors.New("SSH configuration lacks identifiable selected-key authentication")
 	}

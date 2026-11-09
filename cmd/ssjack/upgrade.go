@@ -12,7 +12,7 @@ func runVaultUpgrade(ctx context.Context, path string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 1, err
 	}
-	password, err := readSecret("Vault secret: ")
+	password, err := readVaultPassword(ctx, "Vault secret: ")
 	if err != nil {
 		return 1, err
 	}

@@ -8,8 +8,9 @@ import subprocess
 
 
 SHARED = {"go.mod", "go.sum", "go.work", "go.work.sum", ".gitattributes"}
+BUILDERS = {"build.sh", "build.ps1"}
 INSTALLERS = {"install.sh", "install.ps1", "tests/installers.sh",
-              "tests/installers.ps1", "tests/installers-local.sh"}
+              "tests/installers.ps1", "tests/installers-local.sh"} | BUILDERS
 
 
 def select(packages, changed):
@@ -21,6 +22,8 @@ def select(packages, changed):
     for path in changed:
         if path in INSTALLERS or path.startswith("tests/fixtures/installbinary/"):
             installers = True
+        if path in BUILDERS and "cmd/ssjack" in by_dir:
+            selected.add("cmd/ssjack")
         if (path in SHARED or path.startswith(".github/")
                 or path.startswith("scripts/ci/")):
             reasons.add("shared dependency or CI configuration")
@@ -116,6 +119,7 @@ def main():
                 stream.write("installers=" + str(plan["installers"]).lower() + "\n")
                 stream.write("appstorecli=" + str("./cmd/ssjack" in plan["packages"]).lower() + "\n")
                 stream.write("declarative=" + str("./internal/declarativeslice" in plan["packages"]).lower() + "\n")
+                stream.write("nativeowner=" + str("./internal/nativeownercheck" in plan["packages"]).lower() + "\n")
     else:
         plan = json.loads(output.read_text(encoding="utf-8"))
         packages = plan["packages"]

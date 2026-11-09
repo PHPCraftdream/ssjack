@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -46,10 +45,7 @@ func TestSetupMismatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "store")
-			if err := os.Mkdir(dir, 0700); err != nil {
-				t.Fatal(err)
-			}
+			dir := protectedStoreTestDirectory(t)
 			calls := 0
 			withInput(t, func(string, bool) ([]byte, error) {
 				calls++
@@ -70,11 +66,8 @@ func TestSetupMismatch(t *testing.T) {
 }
 
 func TestSetupUnsupported(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("Linux supports appstore")
-	}
 	if appstoreentry.Supported() {
-		t.Fatal("expected unsupported platform")
+		t.Skip("protected store is supported on this platform")
 	}
 	calls := 0
 	withInput(t, func(string, bool) ([]byte, error) { calls++; return []byte("fixture"), nil })

@@ -10,29 +10,38 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 )
 
 type Target struct {
-	Address    string    `json:"address"`
-	User       string    `json:"user"`
-	PrivateKey []byte    `json:"private_key"`
-	HostKeys   []string  `json:"host_keys"`
-	Usage      string    `json:"usage,omitempty"`
-	SSHPolicy  SSHPolicy `json:"ssh_policy,omitempty"`
+	Address    string           `json:"address"`
+	User       string           `json:"user"`
+	PrivateKey []byte           `json:"private_key"`
+	Password   []byte           `json:"password,omitempty"`
+	HostKeys   []string         `json:"host_keys"`
+	Usage      string           `json:"usage,omitempty"`
+	SSHPolicy  SSHPolicy        `json:"ssh_policy,omitempty"`
+	Proxy      *sshproxy.Config `json:"proxy,omitempty"`
 }
 
 type Vault struct {
-	Version  int               `json:"version"`
-	Targets  map[string]Target `json:"targets"`
-	revision [sha256.Size]byte
-	format   int
-	unlocked *keyfile.Unlocked
+	Version     int                      `json:"version"`
+	Targets     map[string]Target        `json:"targets"`
+	Servers     map[string]Server        `json:"servers,omitempty"`
+	Secrets     map[string]SecretBinding `json:"secrets,omitempty"`
+	OwnerStore  *OwnerStore              `json:"owner_store,omitempty"`
+	RemoteMCP   *mcpdirectory.Directory  `json:"remote_mcp,omitempty"`
+	revision    [sha256.Size]byte
+	payloadHash [sha256.Size]byte
+	format      int
+	unlocked    *keyfile.Unlocked
+	writer      *writerRole
 }
 
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -46,8 +55,18 @@ func (v *Vault) Close() {
 	v.unlocked = nil
 	for name, target := range v.Targets {
 		clear(target.PrivateKey)
+		clear(target.Password)
+		target.Proxy.Clear()
 		delete(v.Targets, name)
 	}
+	clear(v.Servers)
+	clear(v.Secrets)
+	v.OwnerStore.clear()
+	v.OwnerStore = nil
+	v.RemoteMCP.Clear()
+	v.RemoteMCP = nil
+	clear(v.payloadHash[:])
+	v.writer.close()
 }
 
 func (v *Vault) ReplaceKey(name string, private []byte) error {
@@ -59,12 +78,14 @@ func (v *Vault) ReplaceKey(name string, private []byte) error {
 		return errors.New("invalid imported private key size")
 	}
 	updated := target
+	updated.Password = nil
 	updated.PrivateKey = append([]byte(nil), private...)
 	if err := updated.Validate(); err != nil {
 		clear(updated.PrivateKey)
 		return err
 	}
 	clear(target.PrivateKey)
+	clear(target.Password)
 	v.Targets[name] = updated
 	return nil
 }
@@ -102,6 +123,9 @@ func ParseHostKey(data []byte) (ssh.PublicKey, error) {
 }
 
 func (t Target) Validate() error {
+	if t.Proxy != nil && (t.Proxy.Type == "" || t.Proxy.Validate() != nil || sshproxy.ValidateTarget(t.Address) != nil) {
+		return sshproxy.ErrConfig
+	}
 	if err := t.SSHPolicy.Validate(); err != nil {
 		return err
 	}
@@ -119,11 +143,8 @@ func (t Target) Validate() error {
 	if t.User == "" || len(t.User) > 256 || strings.ContainsAny(t.User, "\r\n\x00") {
 		return errors.New("invalid SSH user")
 	}
-	if len(t.PrivateKey) == 0 || len(t.PrivateKey) > keyfile.MaxPlaintext {
-		return errors.New("invalid private key size")
-	}
-	if _, err := ssh.ParsePrivateKey(t.PrivateKey); err != nil {
-		return errors.New("vault private key must be an unencrypted in-memory SSH key")
+	if err := t.validateAuthentication(); err != nil {
+		return err
 	}
 	if len(t.HostKeys) == 0 || len(t.HostKeys) > 8 {
 		return errors.New("provide 1 to 8 verified server public keys")
@@ -167,9 +188,22 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
 	}
-	signer, err := ssh.ParsePrivateKey(t.PrivateKey)
-	if err != nil {
-		return nil, err
+	var authentication ssh.AuthMethod
+	if len(t.Password) != 0 {
+		authentication = sshauth.Password(t.Password)
+	} else {
+		signer, err := ssh.ParsePrivateKey(t.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		authentication = sshauth.PublicKey(signer)
+	}
+	if t.Proxy != nil {
+		var err error
+		authentication, err = sshauth.WithProxy(authentication, t.Proxy)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var pins [][]byte
 	for _, encoded := range t.HostKeys {
@@ -190,7 +224,7 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 		Config:            ssh.Config{KeyExchanges: selectAlgorithms(t.SSHPolicy.KeyExchanges, supported.KeyExchanges), Ciphers: selectAlgorithms(t.SSHPolicy.Ciphers, supported.Ciphers), MACs: selectAlgorithms(t.SSHPolicy.MACs, supported.MACs)},
 		HostKeyAlgorithms: selectAlgorithms(t.SSHPolicy.HostKeys, supported.HostKeys),
 		User:              t.User,
-		Auth:              []ssh.AuthMethod{sshauth.PublicKey(signer)},
+		Auth:              []ssh.AuthMethod{authentication},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			for _, pin := range pins {
 				if bytes.Equal(pin, key.Marshal()) {
@@ -203,10 +237,30 @@ func (t Target) ClientConfig() (*ssh.ClientConfig, error) {
 }
 
 func (v *Vault) validate() error {
-	if v.Version != 1 || v.Targets == nil || len(v.Targets) > 64 {
+	if (v.Version != 1 && v.Version != 2) || v.Targets == nil || len(v.Targets) > 64 {
 		return errors.New("unsupported vault version or target count")
 	}
+	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil) {
+		return errors.New("version 1 cannot contain directory metadata")
+	}
+	if v.Version == 2 {
+		if err := v.validateDirectory(); err != nil {
+			return err
+		}
+		if err := v.validateOwnerStore(); err != nil {
+			return err
+		}
+		if err := v.validateRemoteMCP(); err != nil {
+			return err
+		}
+	}
 	for name, target := range v.Targets {
+		if v.Version == 1 && len(target.Password) != 0 {
+			return errors.New("password authentication requires database version 2")
+		}
+		if v.Version == 1 && target.Proxy != nil {
+			return errors.New("proxy settings require database version 2")
+		}
 		if err := ValidateName(name); err != nil {
 			return err
 		}
@@ -215,88 +269,4 @@ func (v *Vault) validate() error {
 		}
 	}
 	return nil
-}
-
-func marshal(v *Vault) ([]byte, error) {
-	if err := v.validate(); err != nil {
-		return nil, err
-	}
-	records := make(map[string]any, len(v.Targets))
-	for name, target := range v.Targets {
-		record := map[string]any{"address": target.Address, "user": target.User, "private_key": target.PrivateKey, "host_keys": target.HostKeys}
-		if !target.SSHPolicy.Empty() {
-			record["ssh_policy"] = target.SSHPolicy
-		}
-		if target.Usage != "" {
-			record["usage"] = target.Usage
-		}
-		records[name] = record
-	}
-	body, err := pure.EmitCanonical(map[string]any{"version": v.Version, "targets": records})
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > keyfile.MaxPlaintext {
-		return nil, errors.New("vault exceeds the 64 KiB plaintext limit")
-	}
-	return []byte(body), nil
-}
-
-func unmarshal(data []byte) (*Vault, error) {
-	if len(data) > keyfile.MaxPlaintext {
-		return nil, errors.New("vault exceeds the 64 KiB plaintext limit")
-	}
-	value, err := pure.LoadsStrict(string(data))
-	if err != nil {
-		return nil, errors.New("invalid vault Ktav")
-	}
-	root, ok := value.(map[string]any)
-	if !ok || len(root) != 2 || root["version"] == nil {
-		return nil, errors.New("invalid vault fields")
-	}
-	targets, ok := root["targets"].(map[string]any)
-	if !ok || len(targets) > 64 {
-		return nil, errors.New("invalid vault targets")
-	}
-	for _, value := range targets {
-		target, ok := value.(map[string]any)
-		if !ok || len(target) < 4 || len(target) > 6 {
-			return nil, errors.New("invalid vault target fields")
-		}
-		for field := range target {
-			switch field {
-			case "address", "user", "private_key", "host_keys", "usage", "ssh_policy":
-			default:
-				return nil, errors.New("unknown vault target field")
-			}
-		}
-		if value, exists := target["ssh_policy"]; exists {
-			policy, ok := value.(map[string]any)
-			if !ok {
-				return nil, errors.New("invalid SSH policy")
-			}
-			for field := range policy {
-				switch field {
-				case "host_keys", "key_exchanges", "ciphers", "macs":
-				default:
-					return nil, errors.New("unknown SSH policy field")
-				}
-			}
-		}
-		for _, field := range []string{"address", "user", "private_key", "host_keys"} {
-			if target[field] == nil {
-				return nil, fmt.Errorf("missing vault target field %q", field)
-			}
-		}
-	}
-	var v Vault
-	if err := pure.LoadsInto(string(data), &v); err != nil {
-		v.Close()
-		return nil, errors.New("invalid vault values")
-	}
-	if err := v.validate(); err != nil {
-		v.Close()
-		return nil, err
-	}
-	return &v, nil
 }

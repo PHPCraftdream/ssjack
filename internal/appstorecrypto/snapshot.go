@@ -675,15 +675,15 @@ func NewSnapshotWriter(directory *appstorefile.Directory, transport *appstoreanc
 	return &SnapshotWriter{state: &snapshotWriterState{directory: directory, transport: transport, master: master}}, nil
 }
 func (w *SnapshotWriter) Write(ctx context.Context, objects []SnapshotObject) (SnapshotCommit, error) {
-	return w.write(ctx, objects, false)
+	return w.write(ctx, objects, false, nil, nil)
 }
 
 func (w *SnapshotWriter) WriteFirst(ctx context.Context, objects []SnapshotObject) (SnapshotCommit, error) {
-	return w.write(ctx, objects, true)
+	return w.write(ctx, objects, true, nil, nil)
 }
 
-func (w *SnapshotWriter) write(ctx context.Context, objects []SnapshotObject, firstOnly bool) (SnapshotCommit, error) {
-	if w == nil || w.state == nil || ctx == nil || len(objects) > 16383 {
+func (w *SnapshotWriter) write(ctx context.Context, objects []SnapshotObject, firstOnly bool, expected *appstoreanchorstate.State, prepare OwnerWritePrepare) (SnapshotCommit, error) {
+	if w == nil || w.state == nil || ctx == nil || len(objects) > 16383 || (prepare != nil && expected == nil) {
 		return SnapshotCommit{}, ErrSnapshot
 	}
 	if err := ctx.Err(); err != nil {
@@ -712,9 +712,22 @@ func (w *SnapshotWriter) write(ctx context.Context, objects []SnapshotObject, fi
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
-	state, err = writerReconcileReservations(ctx, tx, s.transport, state)
-	if err != nil {
-		return SnapshotCommit{}, err
+	if expected != nil {
+		if !expected.Valid() || expected.StoreID() != store || expected.Hash() != state.Hash() {
+			return SnapshotCommit{}, ErrOwnerChanged
+		}
+		if err := s.checkWriterHistory(ctx, tx, state, nil); err != nil {
+			return SnapshotCommit{}, err
+		}
+	}
+	if prepare == nil {
+		state, err = writerReconcileReservations(ctx, tx, s.transport, state)
+		if err != nil {
+			return SnapshotCommit{}, err
+		}
+	}
+	if expected != nil && expected.Hash() != state.Hash() {
+		return SnapshotCommit{}, ErrOwnerChanged
 	}
 	if firstOnly && (state.Sequence() != 0 || state.CommittedSnapshotID() != ([16]byte{})) {
 		return SnapshotCommit{}, ErrWriterRejected
@@ -792,6 +805,18 @@ func (w *SnapshotWriter) write(ctx context.Context, objects []SnapshotObject, fi
 	req, err := appstoreanchorrequest.PlanReservation(state, entry)
 	if err != nil {
 		return SnapshotCommit{}, err
+	}
+	if prepare != nil {
+		proposal, err := ownerWriteProposal(state, entry, prepared)
+		if err != nil {
+			return SnapshotCommit{}, err
+		}
+		if err := prepare(ctx, proposal); err != nil {
+			return SnapshotCommit{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return SnapshotCommit{}, err
+		}
 	}
 	if err = tx.AppendJournal(entry.Bytes(), state.JournalCount()); err != nil {
 		return SnapshotCommit{}, err
@@ -933,6 +958,10 @@ func (s *snapshotWriterState) finishWrite(ctx context.Context, tx *appstorefile.
 	return out, nil
 }
 func (w *SnapshotWriter) Recover(ctx context.Context) (SnapshotCommit, error) {
+	return w.recover(ctx, nil)
+}
+
+func (w *SnapshotWriter) recover(ctx context.Context, expectedOwner *OwnerRecoveryExpectation) (SnapshotCommit, error) {
 	if w == nil || w.state == nil || ctx == nil {
 		return SnapshotCommit{}, ErrSnapshot
 	}
@@ -960,6 +989,11 @@ func (w *SnapshotWriter) Recover(ctx context.Context) (SnapshotCommit, error) {
 	anchor, err := writerRead(ctx, s.transport, s.directory.StoreID())
 	if err != nil {
 		return SnapshotCommit{}, err
+	}
+	if expectedOwner != nil {
+		if err := s.guardOwnerRecovery(ctx, tx, anchor, *expectedOwner); err != nil {
+			return SnapshotCommit{}, err
+		}
 	}
 	anchor, err = writerReconcileReservations(ctx, tx, s.transport, anchor)
 	if err != nil {

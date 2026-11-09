@@ -132,13 +132,14 @@ func TestInteractiveShellPTYResizeStreamsAndExit(t *testing.T) {
 	close(resize)
 	var stdout, stderr bytes.Buffer
 	ready := 0
+	input := []byte("typed input|synthetic-known-literal|\x1b[?1049h\x1b[2J\x1b[Hnano\x1b[31m\x00\xff\x1b[0m\x1b[?1049l")
 	code, err := Shell(ctx, ShellOptions{
 		Address: address, Config: shellClientConfig(signer, host), Term: "xterm-256color",
 		Size: WindowSize{Width: 80, Height: 24}, Resize: resize,
-		Stdin: bytes.NewBufferString("typed input"), Stdout: &stdout, Stderr: &stderr,
+		Stdin: bytes.NewReader(input), Stdout: &stdout, Stderr: &stderr,
 		Ready: func() error { ready++; return nil },
 	})
-	if err != nil || code != 7 || ready != 1 || stdout.String() != "output:typed input" || stderr.String() != "stderr" {
+	if err != nil || code != 7 || ready != 1 || !bytes.Equal(stdout.Bytes(), append([]byte("output:"), input...)) || stderr.String() != "stderr" {
 		t.Fatalf("shell: code=%d err=%v ready=%d out=%q stderr=%q", code, err, ready, stdout.String(), stderr.String())
 	}
 	for _, want := range []shellEvent{{"pty", 80, 24}, {kind: "shell"}, {"resize", 120, 40}} {

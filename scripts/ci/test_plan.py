@@ -54,6 +54,24 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(set(plan.select(graph, [path])["packages"]), expected)
 
+    def test_native_owner_acceptance_follows_private_storage_edges(self):
+        graph = [
+            {"directory": "internal/ownerfs", "import": "app/ownerfs", "dependencies": []},
+            {"directory": "internal/appstorenative", "import": "app/native",
+             "dependencies": ["app/ownerfs"]},
+            {"directory": "internal/appstorefile", "import": "app/file",
+             "dependencies": ["app/native"]},
+            {"directory": "internal/appstorecrypto", "import": "app/crypto",
+             "dependencies": ["app/file"]},
+            {"directory": "internal/nativeownercheck", "import": "app/nativeownercheck",
+             "dependencies": ["app/crypto", "app/ownerfs"]},
+        ]
+        for path in ("internal/ownerfs/fs_windows.go", "internal/appstorenative/state.go",
+                     "internal/appstorefile/file_other.go", "internal/appstorecrypto/master.go",
+                     "internal/nativeownercheck/fullprofile_test.go"):
+            with self.subTest(path=path):
+                self.assertIn("./internal/nativeownercheck", plan.select(graph, [path])["packages"])
+
     def test_transitive_reverse_dependencies(self):
         self.assertEqual(self.selected("internal/core/core.go"),
                          ["./cmd/app", "./internal/consumer", "./internal/core"])
@@ -108,6 +126,22 @@ class SelectionTests(unittest.TestCase):
                      "tests/fixtures/installbinary/main.go"]:
             self.assertTrue(plan.select(self.graph, [path])["installers"])
         self.assertFalse(plan.select(self.graph, ["internal/core/core.go"])["installers"])
+
+    def test_source_builders_select_installer_smoke_and_cli_regressions(self):
+        graph = self.graph + [{"directory": "cmd/ssjack", "import": "example.test/ssjack",
+                               "dependencies": []}]
+        for path in ("build.sh", "build.ps1"):
+            with self.subTest(path=path):
+                result = plan.select(graph, [path])
+                self.assertTrue(result["installers"])
+                self.assertEqual(result["packages"], ["./cmd/ssjack"])
+                self.assertFalse(result["reasons"])
+        root = Path(__file__).resolve().parents[2]
+        for name in ("feature.yml", "ci.yml"):
+            source = (root / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            self.assertIn("sh ./build.sh --install-dir", source)
+            self.assertIn(".\\build.ps1 -InstallDir", source)
+            self.assertIn("-NoPathUpdate", source)
 
     def test_cycles_terminate(self):
         self.graph[1]["dependencies"] = ["example.test/app/internal/consumer"]

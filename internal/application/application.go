@@ -30,6 +30,7 @@ type Options struct {
 	Command   []string
 	Profile   string
 	Runner    remote.StreamRunner
+	Guard     remote.GuardProvider
 	Container string
 	User      string
 }
@@ -101,7 +102,7 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 	runner := routeRunner(options.Runner, options.Container, options.User)
 	profile := options.Profile
 	m.description = Description{Name: Name, Profile: profile, Container: options.Container}
-	m.jobs = remote.NewManager(parent, []string{Name}, func(ctx context.Context, target, encoded string, stdout, stderr io.Writer) (int, error) {
+	m.jobs = remote.NewGuardedManager(parent, []string{Name}, func(ctx context.Context, target, encoded string, stdout, stderr io.Writer) (int, error) {
 		var arguments []string
 		if target != Name || wire.Decode(encoded, &arguments) != nil {
 			return -1, errors.New("invalid registered application operation")
@@ -142,7 +143,7 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 			return exit.ExitCode(), nil
 		}
 		return -1, errors.New("registered application could not complete")
-	})
+	}, options.Guard)
 	return m, nil
 }
 

@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  CLAWWRIGHT_COMMIT: 506ff2a2802bbfa5cf931f735f1b06aaee7f5244
+  CLAWWRIGHT_COMMIT: 053655da09086986a23f66efe42dd5e8a2907f70
 
 jobs:
   pair:

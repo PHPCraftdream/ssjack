@@ -25,6 +25,7 @@ import (
 
 type pairTarget struct {
 	path        string
+	limit       int64
 	listener    net.Listener
 	mu          sync.Mutex
 	closed      bool
@@ -49,13 +50,15 @@ func pairSigner(t *testing.T) ssh.Signer {
 }
 
 func newPairTarget(t *testing.T, profile string) (*pairTarget, remote.StreamRunner, string) {
+	return newPairTargetWithLimit(t, profile, 1<<20)
+}
+
+func newPairTargetWithLimit(t *testing.T, profile string, limit int64) (*pairTarget, remote.StreamRunner, string) {
 	t.Helper()
-	clientKey, hostKey := pairSigner(t), pairSigner(t)
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	if limit < 1 || limit > 64<<20 {
+		t.Fatal("invalid synthetic target limit")
 	}
-	target := &pairTarget{path: filepath.Join(t.TempDir(), "consumer.txt"), listener: listener, connections: make(map[net.Conn]bool)}
+	clientKey, hostKey := pairSigner(t), pairSigner(t)
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if metadata.User() == "pair-consumer" && bytes.Equal(key.Marshal(), clientKey.PublicKey().Marshal()) {
@@ -65,6 +68,23 @@ func newPairTarget(t *testing.T, profile string) (*pairTarget, remote.StreamRunn
 		},
 	}
 	config.AddHostKey(hostKey)
+	target := startPairTarget(t, limit, config)
+	clientConfig := &ssh.ClientConfig{User: "pair-consumer", Auth: []ssh.AuthMethod{sshauth.PublicKey(clientKey)}, HostKeyCallback: ssh.FixedHostKey(hostKey.PublicKey())}
+	runner, err := remote.NewCredentialStreamRunner(profile, target.listener.Addr().String(), clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sha256.Sum256(clientKey.PublicKey().Marshal())
+	return target, runner, hex.EncodeToString(identity[:])
+}
+
+func startPairTarget(t *testing.T, limit int64, config *ssh.ServerConfig) *pairTarget {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &pairTarget{path: filepath.Join(t.TempDir(), "consumer.txt"), limit: limit, listener: listener, connections: make(map[net.Conn]bool)}
 	target.workers.Add(1)
 	go func() {
 		defer target.workers.Done()
@@ -96,13 +116,7 @@ func newPairTarget(t *testing.T, profile string) (*pairTarget, remote.StreamRunn
 		_ = listener.Close()
 		target.workers.Wait()
 	})
-	clientConfig := &ssh.ClientConfig{User: "pair-consumer", Auth: []ssh.AuthMethod{sshauth.PublicKey(clientKey)}, HostKeyCallback: ssh.FixedHostKey(hostKey.PublicKey())}
-	runner, err := remote.NewCredentialStreamRunner(profile, listener.Addr().String(), clientConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := sha256.Sum256(clientKey.PublicKey().Marshal())
-	return target, runner, hex.EncodeToString(identity[:])
+	return target
 }
 
 func (target *pairTarget) serve(connection net.Conn, config *ssh.ServerConfig) {
@@ -145,8 +159,8 @@ func (target *pairTarget) command(channel ssh.Channel, requests <-chan *ssh.Requ
 		_ = request.Reply(true, nil)
 		code := uint32(0)
 		if input.Command == "pair-write" {
-			data, err := io.ReadAll(io.LimitReader(channel, (1<<20)+1))
-			if err != nil || len(data) > 1<<20 {
+			data, err := io.ReadAll(io.LimitReader(channel, target.limit+1))
+			if err != nil || int64(len(data)) > target.limit {
 				code = 1
 			} else if os.WriteFile(target.path, data, 0o600) != nil {
 				code = 1

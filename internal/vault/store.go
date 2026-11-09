@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpublication"
 )
 
 func readEncoded(path string) ([]byte, error) {
@@ -47,6 +48,14 @@ func Load(path string, password []byte) (*Vault, error) {
 		unlocked.Close()
 		return nil, err
 	}
+	canonical, err := marshal(v)
+	if err != nil {
+		unlocked.Close()
+		v.Close()
+		return nil, err
+	}
+	v.payloadHash = sha256.Sum256(canonical)
+	clear(canonical)
 	v.unlocked = unlocked
 	v.revision = sha256.Sum256(encoded)
 	v.format, err = keyfile.Format(encoded)
@@ -99,6 +108,7 @@ func CreateUnlocked(ctx context.Context, path string, v *Vault) error {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	return nil
 }
 
@@ -164,10 +174,11 @@ func SaveContext(ctx context.Context, path string, v *Vault, password []byte) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := commit(path, encoded, &v.revision); err != nil {
+	if err := commitWithRole(path, encoded, &v.revision, v.writer); err != nil {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	v.unlocked.Close()
 	v.unlocked = unlocked
 	retained = true
@@ -194,10 +205,11 @@ func SaveUnlocked(ctx context.Context, path string, v *Vault) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := commit(path, encoded, &v.revision); err != nil {
+	if err := commitWithRole(path, encoded, &v.revision, v.writer); err != nil {
 		return err
 	}
 	v.revision = sha256.Sum256(encoded)
+	v.payloadHash = sha256.Sum256(plaintext)
 	return nil
 }
 
@@ -217,6 +229,10 @@ func writeAndClose(file *os.File, data []byte) error {
 }
 
 func commit(path string, encoded []byte, expected *[sha256.Size]byte) error {
+	return commitWithRole(path, encoded, expected, nil)
+}
+
+func commitFile(path string, encoded []byte, expected *[sha256.Size]byte) error {
 	lockPath := path + ".lock"
 	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -255,5 +271,5 @@ func commit(path string, encoded []byte, expected *[sha256.Size]byte) error {
 	if err != nil || sha256.Sum256(current) != *expected {
 		return errors.New("vault changed before replacement; original file preserved")
 	}
-	return os.Rename(stage.Name(), path)
+	return ownerpublication.Replace(stage.Name(), path)
 }

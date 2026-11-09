@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
+	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
 )
@@ -27,6 +28,15 @@ func TextAdapterFixture(t *testing.T) (*Installation, declarativeauthority.TextA
 // Returned references follow commit order, which is the catalog's object-ID
 // order; each object ID is the corresponding value's one-based index in byte 0.
 func TextAdapterFixtureValues(t *testing.T, values [][]byte) (*Installation, declarativeauthority.TextAdapterGrant, []string) {
+	return textAdapterFixtureValues(t, values, installationDerive)
+}
+
+func TextAdapterProductionFixture(t *testing.T) (*Installation, declarativeauthority.TextAdapterGrant, string) {
+	installation, grant, refs := textAdapterFixtureValues(t, [][]byte{[]byte("synthetic-connected-secret")}, Derive)
+	return installation, grant, refs[0]
+}
+
+func textAdapterFixtureValues(t *testing.T, values [][]byte, derive func(context.Context, appstoreheader.Header, []byte) (*Master, error)) (*Installation, declarativeauthority.TextAdapterGrant, []string) {
 	t.Helper()
 	if len(values) < 1 || len(values) > 16 {
 		t.Fatal("expected between 1 and 16 values")
@@ -41,7 +51,7 @@ func TextAdapterFixtureValues(t *testing.T, values [][]byte) (*Installation, dec
 	directory, store, binding := installationWriterFixture(t)
 	password := []byte("synthetic installation writer fixture")
 	defer clear(password)
-	encoded, err := newInstallation(ctx, binding.Header, password, binding, installationDerive)
+	encoded, err := newInstallation(ctx, binding.Header, password, binding, derive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +64,7 @@ func TextAdapterFixtureValues(t *testing.T, values [][]byte) (*Installation, dec
 		t.Fatal(err)
 	}
 	defer clear(loaded)
-	installation, err := unlockInstallation(ctx, loaded, password, installationDerive)
+	installation, err := unlockInstallation(ctx, loaded, password, derive)
 	if err != nil {
 		t.Fatal(err)
 	}

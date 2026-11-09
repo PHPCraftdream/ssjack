@@ -16,18 +16,25 @@ import (
 )
 
 func runRotation(ctx context.Context, path, name string) (int, error) {
-	if err := vault.ValidateName(name); err != nil {
+	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
 	}
-	v, secret, err := openManagedVault(path)
+	v, secret, err := openManagedVaultForWrite(ctx, path)
 	if err != nil {
 		return 1, err
 	}
 	defer clear(secret)
 	defer v.Close()
+	name, err = chooseCredential(v, name)
+	if err != nil {
+		return 1, err
+	}
 	target, exists := v.Targets[name]
 	if !exists {
 		return 1, errors.New("credential record does not exist")
+	}
+	if len(target.Password) != 0 {
+		return 1, errors.New("key rotation requires a private-key account; password accounts are not contacted")
 	}
 	config, err := target.ClientConfig()
 	if err != nil {

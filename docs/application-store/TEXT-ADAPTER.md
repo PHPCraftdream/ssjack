@@ -1,45 +1,108 @@
-# Trusted text adapter v1 (task257 source candidate)
+# Trusted selected-text adapters
 
-This additive Linux/amd64 adapter is separate from the accepted synthetic/native delivery path. It is not runtime-accepted: tests are authored, not run, and parent public CI and source review remain required. Clawwright deploy integration is task258; reverse selected-copy transport is task259.
+The Linux/amd64 text-adapter CLI supports separately approved forward hydration
+and reverse selected-copy contexts. It is not the general `app_*` transport or
+the fixed synthetic confidential-delivery route. Actual v1/v2 Clawwright
+CLI/root-keeper/SSH pairs passed in
+[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+on ssjack `0576409` and Clawwright `053655da09086986a23f66efe42dd5e8a2907f70`.
+This does not prove production enrollment, interactive grant/unlock prompts,
+consumer adoption, crash durability or unknown-secret detection.
 
-## Human setup and entry
+## Human setup and CLI entry
 
-Use the existing declarative authority setup before registration. `ssjack -p PROFILE --vault VAULT text-adapter identity` unlocks the SSH vault in a non-root terminal and prints only the public credential-identity digest. Root `ssjack text-adapter register` interactively records and confirms a distinct text-adapter grant; `ssjack text-adapter revoke GRANT_ID` revokes it. Synthetic delivery grants do not authorize this adapter.
+The application-store installation, authority setup and verified SSH credentials
+must already exist. There is no automatic enrollment or permission inferred from
+paths, hashes, references or CLI options.
 
-`ssjack -p PROFILE --vault VAULT text-adapter serve GRANT_ID HARNESS [ARGS...]` checks the grant, prompts privately for vault and application-store unlock, and runs the harness with the existing ephemeral pinned-TLS application transport. No secret values are passed in argv, environment, or application-transport replies. Only existing transport bootstrap credentials enter the child environment.
-
-The root-owned grant binds recipient UID, exact store directory device/inode, encrypted installation hash, encoded snapshot hash, 1–16 exact canonical references from the same store/snapshot, profile, public credential identity digest, exact destination command, exact absolute file metadata, hydrate-v1 direction, and UTC expiry at most 24 hours away. The command consumes transformed stdin; file metadata is checked for equality, not interpreted as permission or substituted into a shell command. The human must verify that the approved command writes the intended destination. Final target plaintext is permitted when explicitly approved.
-
-Credential identity is SHA-256 of canonical JSON with keys address, host_keys, profile, ssh_signer_fingerprint, user. Host-key strings are sorted; signer fingerprint is OpenSSH SHA256 of the public key. This digest contains no template or application-secret bytes. Changing address, user, key, pins, or profile requires a matching new approval.
-
-## Task258 transport contract
-
-Require `text_hydrate` in `transport_info.capabilities`; otherwise retain the caller's fail-closed refusal. Call MCP tool `text_hydrate` on the existing authenticated pinned-TLS child endpoint:
-
-The dedicated text listener advertises only text_hydrate and exposes no generic transport_start, transport_input, transport_read, or transport_cancel tools. Existing raw Listen sessions are unchanged. Task258 must use this separately launched text context, not mistake it for the general deploy transport.
-
-```json
-{"operation_id":"AAECAwQFBgcICQoLDA0ODw","file":"/approved/config","mode":"hydrate-v1","template":"caller-selected text containing approved exact canonical references"}
+```sh
+ssjack --vault DATABASE --server production --account automation text-adapter identity
 ```
 
-Operation ID is canonical unpadded base64url encoding of 16 bytes. File must exactly equal the grant. Template is ordinary caller data, bounded to 32768 UTF-8 bytes. The reference mapping is fixed by the grant, not supplied as authority in the request. Each capability attempts at most one valid operation. There is no cross-process replay ledger: never automatically restart/retry an uncertain operation.
+Identity inspection unlocks the database in a non-root terminal outside a broker
+session and prints only the selected opaque credential binding. Direct key accounts bind the
+public SSH identity; password or proxied accounts use a domain-separated private
+keyed binding, not a public password hash. The proxied binding includes the exact
+server route and private authentication, so route/auth changes require matching
+new approval. See [proxy settings](../PROXY.md). A change to credentials/connection identity
+requires an appropriate new grant; an ID is not authorization.
 
-The only application result is `{"status":"withheld"}`, `{"status":"received"}`, or `{"status":"unknown"}`. Withheld means no destination runner invocation. Received requires stdin consumed and a zero remote command exit with final checks; it does not prove application adoption or correct storage. Unknown means effects may have occurred, including nonzero exit, cancellation, lost reply, or late authority failure. Remote stdout/stderr are discarded and runner errors are not returned. A lost response is uncertain even if the process completed.
+Root independently verifies and confirms the finite exact grant interactively:
 
-## Bounds and matching responsibility
+| Direction / version | Register | Revoke | Non-root serving command |
+| --- | --- | --- | --- |
+| Forward v1 | `text-adapter register` | `text-adapter revoke GRANT_ID` | `text-adapter serve GRANT_ID HARNESS [ARGS...]` |
+| Reverse v1 | `text-adapter register-reverse` | `text-adapter revoke GRANT_ID` | `text-adapter serve GRANT_ID HARNESS [ARGS...]` |
+| Forward v2 | `text-adapter register-stream` | `text-adapter revoke-stream GRANT_ID` | `text-adapter serve-stream GRANT_ID HARNESS [ARGS...]` |
+| Reverse v2 | `text-adapter register-reverse-stream` | `text-adapter revoke-stream GRANT_ID` | `text-adapter serve-stream GRANT_ID HARNESS [ARGS...]` |
 
-One selected file per capability, at most 16 mappings in one immutable snapshot, at most 1 MiB aggregate selected secret bytes and 1 MiB output, and a 60-second maximum operation deadline bounded by grant expiry. Engine support for 128 mappings is not an adapter guarantee. Mappings use canonical exact-reference bytes, not arbitrary caller tokens. Replacement is literal, single-pass, and nonrecursive; unmatched ordinary text is preserved. The user owns file selection, representation, mapping completeness, consumer compatibility, and final target storage. No unknown or derived-secret discovery is promised.
+The grant binds recipient UID, store directory identity and path, installation
+and encoded snapshot hashes, resolved credential-record ID/binding, exact absolute
+file, command, direction, UTC expiry and 1–16 canonical refs from one store/snapshot.
+The human must verify what the command does: exact file metadata is not a shell
+substitution or proof that effects are limited to that file. Registration fields
+and approval are read interactively, not accepted as model-supplied authority.
 
-Matching follows the accepted engine: leftmost-longest, nonoverlapping matches; output is never rescanned. Equal references or equal secret values are rejected even during hydration. Empty values and values containing the literal `$ssjack` marker are rejected. JSON quoting, escapes, URL encoding, and derived representations are not applied automatically; provide a consumer-compatible exact value and template or the selected text may be incompatible. Only configured literal matches are covered.
+Serve prompts privately for the credential database and installation unlock,
+validates the grant and launches the harness with only temporary endpoint/token/pin
+bootstrap. It exposes exactly one direction. Forward grants do not permit reads;
+v2 has a separate registry and never falls back to v1 or raw execution tools.
+Named startup selectors resolve stable credential IDs inside the authenticated
+load. Keep credentials out of argv, environment, tool calls and logs.
 
-The forward context accepts only hydrate-v1. A separately root-approved reverse-copy-v1 context is documented in [TEXT-REVERSE-COPY.md](TEXT-REVERSE-COPY.md); forward and synthetic grants never authorize its private reads. Task259 owns downstream backup/restore clients, and task260 owns paired integration.
+## Forward v1 transport
 
-## Verification boundary
+The dedicated pinned-HTTPS MCP listener advertises `transport_info` and only
+`text_hydrate`; no generic `transport_start/input/read/cancel` tools are exposed.
+The request has exactly this shape:
 
-`TestTextAdapterConnected` is an authored, gated root-only disposable-CI acceptance test. Its root parent registers and loads authority; a child running as UID 65534 uses an encrypted accelerated test fixture, constructs the real `NewTextAdapter`, and sends a pinned-HTTPS `text_hydrate` request. The authorized runner receives exactly the synthetic substituted text, while its stdout/stderr are discarded. The test covers absent, revoked, wrong-credential, wrong-profile, wrong-reference, snapshot-hash, expired-registration, wrong-file, oversized-input, and replay cases, including runner-effect counters. This fixture exercises the registration API, not interactive CLI approval.
+```json
+{"operation_id":"AAECAwQFBgcICQoLDA0ODw","file":"/approved/config","mode":"hydrate-v1","template":"caller-selected text with approved exact canonical references"}
+```
 
-Fixture lease lifecycle: the fixture's initial store owns the exclusive, nonblocking `.lock`; the real constructor reopens the store by path. The test fixture now explicitly closes the initial store after installation and snapshot metadata are captured, before capability construction, matching CLI lifecycle. Counterfactual checks are authored: a concurrent open must refuse while the lease is held, and reopening must succeed after close. The actual CI `constructorErr` delivery is consistent with a held lease, but the runtime constructor stage was not directly observed. This is source inference, not a verified root cause or public CI pass; next public CI is needed.
+`operation_id` is canonical unpadded base64url for 16 bytes. The file must equal
+the grant. Template input is valid UTF-8, at most 32 KiB; mappings come from the
+grant, not from caller authority. At most one valid operation is attempted per
+capability. There is no durable cross-process retry ledger.
 
-`TestTextAdapterBounds` is an authored, gated root-only disposable-CI acceptance test. Its root parent registers each exact grant and launches a known UID-65534 child using encrypted fixtures, which constructs the real `NewTextAdapter`. It covers repeated and multiple exact references in one input; aggregate-secret overflow using one placeholder whose output remains below the output cap; 17 × 64 KiB expansion with a template below 32 KiB; accepted under-limit aggregate/output controls; and runner-context deadlines for the 60-second operation window, exact grant expiry, and caller deadline. Deadline checks inspect context values without sleeping. Child stdout/stderr are combined in a labelled 16 KiB-bounded diagnostic buffer that marks truncation; the parent kills and reaps the known child once on failure.
+Bounds: ≤16 refs, ≤1 MiB aggregate selected values, ≤1 MiB hydrated output, and
+a maximum 60-second operation lifetime bounded by grant expiry/caller deadline.
+SSH consumes transformed stdin; stdout/stderr are discarded.
 
-`scripts/ci/text_adapter_scoped.py` runs both `TestTextAdapterConnected` and `TestTextAdapterBounds` with the root gate enabled and rejects `SKIP`; both required `PASS` results are required by CI. `NOTRUN` means no validation claim: no tests, builds, parsers, formatters, or applications were executed during source authoring. Parent public scoped/full CI and source review remain required. An actual Clawwright caller is still task258; generic transport has no durable cross-process idempotency ledger, so uncertain operations must not be automatically retried.
+The response is status-only: `withheld`, `received` or `unknown`. `withheld`
+means no runner invocation. `received` requires complete input, successful remote
+exit and final checks; it is not adoption or storage-durability evidence.
+`unknown` includes effects followed by cancellation, a late failure or a lost
+reply. Never automatically retry or restart an uncertain operation.
+
+## Reverse copy and large-text streaming
+
+[Reverse v1](TEXT-REVERSE-COPY.md) runs only its independently approved read
+command, keeps raw stdout private, and returns a validated reference-only copy
+bounded to 1 MiB. It does not rewrite the source. The complete encoded reverse
+response has an independent 25,231,360-byte limit; clients validate the full body
+before exclusive publication.
+
+[V2 streaming](TEXT-STREAM-HTTP.md) uses Prepare/Execute source binding for forward
+delivery and a distinct reverse-copy listener. Bounded 32 KiB chunks, ≤64 MiB
+decoded input/output, ≤4096 data frames, ≤96 MiB wire, ≤16 refs and ≤1 MiB selected
+values are separate from v1's limits. Reverse output remains tentative until the
+complete counters, final checks and EOF permit exclusive local publication.
+Clawwright opts in through `--stream-references PATH`, one valued option on
+`deploy-text` or `backup-text`; no split flag pair or automatic protocol fallback.
+Restore uses a separate forward grant and captured exact reference-only text.
+
+## Literal mapping and trust
+
+Replacement is literal, leftmost-longest, nonoverlapping, single-pass and
+nonrecursive. Inserted output is not rescanned. Equal/ambiguous mappings, empty
+mapped values and unsupported marker-bearing values refuse. It is not automatic
+JSON/YAML quoting, URL decoding, a template language or a detector of unknown or
+derived secrets. Scope, mapping completeness, escaping, consumer compatibility
+and approved final target plaintext storage remain operator responsibilities.
+
+Root, recipient/same-UID processes, trusted runtime and kernel are trusted
+boundaries. Captured external refs retain exact versions; owner snapshot updates
+do not reinterpret them as latest. New snapshots do not extend old grants.
+See [paired acceptance](CLAWWRIGHT-TEXT-PAIR.md), [framing](TEXT-STREAM-FRAMING.md)
+and [HTTP APIs](TEXT-STREAM-HTTP.md) for source-specific evidence and exact limits.

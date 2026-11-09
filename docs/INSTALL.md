@@ -1,6 +1,46 @@
 # Verified installation and live-process updates
 
-The official `install.sh` and `install.ps1` handle both release downloads and reviewed local candidates. Use them directly for global or explicitly selected development destinations; there is no separate local-build update wrapper or second replacement algorithm. No installer stops or restarts existing processes, elevates itself, changes vault contents, or creates a release.
+The root `build.sh` (Linux/macOS) and `build.ps1` (Windows) build this source checkout and install the result. They delegate verified publication to the existing `install.sh` / `install.ps1`; there is one replacement/rollback implementation. The installers can also consume published releases or reviewed local artifacts directly. No script stops processes, elevates itself, changes a database or creates a release.
+
+## Build this checkout and install globally
+
+Requirements: a complete Git checkout, Git on PATH, the local Go toolchain required by `go.mod`, and permission to write the chosen installation directory. Linux/macOS also need `sha256sum` or `shasum`; Windows uses PowerShell. Supported native OS/CPU targets are Windows/Linux/macOS on amd64/arm64. The scripts deliberately ignore cross-compilation environment settings and use pure Go (`CGO_ENABLED=0`). They do not install or upgrade Go; module dependencies may be downloaded using Go's normal checksum verification.
+
+Windows, from a reviewed checkout:
+
+```powershell
+.\build.ps1
+```
+
+The default is `%LOCALAPPDATA%\Programs\ssjack\bin`, added to the **current user's** persistent PATH and current session. This makes `ssjack` available from other application directories, without Administrator rights. For a different directory:
+
+```powershell
+.\build.ps1 -InstallDir 'C:\Tools\ssjack\bin'
+.\build.ps1 -Help
+```
+
+`-NoPathUpdate` suppresses PATH changes (used by CI). An all-users protected destination requires an already authorized elevated terminal and separately provisioned machine PATH; the script never self-elevates or changes machine PATH.
+
+Linux/macOS:
+
+```sh
+sh ./build.sh
+sh ./build.sh --help
+```
+
+Default destination: `/usr/local/bin`, normally already on PATH. The caller needs write permission there; the script will not silently invoke sudo. Use an already authorized administrative context for a system-wide install, or choose a writable per-user bin directory:
+
+```sh
+sh ./build.sh --install-dir "$HOME/.local/bin"
+```
+
+Add that directory to PATH if necessary; the Unix installer prints guidance rather than rewriting shell startup files. The scripts locate the checkout from their own path, so invocation does not depend on your application working directory. Installation never selects or migrates that application's credential database.
+
+Both scripts build `./cmd/ssjack` with `-mod=readonly`, trim build paths, embed the checkout commit (with `-dirty` for modified sources), compute SHA-256 and pass the local candidate plus digest to the verified installer. They do not bump the project version or fetch a release; development identity can still say `dev`. A self-computed checksum checks transfer/publication consistency, not independent publisher trust: review the source and dependencies first.
+
+Only temporary compiled candidates are created; the scripts remove their own build staging on exit. A failed build never starts installation. Installer failure retains its normal rollback/failed-candidate evidence. Running processes keep their existing code; restart explicitly after updating. `build.sh --help` / `build.ps1 -Help` build and install nothing.
+
+CI invokes these real entry points on Linux/macOS and both Windows PowerShell and PowerShell Core, always with isolated temporary installation directories and no PATH update. Failure-path tests use a failing synthetic Go command to assert the previous installation is untouched. No real global installation is a CI fixture.
 
 ## Local CI artifact
 

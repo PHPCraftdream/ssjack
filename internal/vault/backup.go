@@ -122,19 +122,28 @@ func restoreVerified(ctx context.Context, destination string, replacement, previ
 	return replaceVerified(ctx, destination, replacement, previous, "before-restore")
 }
 
-func replaceVerified(ctx context.Context, destination string, replacement, previous []byte, label string) (string, error) {
+func replaceVerified(ctx context.Context, destination string, replacement, previous []byte, label string) (backup string, result error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if previous == nil {
 		return "", commit(destination, replacement, nil)
 	}
+	role, err := claimWriterRole(destination)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := role.close(); err != nil {
+			result = ErrWriterRole
+		}
+	}()
 	expected := sha256.Sum256(previous)
 	current, err := readEncoded(destination)
 	if err != nil || sha256.Sum256(current) != expected {
 		return "", errors.New("vault changed before restore; current file preserved")
 	}
-	backup, err := RecoveryPath(destination, label)
+	backup, err = RecoveryPath(destination, label)
 	if err != nil {
 		return "", err
 	}
@@ -144,7 +153,7 @@ func replaceVerified(ctx context.Context, destination string, replacement, previ
 	if err := ctx.Err(); err != nil {
 		return backup, err
 	}
-	if err := commit(destination, replacement, &expected); err != nil {
+	if err := commitWithRole(destination, replacement, &expected, role); err != nil {
 		return backup, fmt.Errorf("restore failed; previous encrypted snapshot retained: %w", err)
 	}
 	return backup, nil
