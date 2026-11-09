@@ -55,7 +55,10 @@ func (a *Archive) write(ctx context.Context, destination string, seal func([]byt
 	defer func() { clear(output.Bytes()) }()
 	writer := zip.NewWriter(&output)
 	defer writer.Close()
-	index := manifest{Format: "ssjack-owner-export-v1", Secrets: make(map[string]fileRecord)}
+	index := manifest{Format: formatName, Secrets: make(map[string]fileRecord)}
+	if a.mcp {
+		index.Format = formatNameV2
+	}
 	add := func(name string, value []byte) (fileRecord, error) {
 		if err := ctx.Err(); err != nil {
 			return fileRecord{}, err

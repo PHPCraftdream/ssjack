@@ -1,6 +1,7 @@
 package ownercommand
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 	"unicode/utf8"
@@ -95,7 +96,10 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 		if r.Scope == "" {
 			r.Scope = "all"
 		}
-		if r.Scope != "all" && r.Scope != "global" && r.Scope != "server" && r.Scope != "account" {
+		if r.Scope != "all" && r.Scope != "global" && r.Scope != "server" && r.Scope != "account" && r.Scope != "mcp" {
+			return ErrArguments
+		}
+		if r.Scope == "mcp" && r.Fields["MCP accounts"] == "" {
 			return ErrArguments
 		}
 		needsServer = r.Scope == "server" || r.Scope == "account"
@@ -114,6 +118,12 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 		return ErrArguments
 	}
 	if kind, ok := r.Fields["Authentication"]; ok && kind != "key" && kind != "password" {
+		return ErrArguments
+	}
+	if len(r.Fields["MCP accounts"]) > 4095 || validateMCPAccounts(r.Fields["MCP accounts"]) != nil {
+		return ErrArguments
+	}
+	if r.Scope == "mcp" && r.Fields["MCP accounts"] == "" {
 		return ErrArguments
 	}
 	if format, ok := r.Fields["Format"]; ok && format != "encrypted" && format != "plaintext" {
@@ -145,6 +155,25 @@ func (r Request) validate(spec Spec, seen map[string]bool) error {
 		default:
 			return ErrArguments
 		}
+	}
+	return nil
+}
+
+func validateMCPAccounts(value string) error {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 64 {
+		return ErrArguments
+	}
+	seen := make(map[string]bool, len(parts))
+	for _, id := range parts {
+		raw, err := hex.DecodeString(id)
+		if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != id || seen[id] {
+			return ErrArguments
+		}
+		seen[id] = true
 	}
 	return nil
 }

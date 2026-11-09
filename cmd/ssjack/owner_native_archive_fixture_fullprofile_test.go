@@ -18,6 +18,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownerfs"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -28,6 +29,12 @@ const nativeArchivePassword = "synthetic native archive vault password"
 const nativeArchiveValue = "synthetic native selected private application value"
 const nativeArchiveExcluded = "synthetic native excluded global application value"
 const nativeArchiveCredential = "synthetic native selected SSH credential"
+const nativeArchiveMCPBasic = "synthetic native MCP basic credential"
+const nativeArchiveMCPBearer = "synthetic-native-mcp-bearer-credential"
+const nativeArchiveMCPHeader = "synthetic native MCP custom header credential"
+const nativeArchiveMCPBearerHeader = "synthetic native MCP bearer header credential"
+const nativeArchiveMCPExcluded = "synthetic-native-excluded-mcp-credential"
+const nativeArchiveMCPExcludedHeader = "synthetic native excluded MCP header credential"
 
 func nativeArchiveMust(t *testing.T, err error) {
 	t.Helper()
@@ -103,6 +110,9 @@ func nativeArchiveDatabase(t *testing.T, ctx context.Context, store, id string, 
 		defer clear(target.Password)
 		server, err = v.AddServer("archive-source", "selected", target)
 		nativeArchiveMust(t, err)
+		profile, err := v.AccountProfile(server, "selected")
+		nativeArchiveMust(t, err)
+		nativeArchiveMCPDirectory(t, v, profile)
 		target.User = "excluded-user"
 		nativeArchiveMust(t, v.SetAccount(server, "excluded", target))
 	}
@@ -123,4 +133,35 @@ func nativeArchiveDatabase(t *testing.T, ctx context.Context, store, id string, 
 		}
 	})
 	return control, path, server
+}
+
+func nativeArchiveMCPDirectory(t *testing.T, v *vault.Vault, profile string) {
+	t.Helper()
+	directory := mcpdirectory.New()
+	server, err := directory.AddServer("archive-mcp", "https://archive.invalid/mcp")
+	nativeArchiveMust(t, err)
+	accounts := []mcpdirectory.Account{
+		{ServerID: server, Name: "public", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "none"}},
+		{ServerID: server, Name: "basic", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "basic", Username: "synthetic-mcp-user", Secret: []byte(nativeArchiveMCPBasic)}, Headers: []mcpdirectory.Header{{Name: "X-Archive-Key", Value: []byte(nativeArchiveMCPHeader)}}},
+		{ServerID: server, Name: "bearer", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: []byte(nativeArchiveMCPBearer)}, Headers: []mcpdirectory.Header{{Name: "X-Bearer-Key", Value: []byte(nativeArchiveMCPBearerHeader)}}},
+		{ServerID: server, Name: "not-selected", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "none"}},
+	}
+	var last []mcpdirectory.Binding
+	for i := range accounts {
+		id, err := directory.AddAccount(accounts[i])
+		nativeArchiveMust(t, err)
+		stored := directory.Accounts[id]
+		if accounts[i].Name != "not-selected" {
+			last = append(last, mcpdirectory.Binding{ServerID: server, AccountID: id, ServerRevision: directory.Servers[server].Revision, AccountRevision: stored.Revision})
+		}
+		accounts[i].Clear()
+	}
+	excludedServer, err := directory.AddServer("archive-excluded", "https://excluded.invalid/mcp")
+	nativeArchiveMust(t, err)
+	excludedAccount := mcpdirectory.Account{ServerID: excludedServer, Name: "excluded", Enabled: true, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: []byte(nativeArchiveMCPExcluded)}, Headers: []mcpdirectory.Header{{Name: "X-Excluded-Key", Value: []byte(nativeArchiveMCPExcludedHeader)}}}
+	_, err = directory.AddAccount(excludedAccount)
+	excludedAccount.Clear()
+	nativeArchiveMust(t, err)
+	directory.Last[profile] = last
+	v.RemoteMCP = directory
 }

@@ -2,6 +2,8 @@
 package ownerpacket
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -39,10 +41,11 @@ type SecretChange struct {
 	Value             []byte `json:"value"`
 }
 type Export struct {
-	Servers      map[string][]string `json:"servers"`
-	Global       bool                `json:"global"`
-	Destination  string              `json:"destination"`
-	Confirmation string              `json:"confirmation"`
+	Servers      map[string][]string    `json:"servers"`
+	RemoteMCP    []mcpdirectory.Binding `json:"remote_mcp,omitempty"`
+	Global       bool                   `json:"global"`
+	Destination  string                 `json:"destination"`
+	Confirmation string                 `json:"confirmation"`
 }
 type Link struct {
 	Directory string `json:"directory"`
@@ -114,6 +117,7 @@ type Preview struct {
 	Encrypted bool
 	Servers   []ServerMetadata
 	Secrets   []ImportSecret
+	RemoteMCP mcpdirectory.Metadata
 	Conflicts []Conflict
 }
 type ImportStatus struct {
@@ -179,7 +183,7 @@ func (c Command) valid() bool {
 		}
 		return c.Secret.Action == "add" || c.Secret.Action == "update" || c.Secret.Action == "remove"
 	case "export":
-		if bodies != 1 || c.Export == nil || len(c.Export.Servers) > 64 || c.Export.Destination == "" || len(c.Export.Destination) > 4096 {
+		if bodies != 1 || c.Export == nil || len(c.Export.Servers) > 64 || len(c.Export.RemoteMCP) > mcpdirectory.MaxAccounts || c.Export.Destination == "" || len(c.Export.Destination) > 4096 {
 			return false
 		}
 		if c.Export.Confirmation != "" && c.Export.Confirmation != "EXPORT PLAINTEXT" {
@@ -197,7 +201,23 @@ func (c Command) valid() bool {
 				}
 			}
 		}
-		return accounts <= 64 && (accounts != 0 || c.Export.Global)
+		if accounts > 64 {
+			return false
+		}
+		mcpAccounts, mcpServers, seen := map[string]bool{}, map[string]bool{}, map[string]bool{}
+		for _, binding := range c.Export.RemoteMCP {
+			serverID, serverErr := hex.DecodeString(binding.ServerID)
+			accountID, accountErr := hex.DecodeString(binding.AccountID)
+			if serverErr != nil || accountErr != nil || len(serverID) != 16 || len(accountID) != 16 || hex.EncodeToString(serverID) != binding.ServerID || hex.EncodeToString(accountID) != binding.AccountID || bytes.Equal(serverID, make([]byte, 16)) || bytes.Equal(accountID, make([]byte, 16)) || binding.ServerRevision == 0 || binding.AccountRevision == 0 || seen[binding.AccountID] {
+				return false
+			}
+			seen[binding.AccountID], mcpServers[binding.ServerID] = true, true
+			mcpAccounts[binding.AccountID] = true
+		}
+		if len(mcpServers) > mcpdirectory.MaxServers || (len(mcpAccounts) == 0 && accounts == 0 && !c.Export.Global) {
+			return false
+		}
+		return len(mcpAccounts) <= 64
 	case "link":
 		return bodies == 1 && c.Link != nil && len(c.Link.Directory) > 0 && len(c.Link.Directory) <= 4096 && len(c.Link.Master) > 0 && len(c.Link.Master) <= 16384
 	case "inspect-import":
@@ -243,18 +263,19 @@ func (r Reply) valid() bool {
 			return false
 		}
 	}
-	mcp := r.Metadata.RemoteMCP
-	if len(mcp.Servers) > mcpdirectory.MaxServers || len(mcp.Accounts) > mcpdirectory.MaxAccounts || len(mcp.Last) > 64 {
-		return false
-	}
-	for _, account := range mcp.Accounts {
-		if len(account.HeaderNames) > 4 {
+	for _, preview := range []mcpdirectory.Metadata{r.Metadata.RemoteMCP, r.Import.Preview.RemoteMCP} {
+		if len(preview.Servers) > mcpdirectory.MaxServers || len(preview.Accounts) > mcpdirectory.MaxAccounts || len(preview.Last) > 64 {
 			return false
 		}
-	}
-	for _, selected := range mcp.Last {
-		if len(selected) > mcpdirectory.MaxSelections {
-			return false
+		for _, account := range preview.Accounts {
+			if len(account.HeaderNames) > 4 {
+				return false
+			}
+		}
+		for _, selected := range preview.Last {
+			if len(selected) > mcpdirectory.MaxSelections {
+				return false
+			}
 		}
 	}
 	return r.Status.SavedRevision <= r.Status.Revision

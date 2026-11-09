@@ -117,10 +117,11 @@ confirmation.
    archive password or modified archive`, or `not a valid ssjack owner export`)
    and nothing is staged. Raw errors are never shown.
 3. A readable archive opens the preview screen. It shows only metadata: archive
-   kind, counts, each server with address and host-key fingerprints, each account
-   with login, authentication kind and usage, and each secret with its name,
-   scope (`global` or `server NAME`) and byte length. Secret values, passwords
-   and private keys are never displayed.
+   kind, counts, each SSH server with address and host-key fingerprints, each SSH
+   account with login, authentication kind and usage, each secret with its name,
+   scope (`global` or `server NAME`) and byte length, and MCP servers/accounts with
+   endpoint, authentication kind and enabled state. Secret values, passwords,
+   private keys, MCP tokens and custom-header values are never displayed.
 4. If the whole plan conflicts with the destination (see the coordinator
    document), the preview lists every conflict, offers no confirm item and
    states that there is no overwrite and no merge. Otherwise `[Confirm import…]`
@@ -166,6 +167,11 @@ through a real pseudo-terminal and a production-encrypted synthetic database:
 unlock, rename, cancel a credential form, exit, and reopen to verify persistence
 and preservation of both SSH accounts. The driver never prints its terminal
 transcript or places password bytes in arguments, environment variables or files.
+The selected native owner archive fixture (part of the existing dedicated public
+full-profile command) drives the shared owner form with explicit MCP account IDs,
+checks encrypted selected export and import, fresh MCP identities and revision-1
+records, selected `Last` remapping, unselected credentials, metadata-only preview
+and MCP-only selection. It adds no CI workflow and no executed result is claimed.
 The same full-profile run then reuses that database for a real-terminal connection
 acceptance (`scripts/ci/owner_connect.py`): a synthetic SSH server listens on
 `127.0.0.1` inside the test process with a fresh host key, and the fixture accounts
@@ -198,12 +204,16 @@ tests (`internal/ownertui`, `internal/vault`, `internal/ownerdb`).
 ## Current boundaries
 
 The Export menu captures a visible server/account/global scope and defaults to
-encrypted output. Plaintext requires a separate format choice and the exact
-`EXPORT PLAINTEXT` confirmation after its disclosure warning. Output is exclusive;
-Cancel does not queue export. See [owner export format](OWNER-EXPORT-FORMAT.md).
-Windows credential export uses a protected owner-only ACL checked before writing.
-Linked value collection retains the Linux-only backend boundary; selected values
-are never silently omitted on other platforms.
+encrypted output. It can also explicitly add MCP accounts from the revision-bound
+metadata snapshot; the form lists stable IDs, names, authentication types,
+endpoints and enabled flags, and blank leaves MCP unselected. The MCP-only scope
+requires an explicit account selection and does not add SSH accounts or values.
+Plaintext requires a separate format choice and the exact `EXPORT PLAINTEXT`
+confirmation after its disclosure warning. Output is exclusive; Cancel does not
+queue export. See [owner export format](OWNER-EXPORT-FORMAT.md). Windows credential
+export uses a protected owner-only ACL checked before writing. Linked value
+collection retains the Linux-only backend boundary; selected values are never
+silently omitted on other platforms.
 
 This implementation does not yet include
 multiline secret input or interactive

@@ -24,7 +24,7 @@ func Specs() []Spec {
 		{"add-secret", "secrets", map[string]string{"name": "Secret name"}},
 		{"edit-secret", "secret", nil},
 		{"remove-secret", "secret", nil},
-		{"export", "export", map[string]string{"destination": "Destination", "format": "Format"}},
+		{"export", "export", map[string]string{"destination": "Destination", "format": "Format", "mcp-accounts": "MCP accounts"}},
 		{"import", "database", map[string]string{"file": "Archive file"}},
 		{"link", "database", map[string]string{"directory": "Store directory"}},
 		{"pending", "database", map[string]string{"action": "Action"}},

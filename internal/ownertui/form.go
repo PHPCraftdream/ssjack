@@ -8,8 +8,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -23,14 +25,16 @@ type field struct {
 }
 
 type form struct {
-	planID      uint64
-	revision    uint64
-	action      string
-	fields      []field
-	focus       int
-	origin      location
-	exportScope *vault.ExportSelection
-	scopeLabel  string
+	planID             uint64
+	revision           uint64
+	action             string
+	fields             []field
+	focus              int
+	origin             location
+	exportScope        *vault.ExportSelection
+	exportScopeInvalid bool
+	exportMCPMetadata  mcpdirectory.Metadata
+	scopeLabel         string
 }
 
 func (f *form) clear() {
@@ -52,10 +56,12 @@ func (f *form) move(delta int) {
 
 func (f *form) insert(text string) {
 	if f.focus >= len(f.fields) || f.fields[f.focus].supplied || !utf8.ValidString(text) || strings.ContainsAny(text, "\x00\r\n\x1b") {
+		f.exportScopeInvalid = f.exportScopeInvalid || (f.focus < len(f.fields) && !f.fields[f.focus].supplied && f.fields[f.focus].label == "MCP accounts")
 		return
 	}
 	current := &f.fields[f.focus]
 	if len(text) > current.limit-len(current.value) {
+		f.exportScopeInvalid = f.exportScopeInvalid || current.label == "MCP accounts"
 		return
 	}
 	if cap(current.value) < current.limit {
@@ -104,17 +110,10 @@ func (m *Model) items() []item {
 	return navigation(m.at, m.metadata)
 }
 
-func previewCounts(p vault.ImportPreview) string {
-	accounts := 0
-	for _, server := range p.Servers {
-		accounts += len(server.Accounts)
-	}
-	return strconv.Itoa(len(p.Servers)) + " servers, " + strconv.Itoa(accounts) + " accounts, " + strconv.Itoa(len(p.Secrets)) + " secrets"
-}
-
 // importItems lists actions, conflicts, then read-only metadata rows. No row
 // ever carries a secret value, a credential or the archive password.
 func importItems(st ownerdb.ImportStatus) []item {
+	preview := st.Preview
 	cancel := item{label: "[Cancel import]", action: "import-cancel"}
 	if st.Phase != ownerdb.ImportStaged {
 		return []item{{label: "Import is no longer staged.", action: "info"}, cancel}
@@ -130,12 +129,12 @@ func importItems(st ownerdb.ImportStatus) []item {
 		result = append(result, cancel)
 	}
 	kind := "plaintext"
-	if st.Preview.Encrypted {
+	if preview.Encrypted {
 		kind = "encrypted"
 	}
 	info := func(label string) { result = append(result, item{label: label, action: "info"}) }
-	info("Archive: " + kind + " — " + previewCounts(st.Preview) + " (values hidden)")
-	for _, server := range st.Preview.Servers {
+	info("Archive: " + kind + " — " + ownermcp.ArchiveCounts(preview) + " (values hidden)")
+	for _, server := range preview.Servers {
 		keys := make([]string, 0, len(server.Fingerprints))
 		for _, fingerprint := range server.Fingerprints {
 			keys = append(keys, escaped(fingerprint))
@@ -151,7 +150,10 @@ func importItems(st ownerdb.ImportStatus) []item {
 			info("  Account " + escaped(a.Name) + " / login " + escaped(a.User) + " / " + escaped(a.Authentication) + " / usage " + escaped(a.Usage))
 		}
 	}
-	for _, secret := range st.Preview.Secrets {
+	for _, label := range ownermcp.ArchivePreview(preview.RemoteMCP) {
+		info(label)
+	}
+	for _, secret := range preview.Secrets {
 		scope := "global"
 		if secret.ServerID != "" {
 			scope = "server " + escaped(secret.ServerName)
@@ -201,7 +203,7 @@ func (m *Model) prepareImportForm(f *form) bool {
 		m.message = "Import is not ready to confirm."
 		return false
 	}
-	f.scopeLabel = "Archive: " + previewCounts(m.imp.Preview) + ". Imports servers, SSH credentials and secret values into this database; secret values are published to the linked application store as new versions. Existing entries are never overwritten."
+	f.scopeLabel = "Archive: " + ownermcp.ArchiveCounts(m.imp.Preview) + ". Imports servers, SSH credentials and secret values into this database; secret values are published to the linked application store as new versions. Existing entries are never overwritten."
 	f.fields = []field{input("Confirmation", "Type IMPORT to apply. Esc cancels; nothing was changed yet.", 16, false, "")}
 	return true
 }

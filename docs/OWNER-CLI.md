@@ -61,14 +61,19 @@ There is no global fallback or ambiguous account inference in owner commands.
 | `add-secret` | Explicit secret scope | `--name` |
 | `edit-secret` | Explicit secret scope and `--secret NAME` | Value entered only in the form |
 | `remove-secret` | Explicit secret scope and `--secret NAME` | Exact `REMOVE` entered only in the form |
-| `export` | `--scope all\|global\|server\|account` (default `all`) | `--destination`, `--format encrypted\|plaintext` |
+| `export` | `--scope all\|global\|server\|account\|mcp` (default `all`) | `--destination`, `--format encrypted\|plaintext`, `--mcp-accounts ID[,ID…]` |
 | `import` | Whole archive | `--file` |
 | `link` | Database | `--directory` |
 | `pending` | Database | `--action retry-db\|reconcile\|resume-draft\|cancel-draft\|resume-import\|abort-import` |
 
 Server/account export scopes require `--server`; account scope also requires
 `--account`. They include the selected server's local values but not global
-values. Global scope exports only global values. Default export is encrypted.
+values. Global scope exports only global values. `--mcp-accounts` explicitly adds
+selected stable MCP account IDs to any legacy scope; blank excludes MCP. MCP-only
+export requires `--scope mcp --mcp-accounts ID[,ID…]` and does not require an SSH
+server. The IDs are chosen from the shared form's revision-bound snapshot, which
+lists account IDs, names, authentication types, endpoints and enabled flags; there
+is no implicit all-MCP selection. Default export is encrypted.
 Plaintext still requires the disclosure warning and exact `EXPORT PLAINTEXT`
 in the form; a flag never substitutes for that human confirmation.
 
@@ -105,10 +110,11 @@ Reserved Authorization, routing, framing and MCP headers cannot be overridden.
 
 Display-only renames preserve remembered choices. Endpoint/policy/credential edits
 invalidate prior preselection; active sessions do not silently adopt edits. The
-launch checkbox selector and the supervised remote MCP bridge are
-implemented; native bridge acceptance remains task #318, and MCP-specific ZIP
-export/import remains separate integration work. Existing exports/imports do
-**not** include MCP credentials or remembered choices.
+launch checkbox selector and the supervised remote MCP bridge are implemented;
+native bridge acceptance remains task #318. Selected MCP archive export/import is
+integrated with the existing owner archive path; see the archive format and shared
+owner form documentation for selection, compatibility and import behavior. Existing
+MCP records are opt-in for export and are not included by default.
 
 ```sh
 ssjack owner add-mcp-server --name docs --url https://docs.example/mcp
@@ -126,6 +132,7 @@ ssjack owner edit-proxy --server production --type socks5 --address proxy.exampl
 ssjack owner add-secret --scope global --name api-token
 ssjack owner edit-secret --scope server --server production --secret api-token
 ssjack owner export --scope account --server production --account operator --destination owner.zip
+ssjack owner export --scope mcp --mcp-accounts 00112233445566778899aabbccddeeff --destination mcp.zip
 ssjack owner import --file owner.zip
 ssjack owner pending --action reconcile
 ssjack help owner edit-account

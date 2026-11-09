@@ -9,8 +9,11 @@ have their own acceptance gates; see `OWNER-NATIVE-STORAGE.md`.
 Runtime acceptance at `873308d` passed full CI `42176754203` and scoped CI
 `42176752481`. Actual keeper, CLI helper, interactive helper, human SSH and writer
 refusal processes passed on all three operating systems. Actual linked/unlinked
-text-consumer CLI acceptance remains Linux amd64 only. This does not deliver the
-remote MCP bridge, launch selector, output guard or MCP archive integration.
+text-consumer CLI acceptance remains Linux amd64 only. This does not deliver the remote MCP bridge, launch selector or output guard. MCP
+archive selection is explicitly integrated into the existing owner archive flow;
+that format and its CI coverage are described in
+[owner export format](application-store/OWNER-EXPORT-FORMAT.md). It remains separate
+from the runtime bridge and does not create grants or sessions.
 
 The coordinator foundation adds atomic expected-revision admission, a metadata
 snapshot tied to one revision, authenticated vault adoption without another KDF,
@@ -298,7 +301,11 @@ SSH/PTY/editor input/output and terminal-release behavior are unfiltered.
 
 Actual-process acceptance covers helper control and narrow human capture. Selected
 value export/import and its disclosure confirmations retain their own acceptance
-requirements; human capture is not a value getter.
+requirements; human capture is not a value getter. The selected production-KDF owner
+archive fixture exercises MCP account selection through the shared command form,
+encrypted archive reading/import into a fresh database and preservation of the
+keeper after helper detach. This archive fixture is separate from MCP runtime
+bridge acceptance and creates neither grants nor sessions.
 
 ## Protected text-consumer lifetime
 

@@ -3,6 +3,7 @@ package ownerpacket
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -10,6 +11,37 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 )
+
+func TestOwnerMCPExportBindingsAreBoundedExactAndExplicit(t *testing.T) {
+	revision := uint64(1)
+	base := Command{Operation: "export", Revision: &revision, Export: &Export{Destination: "synthetic.zip"}}
+	valid := mcpdirectory.Binding{ServerID: "00000000000000000000000000000001", AccountID: "00000000000000000000000000000002", ServerRevision: 3, AccountRevision: 4}
+	base.Export.RemoteMCP = []mcpdirectory.Binding{valid}
+	if !base.Valid() {
+		t.Fatal("explicit MCP-only export rejected")
+	}
+	oversized := make([]mcpdirectory.Binding, mcpdirectory.MaxAccounts+1)
+	for i := range oversized {
+		oversized[i] = valid
+		oversized[i].AccountID = fmt.Sprintf("%032x", i+3)
+	}
+	for _, bindings := range [][]mcpdirectory.Binding{
+		{{ServerID: "00000000000000000000000000000000", AccountID: valid.AccountID, ServerRevision: 3, AccountRevision: 4}},
+		{{ServerID: valid.ServerID, AccountID: "00000000000000000000000000000000", ServerRevision: 3, AccountRevision: 4}},
+		{{ServerID: valid.ServerID, AccountID: valid.AccountID, ServerRevision: 0, AccountRevision: 4}},
+		{{ServerID: valid.ServerID, AccountID: valid.AccountID, ServerRevision: 3, AccountRevision: 0}},
+		{valid, valid}, oversized,
+		{{ServerID: "unknown-server", AccountID: valid.AccountID, ServerRevision: 3, AccountRevision: 4}},
+		{{ServerID: "not-hex", AccountID: "also-not-hex", ServerRevision: 3, AccountRevision: 4}},
+		nil,
+	} {
+		command := base
+		command.Export = &Export{Destination: "synthetic.zip", RemoteMCP: bindings}
+		if command.Valid() {
+			t.Fatal("malformed, stale, duplicate or oversized MCP binding admitted")
+		}
+	}
+}
 
 func TestOwnerPacketFullProfile(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 type Item struct {
@@ -47,4 +48,29 @@ func Describe(serverID, accountID string, metadata mcpdirectory.Metadata) string
 		}
 	}
 	return label
+}
+
+func ArchivePreview(metadata mcpdirectory.Metadata) []string {
+	servers := make(map[string]string, len(metadata.Servers))
+	result := make([]string, 0, len(metadata.Servers)+len(metadata.Accounts))
+	for _, server := range metadata.Servers {
+		servers[server.ID] = server.Name
+		result = append(result, "MCP server "+strconv.Quote(server.Name)+" / "+strconv.Quote(server.URL)+" / enabled="+strconv.FormatBool(server.Enabled))
+	}
+	for _, account := range metadata.Accounts {
+		result = append(result, "  MCP account "+strconv.Quote(account.Name)+" / "+strconv.Quote(account.Authentication)+" / enabled="+strconv.FormatBool(account.Enabled)+" / server "+strconv.Quote(servers[account.ServerID]))
+	}
+	return result
+}
+
+func ArchiveCounts(preview vault.ImportPreview) string {
+	accounts := 0
+	for _, server := range preview.Servers {
+		accounts += len(server.Accounts)
+	}
+	counts := strconv.Itoa(len(preview.Servers)) + " servers, " + strconv.Itoa(accounts) + " accounts, " + strconv.Itoa(len(preview.Secrets)) + " secrets"
+	if len(preview.RemoteMCP.Servers) != 0 || len(preview.RemoteMCP.Accounts) != 0 {
+		counts += ", " + strconv.Itoa(len(preview.RemoteMCP.Servers)) + " MCP servers / " + strconv.Itoa(len(preview.RemoteMCP.Accounts)) + " MCP accounts"
+	}
+	return counts
 }

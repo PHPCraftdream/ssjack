@@ -16,6 +16,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 )
 
 var ErrArchive = errors.New("invalid or incomplete owner export")
@@ -24,33 +25,38 @@ type Archive struct {
 	database []byte
 	refs     map[string]string
 	values   map[string][]byte
+	mcp      bool
 	closed   bool
 }
 
 func New(database []byte) (*Archive, error) {
-	refs, err := parseDatabase(database)
+	refs, hasMCP, err := parseDatabase(database)
 	if err != nil {
 		return nil, err
 	}
-	return &Archive{database: append([]byte(nil), database...), refs: refs, values: make(map[string][]byte)}, nil
+	return &Archive{database: append([]byte(nil), database...), refs: refs, values: make(map[string][]byte), mcp: hasMCP}, nil
 }
 
 // parseDatabase is shared by the writer (New) and the reader so both enforce
-// the same database rules; it returns secret id -> placeholder reference.
-func parseDatabase(database []byte) (map[string]string, error) {
+// the same database rules; it returns secret id -> reference and MCP presence.
+func parseDatabase(database []byte) (map[string]string, bool, error) {
 	if len(database) == 0 || len(database) > keyfile.MaxPlaintext {
-		return nil, ErrArchive
+		return nil, false, ErrArchive
 	}
 	value, err := pure.LoadsStrict(string(database))
 	if err != nil {
-		return nil, ErrArchive
+		return nil, false, ErrArchive
 	}
 	fields, ok := value.(map[string]any)
 	if !ok {
-		return nil, ErrArchive
+		return nil, false, ErrArchive
 	}
-	if _, exists := fields["owner_store"]; exists {
-		return nil, ErrArchive
+	for field := range fields {
+		switch field {
+		case "version", "targets", "servers", "secrets", "remote_mcp":
+		default:
+			return nil, false, ErrArchive
+		}
 	}
 	var directory struct {
 		Version int `json:"version"`
@@ -59,19 +65,34 @@ func parseDatabase(database []byte) (map[string]string, error) {
 		} `json:"secrets"`
 	}
 	if err := pure.LoadsInto(string(database), &directory); err != nil || directory.Version != 2 || len(directory.Secrets) > 128 {
-		return nil, ErrArchive
+		return nil, false, ErrArchive
+	}
+	hasMCP := false
+	if raw, exists := fields["remote_mcp"]; exists {
+		if err := mcpdirectory.ValidateFields(raw); err != nil {
+			return nil, false, ErrArchive
+		}
+		var typed struct {
+			RemoteMCP mcpdirectory.Directory `json:"remote_mcp"`
+		}
+		if err := pure.LoadsInto(string(database), &typed); err != nil || typed.RemoteMCP.Validate() != nil {
+			typed.RemoteMCP.Clear()
+			return nil, false, ErrArchive
+		}
+		typed.RemoteMCP.Clear()
+		hasMCP = true
 	}
 	refs := make(map[string]string, len(directory.Secrets))
 	for id, binding := range directory.Secrets {
 		if !validID(id) {
-			return nil, ErrArchive
+			return nil, false, ErrArchive
 		}
 		if _, err := appstoreplaceholder.Parse([]byte(binding.Ref)); err != nil {
-			return nil, ErrArchive
+			return nil, false, ErrArchive
 		}
 		refs[id] = binding.Ref
 	}
-	return refs, nil
+	return refs, hasMCP, nil
 }
 
 func validID(id string) bool {
@@ -169,7 +190,7 @@ func parseManifest(raw []byte, encrypted bool) (*manifest, error) {
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return nil, ErrArchive
 	}
-	if m.Format != formatName || m.Database.Name != databaseName(encrypted) || len(m.Secrets) > maxSecrets {
+	if (m.Format != formatName && m.Format != formatNameV2) || m.Database.Name != databaseName(encrypted) || len(m.Secrets) > maxSecrets {
 		return nil, ErrArchive
 	}
 	for id, record := range m.Secrets {

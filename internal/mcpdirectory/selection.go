@@ -1,5 +1,23 @@
 package mcpdirectory
 
+func (metadata Metadata) MatchesBindings(bindings []Binding) bool {
+	servers, accounts := make(map[string]ServerMetadata, len(metadata.Servers)), make(map[string]AccountMetadata, len(metadata.Accounts))
+	for _, server := range metadata.Servers {
+		servers[server.ID] = server
+	}
+	for _, account := range metadata.Accounts {
+		accounts[account.ID] = account
+	}
+	for _, binding := range bindings {
+		server, serverOK := servers[binding.ServerID]
+		account, accountOK := accounts[binding.AccountID]
+		if !serverOK || !accountOK || account.ServerID != binding.ServerID || server.Revision != binding.ServerRevision || account.Revision != binding.AccountRevision {
+			return false
+		}
+	}
+	return true
+}
+
 // CurrentBinding is metadata, not authority to connect or obtain credentials.
 func (d *Directory) CurrentBinding(accountID string) (Binding, error) {
 	if d == nil {

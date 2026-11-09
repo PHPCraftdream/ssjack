@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -31,8 +32,13 @@ func TestLinkAndIntentCopiesRetainIdentityAndOwnPrivateBuffers(t *testing.T) {
 
 func TestPreviewCopyOwnsAllNestedDisplayBuffers(t *testing.T) {
 	original := vault.ImportPreview{Encrypted: true,
-		Servers:   []vault.ImportServer{{ID: "server", Name: "production", Address: "synthetic.invalid:22", Fingerprints: []string{"synthetic-pin"}, Accounts: []vault.ImportAccount{{Name: "main", User: "deploy", Authentication: "password", Usage: "both"}}}},
-		Secrets:   []vault.ImportSecret{{AliasID: "alias", Name: "token", ServerID: "server", ServerName: "production", Length: 11}},
+		Servers: []vault.ImportServer{{ID: "server", Name: "production", Address: "synthetic.invalid:22", Fingerprints: []string{"synthetic-pin"}, Accounts: []vault.ImportAccount{{Name: "main", User: "deploy", Authentication: "password", Usage: "both"}}}},
+		Secrets: []vault.ImportSecret{{AliasID: "alias", Name: "token", ServerID: "server", ServerName: "production", Length: 11}},
+		RemoteMCP: mcpdirectory.Metadata{
+			Servers:  []mcpdirectory.ServerMetadata{{ID: "mcp-server", Name: "remote", URL: "https://safe.invalid/mcp", Enabled: false, Revision: 9}},
+			Accounts: []mcpdirectory.AccountMetadata{{ID: "mcp-account", ServerID: "mcp-server", Name: "disabled", Authentication: "bearer", Enabled: false, CredentialSet: true, Revision: 10, HeaderNames: []string{"X-Api-Key"}}},
+			Last:     map[string][]mcpdirectory.Binding{"profile": {{ServerID: "mcp-server", AccountID: "mcp-account", ServerRevision: 9, AccountRevision: 10}}},
+		},
 		Conflicts: []vault.ImportConflict{{Kind: "synthetic", Subject: "conflict"}},
 	}
 	copied := Preview(original)
@@ -43,7 +49,10 @@ func TestPreviewCopyOwnsAllNestedDisplayBuffers(t *testing.T) {
 	copied.Servers[0].Accounts[0].User = "changed"
 	copied.Secrets[0].Length = 99
 	copied.Conflicts[0].Subject = "changed"
-	if original.Servers[0].Fingerprints[0] != "synthetic-pin" || original.Servers[0].Accounts[0].User != "deploy" || original.Secrets[0].Length != 11 || original.Conflicts[0].Subject != "conflict" {
+	copied.RemoteMCP.Servers[0].URL = "changed"
+	copied.RemoteMCP.Accounts[0].HeaderNames[0] = "changed"
+	copied.RemoteMCP.Last["profile"][0].AccountRevision = 99
+	if original.Servers[0].Fingerprints[0] != "synthetic-pin" || original.Servers[0].Accounts[0].User != "deploy" || original.Secrets[0].Length != 11 || original.Conflicts[0].Subject != "conflict" || original.RemoteMCP.Servers[0].URL != "https://safe.invalid/mcp" || original.RemoteMCP.Accounts[0].HeaderNames[0] != "X-Api-Key" || original.RemoteMCP.Last["profile"][0].AccountRevision != 10 {
 		t.Fatal("preview copy aliases caller-owned metadata")
 	}
 }
@@ -62,7 +71,7 @@ func TestCopyNilAndEmptySemanticsRemainUnchanged(t *testing.T) {
 		t.Fatal("empty intent lost its existing allocated-empty copy semantics")
 	}
 	preview := Preview(vault.ImportPreview{})
-	if preview.Servers == nil || preview.Secrets == nil || preview.Conflicts == nil {
+	if preview.Servers == nil || preview.Secrets == nil || preview.Conflicts == nil || preview.RemoteMCP.Servers != nil || preview.RemoteMCP.Accounts != nil || preview.RemoteMCP.Last != nil {
 		t.Fatal("empty preview lost its existing allocated-empty copy semantics")
 	}
 }

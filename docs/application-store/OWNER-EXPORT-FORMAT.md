@@ -29,6 +29,13 @@ Linked installation unlock material (`owner_store`) is refused rather than copie
 into this portable credential/value export. It is not needed to decode the actual
 exported values.
 
+When `remote_mcp` is absent, the manifest remains `ssjack-owner-export-v1` and the
+archive is compatible with legacy readers. A selected MCP directory is represented
+in the same validated version-2 database record; its manifest is
+`ssjack-owner-export-v2`. Readers bind this capability version to actual directory
+presence, and a legacy reader refuses v2 rather than dropping MCP metadata. Vault
+schema remains version 2; this archive distinction is not a database migration.
+
 The builder requires an exact reference match for every value and refuses missing,
 extra, duplicate or oversized inputs. It owns copies of its inputs and clears
 owned buffers on close, best-effort within the trusted Go runtime. No claim of
@@ -75,10 +82,11 @@ Owner import builds on this reader; see
 
 The separate plaintext operation requires the exact local confirmation
 `EXPORT PLAINTEXT`. It uses the same final ZIP representation without `.ktav`
-suffixes (the database entry is `database.ktav`); these are actual plaintext credential and value files inside the
-explicit final artifact. This is not the default operation. The eventual CLI must
-show selected scope and a disclosure warning before accepting that confirmation.
-It must never accept this approval through a model-facing call.
+suffixes (the database entry is `database.ktav`); these are actual plaintext
+credential and value files inside the explicit final artifact. This is not the
+default operation. The trusted owner form shows the selected scope and a disclosure
+warning before accepting that confirmation. It must never accept this approval
+through a model-facing call.
 
 ## Publication boundary
 
@@ -94,12 +102,18 @@ runtimes refuse before publication. Linked application-store collection still
 requires its existing supported Linux runtime; unsupported platforms never omit
 selected values to produce a credential-only artifact silently.
 
-The session API prepares an opaque export plan from explicit server/account IDs
-and an explicit global-secret selection. It returns reference metadata only;
-selected credential buffers and the cached sealing key have no getter. The plan
-refuses pending/unsaved database state and refuses publication after the captured
-revision changes or the session closes. Encrypted publication reuses the retained
-authenticated key; it does not run another unlock during export.
+The session API prepares an opaque export plan from explicit server/account IDs,
+an explicit global-secret selection and revision-bound MCP account bindings. MCP
+selection is opt-in; legacy scopes do not select remote MCP implicitly. MCP-only
+selection is valid without SSH accounts or global values. The plan includes only
+selected MCP servers and accounts, and retains a remembered `Last` binding only
+when it is selected, enabled and still matches its captured revisions for an
+exported SSH profile. An MCP-only archive has no SSH profile context and therefore
+no `Last` bindings. The plan returns reference metadata only; selected credential
+buffers and the cached sealing key have no getter. It refuses pending/unsaved
+database state and publication after the captured revision changes or the session
+closes. Encrypted publication reuses the retained authenticated key; it does not run
+another unlock during export.
 
 The owner coordinator queues export through its existing single worker and waits
 for a saved, unchanged database snapshot. Selected values are copied privately
@@ -109,17 +123,35 @@ anchor/history state are checked before and after collection. Collection failure
 closes the plan, so partial or stale copies cannot later be published.
 
 The explicit owner menu offers all contents, one server, one account plus that
-server's secrets, or global values only. The scope is captured before Apply,
-encrypted format is the default, and plaintext requires a visible warning and
-`EXPORT PLAINTEXT`. Cancel never queues export. Completion waits for the worker;
-errors require inspection of the selected destination, not an automatic replay.
-Exports do not rewrite the source database or create a new application-store
-snapshot. They describe the authenticated captured selection, not a claim of
-future latest-state freshness.
+server's secrets, global values only or explicitly selected MCP accounts (including
+MCP-only). The shared form lists stable MCP account IDs, names, authentication
+types, endpoints and enabled flags from the captured metadata snapshot; its MCP
+account field is blank by default. `owner export --mcp-accounts ID[,ID…]` uses that
+same form and validates the IDs against the snapshot; `--scope mcp` requires at
+least one explicit MCP account. Existing all/server/account/global scopes and
+selection behavior remain unchanged, with optional MCP accounts. The scope is
+captured before Apply, encrypted format is the default, and plaintext requires a
+visible warning and `EXPORT PLAINTEXT`. Cancel never queues export. Completion
+waits for the worker; errors require inspection of the selected destination, not an
+automatic replay. Exports do not rewrite the source database or create a new
+application-store snapshot. They describe the authenticated captured selection,
+not a claim of future latest-state freshness.
+
+Import preview includes MCP server/account metadata only: names, endpoints,
+authentication kinds and enabled state, never credentials or custom-header values.
+Imports assign fresh MCP server and account IDs at revision 1 and remap only
+selected, current, enabled `Last` bindings whose SSH profile is also selected.
+MCP-only imports do not create an SSH context. Existing SSH identities preserve
+their legacy imported IDs. Name, endpoint, ID and limit conflicts refuse the whole
+import; the importer does not merge or overwrite. No grants or runtime sessions are
+created by archive import.
 
 Full CI helpers cover actual sealed credentials, wrong-password rejection and
 private app-store value collection, plus plaintext export and overwrite refusal.
-Production-profile acceptance also imports both archive kinds into fresh
-databases (see the coordinator document). Existing keyfile tools can still decode
-each authenticated container; the Ktav directory entry retains the ordinary v2
-database shape.
+Production-profile acceptance also imports encrypted and plaintext archives into
+fresh databases (see the coordinator document). The selected native archive
+acceptance exercises the command/form path with explicit MCP account IDs, encrypted
+MCP round-trip, unselected-record exclusion, credential/header custody, fresh IDs,
+revision-1 imports, selected `Last` closure, MCP-only archives and metadata-only
+preview. Its test name remains selected by the existing dedicated public full-KDF
+CI command.

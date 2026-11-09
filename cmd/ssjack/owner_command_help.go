@@ -33,11 +33,11 @@ func ownerHelpEntries() []commandHelp {
 		case "secret":
 			scope = "Requires --secret NAME and --scope global, or --scope server --server NAME. No scope fallback."
 		case "export":
-			scope = "--scope all (default), global, server or account; server/account scopes require --server NAME, account also requires --account NAME. Server/account exports include server-local values, never global fallback. Plaintext requires EXPORT PLAINTEXT in the form."
+			scope = "--scope all (default), global, server, account or mcp; server/account scopes require --server NAME, account also requires --account NAME. --scope mcp requires explicit --mcp-accounts ID[,ID...]. MCP account IDs are listed in the shared form with names, authentication types and endpoints. Other scopes can combine their SSH/app selection with --mcp-accounts; blank excludes MCP. Server/account exports include server-local values, never global fallback. Plaintext requires EXPORT PLAINTEXT in the form."
 		}
 		details := boundary + " " + scope + " Metadata options: " + strings.Join(options, ", ") + "."
 		if strings.HasPrefix(spec.Scope, "mcp-") {
-			details += " MCP tokens/passwords/header values are hidden terminal-only input. Primary credential decisions are keep (unchanged authentication/username), replace (new secret), or clear (none with empty username/secret). Remove requires REMOVE. No network requests, session launch or active-session adoption. MCP records are not included in owner ZIP exports/imports yet."
+			details += " MCP tokens/passwords/header values are hidden terminal-only input. Primary credential decisions are keep (unchanged authentication/username), replace (new secret), or clear (none with empty username/secret). Remove requires REMOVE. No network requests, session launch or active-session adoption. Explicit MCP account selections are included in archive preview/export; no implicit all-MCP selection."
 		}
 		if spec.Action == "import" {
 			details += " Archive password is hidden. Inspection always precedes metadata preview and exact IMPORT confirmation. A partial import is not success. Remaining plans are RAM-only in the coordinator; coordinator restart does not restore them. Helper disconnect drops only no-effect state; retained partial effects require explicit recovery against the displayed revision and PlanID."
@@ -48,7 +48,11 @@ func ownerHelpEntries() []commandHelp {
 		if spec.Action == "edit-proxy" {
 			details += " --type direct|socks5|http; address is host:port, not a URL. Proxy password is hidden; proxy-hop authentication is unencrypted. No direct fallback."
 		}
-		result = append(result, commandHelp{"owner " + spec.Action, "ssjack [--vault FILE] owner " + spec.Action + " [OPTIONS]", "Run " + spec.Action + " through the shared owner form.", details, []string{"ssjack help owner " + spec.Action}})
+		examples := []string{"ssjack help owner " + spec.Action}
+		if spec.Action == "export" {
+			examples = append(examples, "ssjack owner export --scope mcp --mcp-accounts ACCOUNT_ID[,ACCOUNT_ID...] --destination mcp.zip")
+		}
+		result = append(result, commandHelp{"owner " + spec.Action, "ssjack [--vault FILE] owner " + spec.Action + " [OPTIONS]", "Run " + spec.Action + " through the shared owner form.", details, examples})
 	}
 	return result
 }

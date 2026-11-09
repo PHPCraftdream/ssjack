@@ -11,6 +11,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -20,10 +21,6 @@ type ExportRequest struct {
 	PlaintextConfirmation string
 }
 
-func (m *Manager) Export(request ExportRequest) error { return m.export(nil, request) }
-func (m *Manager) ExportAt(expected uint64, request ExportRequest) error {
-	return m.export(&expected, request)
-}
 func (m *Manager) export(expected *uint64, request ExportRequest) error {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("owner export requires a supported private-file runtime")
@@ -31,7 +28,7 @@ func (m *Manager) export(expected *uint64, request ExportRequest) error {
 	if request.Destination == "" || len(request.Destination) > 4096 || strings.ContainsAny(request.Destination, "\x00\r\n") || (request.PlaintextConfirmation != "" && request.PlaintextConfirmation != "EXPORT PLAINTEXT") {
 		return errors.New("invalid owner export destination or plaintext confirmation")
 	}
-	if len(request.Selection.Servers) > 64 || (len(request.Selection.Servers) == 0 && !request.Selection.GlobalSecrets) {
+	if len(request.Selection.Servers) > 64 || (len(request.Selection.Servers) == 0 && !request.Selection.GlobalSecrets && len(request.Selection.RemoteMCP) == 0) || request.Selection.Validate() != nil {
 		return errors.New("select an explicit bounded export scope")
 	}
 	owned := request
@@ -42,10 +39,17 @@ func (m *Manager) export(expected *uint64, request ExportRequest) error {
 		}
 		owned.Selection.Servers[id] = append([]string(nil), accounts...)
 	}
+	owned.Selection.RemoteMCP = append([]mcpdirectory.Binding(nil), request.Selection.RemoteMCP...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil {
 		return ErrPending
+	}
+	if len(owned.Selection.RemoteMCP) != 0 {
+		metadata, status, _, err := m.db.MetadataSnapshot()
+		if err != nil || (expected != nil && status.Revision != *expected) || status.Pending || status.Err != nil || !metadata.RemoteMCP.MatchesBindings(owned.Selection.RemoteMCP) {
+			return errors.New("selected remote MCP export records changed")
+		}
 	}
 	return m.admit(expected, func() error {
 		m.exportRequest, m.busy = &owned, true

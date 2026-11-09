@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
@@ -38,6 +39,7 @@ type ImportPreview struct {
 	Encrypted bool
 	Servers   []ImportServer
 	Secrets   []ImportSecret
+	RemoteMCP mcpdirectory.Metadata
 	// Conflicts holds only archive-intrinsic problems (value-unsupported);
 	// Session.ImportConflicts returns the complete set including these.
 	Conflicts []ImportConflict
@@ -55,6 +57,7 @@ type OwnerImport struct {
 	encrypted bool
 	servers   map[string]Server
 	targets   map[string]Target
+	remoteMCP *mcpdirectory.Directory
 	secrets   []importSecret // preview order
 	closed    bool
 }
@@ -98,6 +101,13 @@ func ParseOwnerImport(opened *ownerarchive.Opened) (*OwnerImport, error) {
 	for id, target := range parsed.Targets {
 		result.targets[id] = ownTarget(target)
 	}
+	if parsed.RemoteMCP != nil {
+		result.remoteMCP, err = remapImportedMCP(parsed.RemoteMCP, result.targets)
+		if err != nil {
+			result.Close()
+			return nil, ErrImportInvalid
+		}
+	}
 	for _, id := range ids {
 		value, exists := opened.Value(id)
 		if !exists || len(value) > maxImportValue {
@@ -129,6 +139,9 @@ func (i *OwnerImport) Preview() ImportPreview {
 		return preview
 	}
 	preview.Encrypted = i.encrypted
+	if i.remoteMCP != nil {
+		preview.RemoteMCP = i.remoteMCP.Metadata()
+	}
 	for id, server := range i.servers {
 		entry := ImportServer{ID: id, Name: server.Name, Fingerprints: []string{}}
 		for name, profile := range server.Accounts {
@@ -201,5 +214,7 @@ func (i *OwnerImport) Close() {
 	for _, secret := range i.secrets {
 		clear(secret.value)
 	}
+	i.remoteMCP.Clear()
+	i.remoteMCP = nil
 	i.secrets, i.servers, i.closed = nil, nil, true
 }

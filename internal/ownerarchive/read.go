@@ -17,12 +17,13 @@ import (
 var ErrAuthentication = errors.New("owner archive authentication failed")
 
 const (
-	formatName  = "ssjack-owner-export-v1"
-	maxSecrets  = 128
-	maxEntries  = maxSecrets + 2
-	maxValue    = 16384
-	maxPath     = 4096
-	maxPassword = 16 * 1024
+	formatName   = "ssjack-owner-export-v1"
+	formatNameV2 = "ssjack-owner-export-v2"
+	maxSecrets   = 128
+	maxEntries   = maxSecrets + 2
+	maxValue     = 16384
+	maxPath      = 4096
+	maxPassword  = 16 * 1024
 )
 
 // (128 values + database + manifest) * keyfile.MaxSize is about 32.5 MiB;
@@ -167,8 +168,8 @@ func read(ctx context.Context, data []byte, unlock unlockFunc) (*Opened, error) 
 	if o.database, err = load(m.Database); err != nil {
 		return nil, err
 	}
-	refs, err := parseDatabase(o.database)
-	if err != nil || len(refs) != len(m.Secrets) {
+	refs, hasMCP, err := parseDatabase(o.database)
+	if err != nil || len(refs) != len(m.Secrets) || (m.Format == formatNameV2) != hasMCP {
 		return nil, ErrArchive
 	}
 	for id, record := range m.Secrets {

@@ -18,7 +18,7 @@ func TestExportFormScopeAndSecretFieldMaskingAndBounds(t *testing.T) {
 	m := testModel(b)
 	m.at = location{screen: accountScreen, server: "server", account: "deploy"}
 	m.openForm("export")
-	check(t, m.form == nil || m.form.exportScope.GlobalSecrets || len(m.form.exportScope.Servers["server"]) != 1 || m.form.exportScope.Servers["server"][0] != "deploy" || string(m.form.fields[1].value) != "encrypted" || !strings.Contains(m.View().Content, "WARNING"), "export form did not expose an exact encrypted-default scope")
+	check(t, m.form == nil || m.form.exportScope.GlobalSecrets || len(m.form.exportScope.Servers["server"]) != 1 || m.form.exportScope.Servers["server"][0] != "deploy" || len(m.form.fields) != 4 || string(m.form.fields[1].value) != "encrypted" || !strings.Contains(m.View().Content, "WARNING") || !strings.Contains(m.form.scopeLabel, "MCP accounts"), "export form did not expose an exact encrypted-default scope")
 	m.metadata.Servers[0].Accounts[0].Name = "changed-after-open"
 	check(t, m.form.exportScope.Servers["server"][0] != "deploy", "open export scope borrowed mutable metadata")
 	fill(m, "synthetic-export.zip", "plaintext")

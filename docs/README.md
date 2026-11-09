@@ -30,7 +30,7 @@ opening a database; global flags precede commands.
 | Register finite Clawwright operations | `--clawwright-directory DIR [route options] run HARNESS` | [Application transport](APP-TRANSPORT.md) |
 | Provision/unlock a separate secret-store installation | `appstore setup`, `put`, `inspect`, `unlock` | [Store entry](application-store/ENTRY.md) |
 | Edit named application-secret values | Link secret store, then Global secrets / Server secrets | [Owner editor](application-store/OWNER-EDITOR.md), [coordinator](application-store/OWNER-COORDINATOR.md) |
-| Export selected credentials/settings/actual values | Export menu: all/server/account/global scope | [Archive format](application-store/OWNER-EXPORT-FORMAT.md) |
+| Export selected credentials/settings/actual values | Export menu: all/server/account/global plus explicit MCP accounts | [Archive format](application-store/OWNER-EXPORT-FORMAT.md) |
 | Import an owner export without overwriting entries | Import menu → inspect → preview → exact `IMPORT` | [Import lifecycle](application-store/OWNER-TUI.md#owner-import) |
 | Hydrate bounded selected text | Root `text-adapter register`, non-root `serve` | [Text adapter v1](application-store/TEXT-ADAPTER.md) |
 | Back up a reference-only selected copy | Root `register-reverse`, non-root `serve` | [Reverse copy v1](application-store/TEXT-REVERSE-COPY.md) |
@@ -58,8 +58,11 @@ project-local UI plugin when supported. [UI source and compatibility](../plugins
   abort does not undo published entries, and full-plan resume after restart is
   not provided. See [coordinator](application-store/OWNER-COORDINATOR.md).
 - **Import:** existing encrypted or deliberate plaintext export ZIPs; strict
-  bounds; metadata-only preview; no silent merge/overwrite; fresh destination refs.
-  Unlinked stores and unsupported values refuse instead of dropping selected data.
+  bounds; metadata-only preview; no silent merge/overwrite; fresh destination refs
+  and MCP identities. MCP directories use archive manifest v2 while legacy archives
+  without MCP retain v1; vault schema remains v2. MCP selection is explicit and
+  opt-in; older archive readers refuse MCP-containing archives. Unlinked stores and
+  unsupported selected values refuse rather than silently dropping data.
 - **MCP:** full `remote_*` / registered `app_*` can expose command output. They are
   not restricted declarative execution or universal secret redaction.
 - **Delivery:** exact refs and finite grants, separate direction/version scopes,

@@ -4,6 +4,7 @@ package ownerdispatch
 import (
 	"context"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/owneredit"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
@@ -59,7 +60,7 @@ func (d *Dispatcher) route(ctx context.Context, c *ownerpacket.Command) error {
 		return d.manager.LinkAt(revision, c.Link.Directory, c.Link.Master)
 	case "export":
 		return d.manager.ExportAt(revision, ownerdb.ExportRequest{
-			Selection:   vault.ExportSelection{Servers: c.Export.Servers, GlobalSecrets: c.Export.Global},
+			Selection:   vault.ExportSelection{Servers: c.Export.Servers, GlobalSecrets: c.Export.Global, RemoteMCP: append([]mcpdirectory.Binding(nil), c.Export.RemoteMCP...)},
 			Destination: c.Export.Destination, PlaintextConfirmation: c.Export.Confirmation,
 		})
 	case "inspect-import":

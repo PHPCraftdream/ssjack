@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
@@ -66,7 +67,7 @@ func TestRemoteMutationsUseClosedCommandsAndImmutableRevision(t *testing.T) {
 	}
 	change := vault.OwnerChange{Action: "add", AliasID: "alias", Name: "token", ServerID: "server", ObjectID: "object", PreviousReference: "previous", MediaType: "text/plain", Value: []byte("synthetic private value")}
 	directory := ownerpacket.DirectoryChange{Action: "rename-server", ServerID: "server", Fields: [][]byte{[]byte("changed")}}
-	export := ownerdb.ExportRequest{Selection: vault.ExportSelection{Servers: map[string][]string{"server": {"main"}}, GlobalSecrets: true}, Destination: "synthetic.zip", PlaintextConfirmation: "EXPORT PLAINTEXT"}
+	export := ownerdb.ExportRequest{Selection: vault.ExportSelection{Servers: map[string][]string{"server": {"main"}}, GlobalSecrets: true, RemoteMCP: []mcpdirectory.Binding{{ServerID: "01010101010101010101010101010101", AccountID: "02020202020202020202020202020202", ServerRevision: 3, AccountRevision: 4}}}, Destination: "synthetic.zip", PlaintextConfirmation: "EXPORT PLAINTEXT"}
 	cases := []struct {
 		call func(*Remote) error
 		want ownerpacket.Command
@@ -74,7 +75,7 @@ func TestRemoteMutationsUseClosedCommandsAndImmutableRevision(t *testing.T) {
 		{func(b *Remote) error { return b.ApplyDirectory(directory) }, ownerpacket.Command{Operation: "directory", Directory: &directory}},
 		{func(b *Remote) error { return b.Submit(change) }, ownerpacket.Command{Operation: "secret", Secret: &ownerpacket.SecretChange{Action: change.Action, AliasID: change.AliasID, Name: change.Name, ServerID: change.ServerID, ObjectID: change.ObjectID, PreviousReference: change.PreviousReference, MediaType: change.MediaType, Value: change.Value}}},
 		{func(b *Remote) error { return b.Link("synthetic-store", []byte("synthetic-master")) }, ownerpacket.Command{Operation: "link", Link: &ownerpacket.Link{Directory: absolute("synthetic-store"), Master: []byte("synthetic-master")}}},
-		{func(b *Remote) error { return b.Export(export) }, ownerpacket.Command{Operation: "export", Export: &ownerpacket.Export{Servers: export.Selection.Servers, Global: true, Destination: absolute(export.Destination), Confirmation: export.PlaintextConfirmation}}},
+		{func(b *Remote) error { return b.Export(export) }, ownerpacket.Command{Operation: "export", Export: &ownerpacket.Export{Servers: export.Selection.Servers, RemoteMCP: append([]mcpdirectory.Binding(nil), export.Selection.RemoteMCP...), Global: true, Destination: absolute(export.Destination), Confirmation: export.PlaintextConfirmation}}},
 		{func(b *Remote) error { return b.InspectImport("synthetic.zip", []byte("synthetic-password")) }, ownerpacket.Command{Operation: "inspect-import", Inspect: &ownerpacket.Inspect{Path: absolute("synthetic.zip"), Password: []byte("synthetic-password")}}},
 		{func(b *Remote) error { return b.ConfirmImport() }, ownerpacket.Command{Operation: "confirm-import"}},
 		{func(b *Remote) error { return b.ResumeImport() }, ownerpacket.Command{Operation: "recovery", Recovery: "resume-import"}},

@@ -146,7 +146,7 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	case secretScreen:
 		return []item{{label: "[Change secret value]", action: "edit-secret"}, {label: "[Remove secret]", action: "remove-secret"}}
 	case mcpDirectoryScreen, mcpServerScreen, mcpAccountScreen:
-		return mcpItems(at, metadata)
+		return append(mcpItems(at, metadata), item{label: "Export selected MCP accounts", action: "export"})
 	}
 	return nil
 }
@@ -241,6 +241,9 @@ func (m *Model) ConfigureCommand(request ownercommand.Request) error {
 	}
 	if spec.Scope == "secrets" || spec.Scope == "secret" || request.Scope == "global" {
 		m.at.screen = secretsScreen
+	}
+	if request.Action == "export" && request.Scope == "mcp" {
+		m.at = location{screen: mcpDirectoryScreen}
 	}
 	if spec.Scope == "secret" {
 		for id, secret := range m.metadata.Secrets {

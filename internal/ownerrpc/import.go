@@ -34,6 +34,7 @@ func encodeImport(in ownerdb.ImportStatus) ownerpacket.ImportStatus {
 		Total: in.Total, DirectoryApplied: in.DirectoryApplied, ErrorCode: errorCode(in.Err),
 	}
 	out.Preview.Encrypted, out.Preview.Conflicts = in.Preview.Encrypted, encodeConflicts(in.Preview.Conflicts)
+	out.Preview.RemoteMCP = cloneMCP(in.Preview.RemoteMCP)
 	if in.Preview.Servers != nil {
 		out.Preview.Servers = make([]ownerpacket.ServerMetadata, 0, len(in.Preview.Servers))
 	}
@@ -62,6 +63,7 @@ func decodeImport(in ownerpacket.ImportStatus) ownerdb.ImportStatus {
 		Total: in.Total, DirectoryApplied: in.DirectoryApplied, Err: codeError(in.ErrorCode),
 	}
 	out.Preview.Encrypted, out.Preview.Conflicts = in.Preview.Encrypted, decodeConflicts(in.Preview.Conflicts)
+	out.Preview.RemoteMCP = cloneMCP(in.Preview.RemoteMCP)
 	if in.Preview.Servers != nil {
 		out.Preview.Servers = make([]vault.ImportServer, 0, len(in.Preview.Servers))
 	}

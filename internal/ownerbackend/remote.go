@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownerrpc"
@@ -155,7 +156,7 @@ func (b *Remote) Link(directory string, master []byte) error {
 }
 func (b *Remote) Export(request ownerdb.ExportRequest) error {
 	return b.mutate(ownerpacket.Command{Operation: "export", Export: &ownerpacket.Export{
-		Servers: request.Selection.Servers, Global: request.Selection.GlobalSecrets,
+		Servers: request.Selection.Servers, RemoteMCP: append([]mcpdirectory.Binding(nil), request.Selection.RemoteMCP...), Global: request.Selection.GlobalSecrets,
 		Destination: request.Destination, Confirmation: request.PlaintextConfirmation,
 	}})
 }

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
@@ -29,6 +30,15 @@ const (
 	ConflictDirectoryVersion = "directory-version"
 	ConflictUnlinkedStore    = "unlinked-store"
 	ConflictValueUnsupported = "value-unsupported"
+	ConflictMCPServerID      = "mcp-server-id"
+	ConflictMCPServerName    = "mcp-server-name"
+	ConflictMCPServerURL     = "mcp-server-url"
+	ConflictMCPServerLimit   = "mcp-server-limit"
+	ConflictMCPAccountID     = "mcp-account-id"
+	ConflictMCPAccountName   = "mcp-account-name"
+	ConflictMCPAccountLimit  = "mcp-account-limit"
+	ConflictMCPLast          = "mcp-last-context"
+	ConflictMCPLastLimit     = "mcp-last-context-limit"
 )
 
 // ImportConflict is metadata only: Subject is a name or fixed text, never a value.
@@ -57,6 +67,56 @@ func importConflicts(state *Vault, i *OwnerImport) []ImportConflict {
 	}
 	if len(state.Secrets)+len(i.secrets) > 128 {
 		result = append(result, ImportConflict{Kind: ConflictSecretLimit, Subject: "128 secrets"})
+	}
+	if i.remoteMCP != nil {
+		destination := state.RemoteMCP
+		if destination == nil {
+			destination = mcpdirectory.New()
+		}
+		if len(destination.Servers)+len(i.remoteMCP.Servers) > mcpdirectory.MaxServers {
+			result = append(result, ImportConflict{Kind: ConflictMCPServerLimit, Subject: "32 remote MCP servers"})
+		}
+		if len(destination.Accounts)+len(i.remoteMCP.Accounts) > mcpdirectory.MaxAccounts {
+			result = append(result, ImportConflict{Kind: ConflictMCPAccountLimit, Subject: "64 remote MCP accounts"})
+		}
+		if len(destination.Last)+len(i.remoteMCP.Last) > 64 {
+			result = append(result, ImportConflict{Kind: ConflictMCPLastLimit, Subject: "64 remote MCP contexts"})
+		}
+		serverNames, serverURLs := make(map[string]bool), make(map[string]bool)
+		for _, server := range destination.Servers {
+			serverNames[server.Name], serverURLs[server.URL] = true, true
+		}
+		for id, server := range i.remoteMCP.Servers {
+			if _, exists := destination.Servers[id]; exists {
+				result = append(result, ImportConflict{Kind: ConflictMCPServerID, Subject: server.Name})
+			}
+			if serverNames[server.Name] {
+				result = append(result, ImportConflict{Kind: ConflictMCPServerName, Subject: server.Name})
+			}
+			if serverURLs[server.URL] {
+				result = append(result, ImportConflict{Kind: ConflictMCPServerURL, Subject: server.Name})
+			}
+			serverNames[server.Name] = true
+		}
+		accountNames := make(map[string]bool, len(destination.Accounts))
+		for _, account := range destination.Accounts {
+			accountNames[account.ServerID+"/"+account.Name] = true
+		}
+		for id, account := range i.remoteMCP.Accounts {
+			if _, exists := destination.Accounts[id]; exists {
+				result = append(result, ImportConflict{Kind: ConflictMCPAccountID, Subject: account.Name})
+			}
+			key := account.ServerID + "/" + account.Name
+			if accountNames[key] {
+				result = append(result, ImportConflict{Kind: ConflictMCPAccountName, Subject: account.Name})
+			}
+			accountNames[key] = true
+		}
+		for profile := range i.remoteMCP.Last {
+			if _, exists := destination.Last[profile]; exists {
+				result = append(result, ImportConflict{Kind: ConflictMCPLast, Subject: profile})
+			}
+		}
 	}
 	names := make(map[string]bool, len(state.Servers))
 	for _, server := range state.Servers {
@@ -145,7 +205,46 @@ func (s *Session) VerifyOwnerImportDirectory(i *OwnerImport) error {
 			return ErrImportChanged
 		}
 	}
+	if i.remoteMCP != nil {
+		if s.state.RemoteMCP == nil || !sameImportedMCP(s.state.RemoteMCP, i.remoteMCP) {
+			return ErrImportChanged
+		}
+	}
 	return nil
+}
+
+func sameImportedMCP(current, expected *mcpdirectory.Directory) bool {
+	if current == nil || expected == nil {
+		return false
+	}
+	for id, server := range expected.Servers {
+		if got, exists := current.Servers[id]; !exists || got != server {
+			return false
+		}
+	}
+	for id, account := range expected.Accounts {
+		if got, exists := current.Accounts[id]; !exists || !sameMCPAccount(got, account) {
+			return false
+		}
+	}
+	for profile, selected := range expected.Last {
+		if got, exists := current.Last[profile]; !exists || !slices.Equal(got, selected) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameMCPAccount(a, b mcpdirectory.Account) bool {
+	if a.ServerID != b.ServerID || a.Name != b.Name || a.Enabled != b.Enabled || a.Revision != b.Revision || a.Auth.Kind != b.Auth.Kind || a.Auth.Username != b.Auth.Username || !bytes.Equal(a.Auth.Secret, b.Auth.Secret) || len(a.Headers) != len(b.Headers) {
+		return false
+	}
+	for index := range a.Headers {
+		if a.Headers[index].Name != b.Headers[index].Name || !bytes.Equal(a.Headers[index].Value, b.Headers[index].Value) {
+			return false
+		}
+	}
+	return true
 }
 
 // ApplyOwnerImportDirectory merges servers and credentials in one Apply. It
@@ -155,7 +254,7 @@ func (s *Session) ApplyOwnerImportDirectory(i *OwnerImport) error {
 	if s == nil || !i.live() {
 		return ErrImportInvalid
 	}
-	if len(i.servers) == 0 {
+	if len(i.servers) == 0 && i.remoteMCP == nil {
 		conflicts, err := s.ImportConflicts(i)
 		if err != nil {
 			return err
@@ -179,6 +278,20 @@ func (s *Session) ApplyOwnerImportDirectory(i *OwnerImport) error {
 		}
 		for id, target := range i.targets {
 			candidate.Targets[id] = ownTarget(target)
+		}
+		if i.remoteMCP != nil {
+			if candidate.RemoteMCP == nil {
+				candidate.RemoteMCP = mcpdirectory.New()
+			}
+			for id, server := range i.remoteMCP.Servers {
+				candidate.RemoteMCP.Servers[id] = server
+			}
+			for id, account := range i.remoteMCP.Accounts {
+				candidate.RemoteMCP.Accounts[id] = ownMCPAccount(account)
+			}
+			for profile, selected := range i.remoteMCP.Last {
+				candidate.RemoteMCP.Last[profile] = append([]mcpdirectory.Binding{}, selected...)
+			}
 		}
 		return nil
 	})

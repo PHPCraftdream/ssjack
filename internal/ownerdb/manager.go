@@ -113,6 +113,11 @@ func (m *Manager) signal() {
 	m.changed = make(chan struct{})
 }
 
+func (m *Manager) Export(request ExportRequest) error { return m.export(nil, request) }
+func (m *Manager) ExportAt(expected uint64, request ExportRequest) error {
+	return m.export(&expected, request)
+}
+
 func (m *Manager) Metadata() (vault.DirectoryMetadata, error) { return m.db.Metadata() }
 
 // Edit is a trusted owner form callback, not a public model-facing getter.

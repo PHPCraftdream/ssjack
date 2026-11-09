@@ -34,6 +34,7 @@ func snapshotFixture() ownerdb.Snapshot {
 			Preview: vault.ImportPreview{Encrypted: true,
 				Servers:   []vault.ImportServer{{ID: "import-server", Name: "imported", Address: "import.invalid:22", Fingerprints: []string{"SHA256:import"}, Accounts: []vault.ImportAccount{{Name: "import-account", User: "import-user", Authentication: "key", Usage: "agent"}}, Proxy: proxy}},
 				Secrets:   []vault.ImportSecret{{AliasID: "import-alias", Name: "import-secret", ServerID: "import-server", ServerName: "imported", Length: 19}},
+				RemoteMCP: mcpdirectory.Metadata{Servers: []mcpdirectory.ServerMetadata{{ID: "preview-server", Name: "preview", URL: "https://preview.invalid/mcp", Enabled: false, Revision: 1}}, Accounts: []mcpdirectory.AccountMetadata{{ID: "preview-account", ServerID: "preview-server", Name: "disabled", Authentication: "bearer", Enabled: false, Revision: 1}}},
 				Conflicts: []vault.ImportConflict{{Kind: "intrinsic", Subject: "preview"}},
 			},
 			Conflicts: []vault.ImportConflict{{Kind: "destination", Subject: "current"}},
@@ -70,6 +71,8 @@ func mutateReply(r *ownerpacket.Reply) {
 	r.Import.Preview.Servers[0].Accounts[0].User = "changed"
 	r.Import.Preview.Servers[0].Fingerprints[0] = "changed"
 	r.Import.Preview.Secrets[0].Length = 99
+	r.Import.Preview.RemoteMCP.Servers[0].URL = "changed"
+	r.Import.Preview.RemoteMCP.Accounts[0].Name = "changed"
 	r.Import.Preview.Conflicts[0].Subject = "changed"
 	r.Import.Conflicts[0].Subject = "changed"
 }

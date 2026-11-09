@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -100,7 +101,8 @@ func TestClosedDispatcherUsesEveryPinnedManagerAPI(t *testing.T) {
 		{Operation: "directory", Directory: &ownerpacket.DirectoryChange{Action: "rename-server", ServerID: strings.Repeat("01", 16), Fields: [][]byte{[]byte("changed")}}},
 		{Operation: "secret", Secret: &ownerpacket.SecretChange{Action: "add", Name: "token", Value: []byte("synthetic private value")}},
 		{Operation: "link", Link: &ownerpacket.Link{Directory: "synthetic", Master: []byte("synthetic-master")}},
-		{Operation: "export", Export: &ownerpacket.Export{Global: true, Destination: "synthetic.zip"}},
+		{Operation: "export", Export: &ownerpacket.Export{Servers: map[string][]string{strings.Repeat("03", 16): {"main"}}, RemoteMCP: []mcpdirectory.Binding{{ServerID: strings.Repeat("01", 16), AccountID: strings.Repeat("02", 16), ServerRevision: 3, AccountRevision: 4}}, Global: true, Destination: "synthetic.zip"}},
+		{Operation: "export", Export: &ownerpacket.Export{Global: true, Destination: "legacy.zip"}},
 		{Operation: "inspect-import", Inspect: &ownerpacket.Inspect{Path: "synthetic.zip"}},
 		{Operation: "confirm-import", Plan: 17},
 		{Operation: "flush"},
@@ -134,7 +136,7 @@ func TestClosedDispatcherUsesEveryPinnedManagerAPI(t *testing.T) {
 		if command.Inspect != nil && (r.path != command.Inspect.Path || string(r.value) != string(command.Inspect.Password)) {
 			t.Fatal("dispatch changed the archive or private password")
 		}
-		if command.Export != nil && (!reflect.DeepEqual(r.export.Selection.Servers, command.Export.Servers) || r.export.Selection.GlobalSecrets != command.Export.Global || r.export.Destination != command.Export.Destination || r.export.PlaintextConfirmation != command.Export.Confirmation) {
+		if command.Export != nil && (!reflect.DeepEqual(r.export.Selection.Servers, command.Export.Servers) || !reflect.DeepEqual(r.export.Selection.RemoteMCP, command.Export.RemoteMCP) || r.export.Selection.GlobalSecrets != command.Export.Global || r.export.Destination != command.Export.Destination || r.export.PlaintextConfirmation != command.Export.Confirmation) {
 			t.Fatal("dispatch changed explicit export scope or confirmation")
 		}
 		if reply.ErrorCode != "stale" || r.action != wantAction || r.revision != wantRevision || r.plan != command.Plan || reply.Status.Revision != 42 || reply.Status.CipherDigest != ([32]byte{1}) {

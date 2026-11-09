@@ -48,7 +48,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 		if capture.Join(cleanup) != nil {
 			t.Error("native archive terminal output did not join")
 		}
-		for _, private := range []string{nativeArchivePassword, nativeArchiveMaster, nativeArchiveValue, nativeArchiveExcluded, nativeArchiveCredential} {
+		for _, private := range []string{nativeArchivePassword, nativeArchiveMaster, nativeArchiveValue, nativeArchiveExcluded, nativeArchiveCredential, nativeArchiveMCPBasic, nativeArchiveMCPBearer, nativeArchiveMCPHeader, nativeArchiveMCPBearerHeader, nativeArchiveMCPExcluded, nativeArchiveMCPExcludedHeader} {
 			if capture.Contains([]byte(private)) {
 				t.Error("native archive terminal disclosed private data")
 			}
@@ -66,8 +66,10 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 		if capture.Wait(lifetime, step.marker) != nil {
 			t.Fatalf("native archive command missed terminal barrier %q", step.marker)
 		}
-		_, err := terminal.Input.Write(step.value)
-		nativeArchiveMust(t, err)
+		if len(step.value) != 0 {
+			_, err := terminal.Input.Write(step.value)
+			nativeArchiveMust(t, err)
+		}
 	}
 	if terminal.Wait(lifetime) != nil {
 		t.Fatal("native archive command did not complete its explicit decision")

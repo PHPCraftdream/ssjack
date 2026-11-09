@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/owneredit"
 	"github.com/PHPCraftdream/ssjack/internal/ownermcp"
@@ -59,6 +61,11 @@ func (m *Model) prepareExportForm(f *form) error {
 		if accountCount == 0 {
 			return errForm
 		}
+	case mcpDirectoryScreen, mcpServerScreen, mcpAccountScreen:
+		f.scopeLabel = "Explicit MCP accounts only; none selected by default. Choose IDs from this displayed metadata snapshot."
+		if f.origin.screen == mcpServerScreen || f.origin.screen == mcpAccountScreen {
+			f.scopeLabel += "\nSelection may include other displayed MCP accounts across servers."
+		}
 	case secretsScreen:
 		if f.origin.server != "" {
 			return errForm
@@ -68,19 +75,83 @@ func (m *Model) prepareExportForm(f *form) error {
 	default:
 		return errForm
 	}
+	if len(selection.Servers) > 64 || accountCount > 64 {
+		return errForm
+	}
 	f.exportScope = &selection
-	f.scopeLabel += "\nRemote MCP credentials and preferences are not included."
+	f.exportMCPMetadata = cloneExportMCPMetadata(m.metadata.RemoteMCP)
+	f.scopeLabel += "\nAvailable MCP accounts (stable account ID | name | auth | endpoint | enabled):" + mcpAccountChoices(f.exportMCPMetadata)
+	if len(selection.Servers) == 0 && !selection.GlobalSecrets {
+		f.scopeLabel += "\nSelect at least one SSH account, global-secret scope or MCP account."
+	}
 	f.scopeLabel += "\nWARNING: plaintext exposes selected private keys, passwords and application values."
 	f.fields = []field{
 		input("Destination", "A new private ZIP file; no overwrite or plaintext staging.", 4096, false, ""),
 		input("Format", "encrypted (default), or plaintext after the disclosure warning.", 16, false, "encrypted"),
 		input("Confirmation", "For plaintext only, type EXPORT PLAINTEXT. Leave empty for encrypted export.", 32, false, ""),
+		input("MCP accounts", "Optional, explicit comma-separated stable account IDs from the list above; blank excludes MCP.", 4095, false, ""),
 	}
 	return nil
 }
 
+func cloneExportMCPMetadata(metadata mcpdirectory.Metadata) mcpdirectory.Metadata {
+	out := mcpdirectory.Metadata{}
+	out.Servers = append([]mcpdirectory.ServerMetadata(nil), metadata.Servers...)
+	out.Accounts = append([]mcpdirectory.AccountMetadata(nil), metadata.Accounts...)
+	return out
+}
+
+func mcpAccountChoices(metadata mcpdirectory.Metadata) string {
+	var out strings.Builder
+	servers := make(map[string]mcpdirectory.ServerMetadata, len(metadata.Servers))
+	for _, server := range metadata.Servers {
+		servers[server.ID] = server
+	}
+	for _, account := range metadata.Accounts {
+		server, ok := servers[account.ServerID]
+		if !ok {
+			continue
+		}
+		out.WriteString("\n  " + escaped(account.ID) + " | " + escaped(server.Name) + "/" + escaped(account.Name) + " | " + escaped(account.Authentication) + " | " + escaped(server.URL) + " | server=" + strconv.FormatBool(server.Enabled) + ", account=" + strconv.FormatBool(account.Enabled))
+	}
+	return out.String()
+}
+
+func explicitMCPBindings(value string, metadata mcpdirectory.Metadata) ([]mcpdirectory.Binding, error) {
+	if value == "" {
+		return nil, nil
+	}
+	ids := strings.Split(value, ",")
+	if len(ids) > mcpdirectory.MaxAccounts || strings.Join(ids, ",") != value {
+		return nil, errForm
+	}
+	servers := make(map[string]mcpdirectory.ServerMetadata, len(metadata.Servers))
+	for _, server := range metadata.Servers {
+		servers[server.ID] = server
+	}
+	accounts := make(map[string]mcpdirectory.AccountMetadata, len(metadata.Accounts))
+	for _, account := range metadata.Accounts {
+		accounts[account.ID] = account
+	}
+	result := make([]mcpdirectory.Binding, 0, len(ids))
+	seen, serverIDs := make(map[string]bool), make(map[string]bool)
+	for _, id := range ids {
+		account, ok := accounts[id]
+		server, serverOK := servers[account.ServerID]
+		if !ok || !serverOK || id == "" || seen[id] || server.Revision == 0 || account.Revision == 0 {
+			return nil, errForm
+		}
+		seen[id], serverIDs[account.ServerID] = true, true
+		result = append(result, mcpdirectory.Binding{ServerID: account.ServerID, AccountID: id, ServerRevision: server.Revision, AccountRevision: account.Revision})
+	}
+	if len(serverIDs) > mcpdirectory.MaxServers {
+		return nil, errForm
+	}
+	return result, nil
+}
+
 func (m *Model) performExport(f *form) error {
-	if f.exportScope == nil {
+	if f.exportScope == nil || f.exportScopeInvalid {
 		return errForm
 	}
 	format, confirmation := string(f.fields[1].value), string(f.fields[2].value)
@@ -93,6 +164,11 @@ func (m *Model) performExport(f *form) error {
 		return err
 	}
 	request := ownerdb.ExportRequest{Selection: *f.exportScope, Destination: string(f.fields[0].value), PlaintextConfirmation: confirmation}
+	bindings, err := explicitMCPBindings(string(f.fields[3].value), f.exportMCPMetadata)
+	if err != nil || (f.origin.screen >= mcpDirectoryScreen && f.origin.screen <= mcpAccountScreen && len(bindings) == 0) {
+		return errForm
+	}
+	request.Selection.RemoteMCP = bindings
 	if err := m.backend.Export(request); err != nil {
 		return err
 	}

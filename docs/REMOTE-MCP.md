@@ -10,9 +10,7 @@ per-launch stdio bridge. Empty choices persist without a launch or bridge.
 The Linux/amd64 startup-selector and consuming-bridge PTY test source is
 authored, but is not Windows/macOS acceptance and has not been run here. Task
 #357's supervised bridge/harness runtime is implemented in this tree; #318 is
-native bridge acceptance; #358 covers MCP-specific archives; #359 is the final
-gate. #317 remains incomplete. The existing `ssjack mcp` command retains its
-current session protocol.
+native bridge acceptance. Runtime work for #317/#357 was accepted in `6913e5f`; #318 remains native bridge acceptance, and #359 remains the final gate. The existing `ssjack mcp` command retains its current session protocol.
 
 ## Encrypted records
 
@@ -131,9 +129,10 @@ The startup known-literal output guard is not a parsed-result or diagnostic
 boundary: `--no-output-filter` explicitly disables only that guard for a trusted
 terminal, and human SSH sessions remain unfiltered. The prepared guard and launch
 are consumed by the supervised bridge runtime. Task #357's supervised
-bridge/harness integration is implemented here; #318 native bridge acceptance is
-pending. MCP archive export/import is task #358;
-#359 is the final gate, and #317 is incomplete.
+bridge/harness integration is implemented here; runtime tasks #317/#357 were
+accepted in `6913e5f`. #318 native bridge acceptance remains separate. MCP archive selection
+uses the existing owner archive path; its selected public full-KDF fixture source
+is authored but was not run here, and no CI result is claimed.
 
 ## Private captured credentials and fresh launch capabilities
 
@@ -180,9 +179,10 @@ native bridge acceptance. The Linux/amd64 PTY acceptance source now drives a
 consuming bridge through a real MCP harness probe over stdio with unreachable
 fixture endpoints, exercising the real child bridge, keeper and fixed-failure
 path; it remains Linux/amd64-only, is not Windows/macOS acceptance, and has not
-been run here. Task #358 covers
-MCP-specific archive export/import, and #359 is the final gate. Task #317 remains
-incomplete.
+been run here. MCP archive selection and import are integrated with the existing
+owner archive format and selected full-KDF acceptance source; they do not add
+runtime sessions or grants. Runtime tasks #317/#357 were accepted in `6913e5f`; #318
+native bridge acceptance and #359 final runtime gate remain separate.
 
 ## Supervised remote MCP bridge runtime
 
