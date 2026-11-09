@@ -15,6 +15,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
+	"github.com/PHPCraftdream/ssjack/internal/mcpfixturetest"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -117,7 +118,7 @@ func newFixture(t *testing.T, ctx context.Context, pageSize int, blockFirst, ech
 
 func newFixtureWithServer(t *testing.T, ctx context.Context, server *mcp.Server, listings, calls *atomic.Int32, guard *outputguard.Snapshot) *fixture {
 	t.Helper()
-	serverTransport, clientBase := mcp.NewInMemoryTransports()
+	serverTransport, clientBase := mcpfixturetest.NewPair()
 	diagnostics := &diagnosticRecorder{}
 	var clientTransport mcp.Transport = &diagnosticTransport{base: clientBase, recorder: diagnostics}
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
