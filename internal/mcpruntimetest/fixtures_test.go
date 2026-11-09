@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,17 +22,33 @@ import (
 const secretLiteral = "synthetic-bridge-secret"
 
 type fixture struct {
-	runtime        *mcpbridge.Runtime
-	server         *mcp.Server
-	stub           *stubHandle
-	listingCounter *atomic.Int32
-	serverWait     chan struct{}
-	serverStarted  atomic.Bool
-	launchClosed   chan struct{}
-	joined         atomic.Bool
-	closeCount     atomic.Int32
-	closeFailure   atomic.Bool
-	closeOnce      sync.Once
+	runtime         *mcpbridge.Runtime
+	server          *mcp.Server
+	stub            *stubHandle
+	listingCounter  *atomic.Int32
+	serverWait      chan struct{}
+	serverStarted   atomic.Bool
+	launchClosed    chan struct{}
+	joined          atomic.Bool
+	closeCount      atomic.Int32
+	closeFailure    atomic.Bool
+	closeOnce       sync.Once
+	diagnostics     *diagnosticRecorder
+	diagnosticLabel string
+	parentCtx       context.Context
+	closeCallerCtx  string
+}
+
+func diagnosticContext(ctx context.Context) string {
+	if ctx == nil {
+		return "nil"
+	}
+	return diagnosticError(ctx.Err())
+}
+
+func formatDiagnosticStage(name string, s diagnosticStage) string {
+	return fmt.Sprintf("%s={entered:%d completed:%d inflight:%d errors:%d first:%s last:%s}",
+		name, s.entered, s.completed, s.entered-s.completed, s.errors, s.firstError, s.last)
 }
 
 type stubHandle struct {
@@ -100,7 +117,9 @@ func newFixture(t *testing.T, ctx context.Context, pageSize int, blockFirst, ech
 
 func newFixtureWithServer(t *testing.T, ctx context.Context, server *mcp.Server, listings, calls *atomic.Int32, guard *outputguard.Snapshot) *fixture {
 	t.Helper()
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverTransport, clientBase := mcp.NewInMemoryTransports()
+	diagnostics := &diagnosticRecorder{}
+	var clientTransport mcp.Transport = &diagnosticTransport{base: clientBase, recorder: diagnostics}
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method == "tools/list" && listings != nil {
@@ -109,7 +128,7 @@ func newFixtureWithServer(t *testing.T, ctx context.Context, server *mcp.Server,
 			return next(ctx, method, request)
 		}
 	})
-	f := &fixture{server: server, listingCounter: listings, serverWait: make(chan struct{}), launchClosed: make(chan struct{})}
+	f := &fixture{server: server, listingCounter: listings, serverWait: make(chan struct{}), launchClosed: make(chan struct{}), diagnostics: diagnostics, diagnosticLabel: "fixture", parentCtx: ctx}
 	f.stub = &stubHandle{transport: clientTransport, beforeTake: func(takeCtx context.Context) error {
 		serverSession, err := server.Connect(takeCtx, serverTransport, nil)
 		if err != nil {
@@ -117,12 +136,13 @@ func newFixtureWithServer(t *testing.T, ctx context.Context, server *mcp.Server,
 		}
 		f.serverStarted.Store(true)
 		go func() {
-			_ = serverSession.Wait()
-			close(f.serverWait)
+			recordServerWait(diagnostics, serverSession.Wait, func() { close(f.serverWait) })
 		}()
 		return nil
 	}}
-	closeLaunch := func(closeCtx context.Context) error {
+	closeLaunch := func(closeCtx context.Context) (result error) {
+		diagnostics.recordLaunchStart(closeCtx)
+		defer func() { diagnostics.recordLaunchEnd(result) }()
 		f.closeCount.Add(1)
 		if f.serverStarted.Load() {
 			select {
@@ -147,7 +167,13 @@ func newFixtureWithServer(t *testing.T, ctx context.Context, server *mcp.Server,
 		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := f.runtime.Close(closeCtx); err != nil {
-			t.Errorf("fixture cleanup did not join: %v", err)
+			f.closeCallerCtx = diagnosticContext(closeCtx)
+			t.Errorf("fixture cleanup %s did not join: outcome=%s", f.diagnosticLabel, diagnosticError(err))
+		} else {
+			f.closeCallerCtx = diagnosticContext(closeCtx)
+		}
+		if t.Failed() {
+			t.Log(f.diagnosticReport(f.diagnosticLabel, diagnosticContext(f.parentCtx)))
 		}
 	})
 	return f

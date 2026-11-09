@@ -42,6 +42,15 @@ jobs:
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Repeat MCP inventory-refusal cleanup evidence
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git diff --quiet "$BASE" HEAD -- internal/mcpbridge internal/mcpruntimetest; then
+            go test -v -mod=readonly -race -run '^TestPaginationAndOversizedInventoryAreRefused$' -count=100 -timeout 180s ./internal/mcpruntimetest
+          fi
       - name: Native owner with production KDF
         if: steps.scope.outputs.nativeowner == 'true'
         shell: bash

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,6 +94,79 @@ func (c *fakeConnection) Close() error {
 }
 
 func (*fakeConnection) SessionID() string { return "test" }
+
+type diagnosticTestTransport struct {
+	connect func(context.Context) (mcp.Connection, error)
+}
+
+func (t *diagnosticTestTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	return t.connect(ctx)
+}
+
+type diagnosticTestConnection struct {
+	read      func(context.Context) (jsonrpc.Message, error)
+	write     func(context.Context, jsonrpc.Message) error
+	close     func() error
+	sessionID string
+}
+
+func (c *diagnosticTestConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	return c.read(ctx)
+}
+func (c *diagnosticTestConnection) Write(ctx context.Context, message jsonrpc.Message) error {
+	return c.write(ctx, message)
+}
+func (c *diagnosticTestConnection) Close() error      { return c.close() }
+func (c *diagnosticTestConnection) SessionID() string { return c.sessionID }
+
+type diagnosticResult struct {
+	message jsonrpc.Message
+	err     error
+}
+
+type diagnosticCall struct {
+	release chan struct{}
+	done    chan struct{}
+	result  chan diagnosticResult
+	once    sync.Once
+}
+
+func startDiagnosticCall(t *testing.T, run func(<-chan struct{}) diagnosticResult) *diagnosticCall {
+	t.Helper()
+	call := &diagnosticCall{release: make(chan struct{}), done: make(chan struct{}), result: make(chan diagnosticResult, 1)}
+	go func() { defer close(call.done); call.result <- run(call.release) }()
+	t.Cleanup(func() {
+		call.once.Do(func() { close(call.release) })
+		awaitDiagnostic(t, call.done, "diagnostic operation did not join")
+	})
+	return call
+}
+
+func awaitDiagnostic(t *testing.T, ch <-chan struct{}, message string) bool {
+	t.Helper()
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Second):
+		t.Error(message)
+		return false
+	}
+}
+
+func finishDiagnostic(t *testing.T, call *diagnosticCall) (diagnosticResult, bool) {
+	t.Helper()
+	call.once.Do(func() { close(call.release) })
+	if !awaitDiagnostic(t, call.done, "diagnostic operation did not return and join") {
+		return diagnosticResult{}, false
+	}
+	select {
+	case result := <-call.result:
+		return result, true
+	case <-time.After(time.Second):
+		t.Error("diagnostic operation result was not returned")
+		return diagnosticResult{}, false
+	}
+}
 
 func openFakeRuntime(t *testing.T, handle mcpbridge.UpstreamHandle, closeLaunch func(context.Context) error) *mcpbridge.Runtime {
 	t.Helper()

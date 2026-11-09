@@ -166,6 +166,7 @@ func TestCloseJoinsBlockedOperationBeforeRetryingCleanup(t *testing.T) {
 func TestPaginationAndOversizedInventoryAreRefused(t *testing.T) {
 	ctx := testContext(t)
 	f := newFixture(t, ctx, 2, false, false)
+	f.diagnosticLabel = "pagination"
 	result := reply(t, f, ctx, mcpbridge.OpDescribe, ordinalInput{})
 	if result.OK || f.listingCount() != 1 {
 		t.Fatalf("pagination was accepted or listing count wrong: %+v listings=%d", result, f.listingCount())
@@ -179,6 +180,7 @@ func TestPaginationAndOversizedInventoryAreRefused(t *testing.T) {
 	}
 	counter := &atomic.Int32{}
 	f2 := newFixtureWithServer(t, ctx, oversized, counter, &atomic.Int32{}, mustGuard(t, secretLiteral))
+	f2.diagnosticLabel = "oversized"
 	tooMany := reply(t, f2, ctx, mcpbridge.OpDescribe, ordinalInput{})
 	if tooMany.OK || counter.Load() != 1 {
 		t.Fatalf("oversized inventory accepted or not listed once: %+v count=%d", tooMany, counter.Load())
