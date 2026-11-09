@@ -48,8 +48,9 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if ! git diff --quiet "$BASE" HEAD -- internal/mcpbridge internal/mcpruntimetest; then
+          if ! git diff --quiet "$BASE" HEAD -- internal/mcpbridge internal/mcpruntimetest internal/mcpsdkclosetest; then
             go test -v -mod=readonly -race -run '^TestPaginationAndOversizedInventoryAreRefused$' -count=100 -timeout 180s ./internal/mcpruntimetest
+            go test -v -mod=readonly -race -run '^TestRawConnectionCloseErrors$' -count=10 -timeout 180s ./internal/mcpsdkclosetest
           fi
       - name: Native owner with production KDF
         if: steps.scope.outputs.nativeowner == 'true'
