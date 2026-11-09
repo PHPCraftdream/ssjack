@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package main
 
 import (
@@ -84,7 +82,9 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 		return ok
 	}
 	defer cleanup()
+	ownerEndpoint := remoteMCPPreparedOwnerEndpoint(t, path)
 
+	remoteMCPPreparedOwnerDial(t, ctx, path, credentials.service.Done())
 	ownerGuard, err := credentials.guard(ctx)
 	if err != nil || ownerGuard == nil {
 		t.Fatal("production owner guard was unavailable after adoption")
@@ -179,5 +179,6 @@ func remoteMCPPreparedLaunchChild(t *testing.T, ctx context.Context, path string
 	if !cleanup() {
 		t.Fatal("prepared launch did not fully clean before positive marker")
 	}
+	remoteMCPPreparedOwnerDialRefused(t, ctx, path, ownerEndpoint)
 	fmt.Fprintln(os.Stdout, remoteMCPPreparedMarker)
 }

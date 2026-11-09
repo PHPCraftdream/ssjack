@@ -69,3 +69,17 @@ A successful feature run is not a substitute for that full sprint/release result
 If branch protection requires the old full-job names, they remain sprint/release
 requirements; do not silently mark them satisfied with scoped jobs or remove
 required checks. Private infrastructure verification remains local.
+
+Feature CI and the full workflow's native test matrix run the remote-MCP startup
+and connected-bridge gates on Linux, Windows and macOS when relevant CLI sources
+are selected (and unconditionally in the full workflow). The full workflow's
+separate production-KDF full-profile job runs the same startup and connected
+gates on Linux. Startup covers selector/refusal and prepared-launch cases;
+connected acceptance uses a temporary private local TLS route overlay and
+exercises the real launched stdio bridge. The source runner verifies complete
+PASS and observed evidence and rejects top-level or scenario SKIP records.
+Artifacts retain runner logs. These gates are source-authored; actual public
+exact-SHA three-OS runtime receipts remain pending owner CI. Historical receipts
+at `6913e5f` (runtime) and `07290ca` (archives) refer to distinct earlier
+sources, not acceptance of a current revision. Dedicated task #359 remains
+pending.

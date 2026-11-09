@@ -7,10 +7,16 @@ hands the freshly prepared bounded launch, with its union guard, to the
 supervised bridge runtime (`internal/mcpbridge`), which exposes the selected
 remote MCPs only to this child harness invocation through the existing
 per-launch stdio bridge. Empty choices persist without a launch or bridge.
-The Linux/amd64 startup-selector and consuming-bridge PTY test source is
-authored, but is not Windows/macOS acceptance and has not been run here. Task
-#357's supervised bridge/harness runtime is implemented in this tree; #318 is
-native bridge acceptance. Runtime work for #317/#357 was accepted in `6913e5f`; #318 remains native bridge acceptance, and #359 remains the final gate. The existing `ssjack mcp` command retains its current session protocol.
+Startup-selector, connected bridge and prepared-launch acceptance source is now
+platform-neutral and wired into the native Linux, Windows and macOS CI matrix.
+It covers twelve startup decisions/refusals and five connected scenarios against
+a private local TLS fixture through the production-launched stdio bridge. This is
+authored source, not actual three-OS runtime acceptance: exact-SHA public CI
+receipts are pending owner CI. The accepted runtime at `6913e5f` and archive
+receipts at `07290ca` are separate historical, verified CI receipts; neither
+accepts this source revision. Task #318's complete native acceptance remains
+pending, as does the dedicated #359 gate. The existing `ssjack mcp` command
+retains its current session protocol.
 
 ## Encrypted records
 
@@ -123,16 +129,20 @@ listening-stream resumption refuses rather than silently reconnecting.
 Request/response/header/active/message limits and cancel/join ownership live in
 `mcpflow`. Close only clears credential material after owned I/O joins; failed or
 incomplete cleanup reports failure and retains it. Responses cannot expose injected
-headers through `Response.Request`. SDK message bodies/errors remain private input; the consuming bridge applies the
-parsed-result guard and fixed diagnostic boundary (see below).
+headers through `Response.Request`. SDK message bodies/errors remain private input;
+the consuming bridge applies the parsed-result guard and fixed diagnostic
+boundary (see below).
 The startup known-literal output guard is not a parsed-result or diagnostic
 boundary: `--no-output-filter` explicitly disables only that guard for a trusted
 terminal, and human SSH sessions remain unfiltered. The prepared guard and launch
-are consumed by the supervised bridge runtime. Task #357's supervised
-bridge/harness integration is implemented here; runtime tasks #317/#357 were
-accepted in `6913e5f`. #318 native bridge acceptance remains separate. MCP archive selection
-uses the existing owner archive path; its selected public full-KDF fixture source
-is authored but was not run here, and no CI result is claimed.
+are consumed by the supervised bridge runtime.
+Task #357's supervised bridge/harness runtime is implemented in this tree; #318
+adds native acceptance source, not completed runtime acceptance. Runtime work at
+`6913e5f` and archive receipts at `07290ca` are historical, verified CI
+receipts for distinct earlier sources. This source revision has no exact-SHA
+public CI receipts yet; owner CI is pending, and dedicated task #359 remains the
+full gate. MCP archive selection and import remain on the existing owner archive
+path and do not add sessions or grants.
 
 ## Private captured credentials and fresh launch capabilities
 
@@ -174,15 +184,13 @@ The private capture, admission, one-shot, union-guard and retained-cleanup
 ownership is covered by authored unit/composition test source; those tests were
 not run here, and no CI result is claimed.
 
-Task #357's supervised bridge/harness integration is implemented here; #318 is
-native bridge acceptance. The Linux/amd64 PTY acceptance source now drives a
-consuming bridge through a real MCP harness probe over stdio with unreachable
-fixture endpoints, exercising the real child bridge, keeper and fixed-failure
-path; it remains Linux/amd64-only, is not Windows/macOS acceptance, and has not
-been run here. MCP archive selection and import are integrated with the existing
-owner archive format and selected full-KDF acceptance source; they do not add
-runtime sessions or grants. Runtime tasks #317/#357 were accepted in `6913e5f`; #318
-native bridge acceptance and #359 final runtime gate remain separate.
+Task #318 now authors platform-neutral Linux, Windows and macOS native startup
+and connected-bridge acceptance source, but does not establish actual three-OS
+runtime acceptance. The exact-SHA public CI receipts remain pending owner CI;
+`6913e5f` runtime acceptance and `07290ca` archive receipts are historical,
+verified CI receipts for earlier sources, not this source revision. Existing
+owner CLI/TUI management-effects and human SSH acceptance are unchanged. The
+separate #359 full gate remains pending.
 
 ## Supervised remote MCP bridge runtime
 
@@ -270,12 +278,24 @@ JSON lexemes from the parent's masked result
 output through the child to the harness — not necessarily from the upstream
 wire.
 
-Test source covers in-memory SDK composition (masking, bounds, custody,
-no-replay, cancel/join/close ordering, disconnect supervision), command
-lifetime (bridge closes before owner, retained failure, one-shot refusal), and
-Linux/amd64 PTY scenarios driving a real MCP client probe over stdio through
-the real child bridge and keeper against unreachable fixture endpoints. These
-tests were authored, not run here, and no CI acceptance result is claimed.
+Native source covers twelve startup-selector paths (`continue`, remembered
+receipt, empty, no-record, absent-directory, cancel, Esc, Ctrl-C, stale
+ciphertext, nonterminal refusal, issue refusal and prepared-launch/no-output-
+filter) plus five real connected bridge scenarios. Connected tests exercise
+selected credentials over a private TLS fixture, output guarding and the
+trusted-terminal bypass, active-call cancellation without replay, empty-choice
+and cancellation boundaries, and observed cleanup before positive markers. The
+prepared-launch scenario dials and closes the native owner IPC endpoint, verifies
+post-cleanup refusal, and checks one-shot access and retained launch-guard
+cleanup. The connected harness verifies rejected one-use reconnect while the
+original session remains usable, masks the echoed one-use channel token even
+under bypass, and checks password/route material does not cross the child
+boundary. These are authored source checks, not executed runtime receipts:
+exact-SHA public CI on all three OSes is pending owner CI. They do not assert
+native expiry/revocation flows, HTTP-disconnect rollback, or that the SDK joins
+every goroutine. Runtime acceptance at `6913e5f` and archive receipts at
+`07290ca` are historical, verified CI receipts for distinct earlier sources;
+dedicated #359 remains pending.
 
 ## Compatibility and acceptance
 

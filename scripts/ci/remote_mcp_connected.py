@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run Linux connected remote-MCP acceptance with a narrow private route overlay."""
+"""Run connected remote-MCP acceptance with a narrow private route overlay."""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,9 +13,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve()
 POLICY = ROOT / "internal" / "mcphttp" / "policy.go"
-ROUTE_TEST = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_route_linux_amd64_test.go"
-CONNECTED = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_harness_linux_amd64_test.go"
+ROUTE_TEST = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_route_test.go"
+CONNECTED = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_harness_test.go"
 SCENARIOS = ("connected-basic", "connected-bypass", "connected-active-cancel", "connected-empty", "connected-cancel")
+SUPPORTED_PLATFORMS = ("linux", "darwin", "win32")
 
 
 def replace_once(source: str, old: str, new: str, label: str) -> str:
@@ -27,8 +29,14 @@ def overlay_sources(directory: Path) -> dict[str, str]:
     policy = POLICY.read_text(encoding="utf-8")
     policy = replace_once(policy, '"crypto/tls"', '"crypto/tls"\n\t"crypto/x509"', "TLS import")
     policy = replace_once(policy, '"strings"\n\t"time"', '"strings"\n\t"sync"\n\t"time"', "sync import")
-    start = policy.index("func (p *endpointPolicy) transport() *http.Transport {")
-    end = policy.index("\nfunc rejectRedirect", start)
+    start_marker = "func (p *endpointPolicy) transport() *http.Transport {"
+    end_marker = "\nfunc rejectRedirect"
+    if policy.count(start_marker) != 1 or policy.count(end_marker) != 1:
+        raise SystemExit("private connected overlay expected one transport function and redirect boundary")
+    start = policy.index(start_marker)
+    end = policy.index(end_marker, start)
+    if end <= start:
+        raise SystemExit("private connected overlay transport boundary is invalid")
     transport = policy[start:end]
     transport = replace_once(transport, "return &http.Transport{", "base := &http.Transport{", "fixed transport")
     transport = replace_once(transport, "\n\t}\n}", "\n\t}\n\treturn privateFixtureTransport(p, base)\n}", "fixed transport return")
@@ -45,7 +53,7 @@ def overlay_sources(directory: Path) -> dict[str, str]:
 }'''
     route = replace_once(route, old_hook, new_hook, "closed test hook")
     policy_path = directory / "policy.go"
-    route_path = directory / "remote_mcp_connected_route_linux_amd64_test.go"
+    route_path = directory / "remote_mcp_connected_route_test.go"
     policy_path.write_text(policy, encoding="utf-8")
     route_path.write_text(route, encoding="utf-8")
     return {str(POLICY.resolve()): str(policy_path.resolve()), str(ROUTE_TEST.resolve()): str(route_path.resolve())}
@@ -98,8 +106,8 @@ func privateFixtureTransport(policy *endpointPolicy, base *http.Transport) *http
 
 
 def main() -> int:
-    if sys.platform != "linux":
-        raise SystemExit("connected remote MCP acceptance is Linux-only")
+    if sys.platform not in SUPPORTED_PLATFORMS:
+        raise SystemExit(f"connected remote MCP acceptance unsupported on {sys.platform}")
     with tempfile.TemporaryDirectory(prefix="ssjack-remote-mcp-connected-") as temporary:
         directory = Path(temporary)
         overlay = directory / "overlay.json"
@@ -119,7 +127,11 @@ def main() -> int:
         required += [f"--- PASS: TestVaultRemoteMCPStartupFullProfile/{name} " for name in SCENARIOS]
         required += [f"REMOTE-MCP-CONNECTED-OBSERVED:{name}" for name in SCENARIOS]
         missing = [marker for marker in required if marker not in result.stdout]
-        skipped = [name for name in SCENARIOS if f"--- SKIP: TestVaultRemoteMCPStartupFullProfile/{name} " in result.stdout]
+        skipped = re.findall(
+            r"^[ \t]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(?:/[^\s]+)? ",
+            result.stdout,
+            re.MULTILINE,
+        )
         if missing or skipped:
             print("Connected acceptance evidence missing or skipped:", "; ".join(missing + skipped), file=sys.stderr)
             return 1

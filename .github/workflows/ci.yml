@@ -111,6 +111,31 @@ jobs:
           set -o pipefail
           go test -v -mod=readonly -p 1 -run '^TestVaultOwnerArchiveFullProfile$' -count=1 -timeout 600s ./cmd/ssjack | tee "$RUNNER_TEMP/native-owner-archive.log"
           grep -q '^--- PASS: TestVaultOwnerArchiveFullProfile ' "$RUNNER_TEMP/native-owner-archive.log"
+      - name: Native remote MCP startup with production KDF
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultRemoteMCPStartupFullProfile$' -count=1 -timeout 900s ./cmd/ssjack | tee "$RUNNER_TEMP/remote-mcp-startup.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-startup.log"
+          for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report PASS: $name"; exit 1; }
+            grep -q -- "REMOTE-MCP-STARTUP-OBSERVED:$name" "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report observed evidence: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )' "$RUNNER_TEMP/remote-mcp-startup.log"; then
+            echo 'Remote MCP startup acceptance reported a skipped top-level test or scenario'
+            exit 1
+          fi
+      - name: Native connected remote MCP with production KDF
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
+          for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
+            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
+          done
       - name: Repeat SSH cancellation regression
         run: go test -mod=readonly -run '^TestInteractiveShellCancellation$' -count=25 -timeout 60s ./internal/remote
       - name: Build and install source on Linux or macOS
@@ -158,6 +183,16 @@ jobs:
       - name: Check Bash syntax
         shell: bash
         run: bash -n install.sh build.sh tests/installers.sh tests/installers-local.sh
+      - name: Retain native remote MCP acceptance logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-remote-mcp-${{ runner.os }}-${{ runner.arch }}-full
+          path: |
+            ${{ runner.temp }}/remote-mcp-startup.log
+            ${{ runner.temp }}/remote-mcp-connected.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain verified native CLI
         uses: actions/upload-artifact@v4
         with:
@@ -270,14 +305,21 @@ jobs:
           for name in TestVaultOutputFilterFullProfile TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestVaultRemoteMCPStartupFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/full-profile.log"
           for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory remote MCP startup full-profile acceptance did not report PASS: $name"; exit 1; }
+            grep -q -- "REMOTE-MCP-STARTUP-OBSERVED:$name" "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory remote MCP startup full-profile acceptance did not report observed evidence: $name"; exit 1; }
           done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )' "$RUNNER_TEMP/full-profile.log"; then
+            echo 'Remote MCP startup full-profile acceptance reported a skipped top-level test or scenario'
+            exit 1
+          fi
       - name: Connected remote MCP startup with production KDF
         shell: bash
         run: |
           set -o pipefail
           python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
           for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
           done

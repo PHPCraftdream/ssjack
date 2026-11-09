@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package main
 
 import (
@@ -36,6 +34,11 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
+	t.Cleanup(func() {
+		if !t.Failed() && !t.Skipped() {
+			t.Log("REMOTE-MCP-CONNECTED-OBSERVED:" + scenario)
+		}
+	})
 	fixture := newRemoteMCPStartupFixture(t, ctx, scenario)
 	defer clear(fixture.password)
 	terminal, capture := remoteMCPStartupStart(t, ctx, fixture)
@@ -147,13 +150,17 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 			t.Fatal("connected cancellation recorded a preference despite unchanged ciphertext")
 		}
 	}
-	t.Log("REMOTE-MCP-CONNECTED-OBSERVED:" + scenario)
 }
 
 func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
+	t.Cleanup(func() {
+		if !t.Failed() && !t.Skipped() {
+			t.Log("REMOTE-MCP-STARTUP-OBSERVED:" + scenario)
+		}
+	})
 	fixture := newRemoteMCPStartupFixture(t, ctx, scenario)
 	defer clear(fixture.password)
 	terminal, capture := remoteMCPStartupStart(t, ctx, fixture)

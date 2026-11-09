@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package main
 
 import (
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -58,6 +57,7 @@ func TestNativeRemoteMCPConnectedBridge(t *testing.T) {
 	if os.Getenv(remoteMCPConnectedBridgeChildEnv) != "1" {
 		t.Skip("connected MCP bridge process only")
 	}
+	remoteMCPConnectedHarnessEnvironment(t)
 	code, err := runMCP(context.Background())
 	if err != nil || code != 0 {
 		fmt.Fprintln(os.Stderr, "REMOTE-MCP-CONNECTED-BRIDGE-CLEANUP-FAILED")
@@ -73,9 +73,11 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 	if !remoteMCPConnectedScenario(scenario) {
 		t.Skip("connected MCP harness only")
 	}
+	remoteMCPConnectedHarnessEnvironment(t)
 	_ = os.Unsetenv(remoteMCPConnectedScenarioEnv)
 	_ = os.Unsetenv(remoteMCPConnectedRouteEnv)
 	encodedChannels := os.Getenv(mcpchannel.Env)
+	var capability string
 	if scenario == "connected-empty" {
 		if encodedChannels != "" {
 			t.Fatal("empty confirmed choice carried a private channel descriptor")
@@ -85,6 +87,7 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		if err != nil || len(descriptors) != 1 || descriptors[0].Ordinal != 0 {
 			t.Fatal("confirmed local channel capability is unavailable")
 		}
+		capability = descriptors[0].Token
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -110,6 +113,9 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		}
 	}()
 	listing := remoteMCPConnectedList(ctx, t, session, scenario != "connected-empty")
+	if scenario != "connected-empty" {
+		remoteMCPConnectedCapabilityNegativeControl(t, ctx, encodedChannels, session)
+	}
 	if scenario == "connected-cancel" {
 		t.Fatal("cancelled selection unexpectedly launched the harness")
 	}
@@ -139,8 +145,8 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		echo := remoteMCPConnectedTool(remote, "echo")
 		fail := remoteMCPConnectedTool(remote, "fail")
 		waitTool := remoteMCPConnectedTool(remote, "wait")
-		remoteMCPConnectedCall(t, ctx, session, echo, false, scenario == "connected-bypass")
-		remoteMCPConnectedCall(t, ctx, session, fail, true, scenario == "connected-bypass")
+		remoteMCPConnectedCall(t, ctx, session, echo, false, scenario == "connected-bypass", capability)
+		remoteMCPConnectedCall(t, ctx, session, fail, true, scenario == "connected-bypass", "")
 		if scenario == "connected-bypass" {
 			remoteMCPConnectedRPCFailure(t, ctx, session, fail)
 		}
@@ -161,6 +167,9 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		t.Fatal("connected bridge session cleanup did not join")
 	}
 	closed = true
+	if scenario != "connected-empty" {
+		remoteMCPConnectedCapabilityNegativeControl(t, ctx, encodedChannels, nil)
+	}
 	fmt.Fprintln(os.Stderr, remoteMCPConnectedHarnessMarker+scenario)
 }
 
@@ -203,13 +212,17 @@ func remoteMCPConnectedTool(names []string, suffix string) string {
 	return ""
 }
 
-func remoteMCPConnectedCall(t *testing.T, ctx context.Context, session *mcp.ClientSession, name string, wantError, bypass bool) {
+func remoteMCPConnectedCall(t *testing.T, ctx context.Context, session *mcp.ClientSession, name string, wantError, bypass bool, capability string) {
 	t.Helper()
 	if name == "" {
 		t.Fatal("selected synthetic tool is missing")
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{}})
-	if err != nil || result == nil || result.StructuredContent == nil || result.IsError != wantError {
+	arguments := map[string]any{}
+	if capability != "" {
+		arguments["capability"] = capability
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil || result == nil || len(result.Content) != 1 || result.StructuredContent == nil || result.IsError != wantError {
 		t.Fatal("actual connected tool call omitted its structured or error result")
 	}
 	encoded, err := json.Marshal(result)
@@ -218,6 +231,13 @@ func remoteMCPConnectedCall(t *testing.T, ctx context.Context, session *mcp.Clie
 	}
 	joined := []byte("synthetic-mcp-owner:synthetic startup Basic credential")
 	basicEncoded := []byte(base64.StdEncoding.EncodeToString(joined))
+	if capability != "" {
+		structured, ok := result.StructuredContent.(map[string]any)
+		text, textOK := result.Content[0].(*mcp.TextContent)
+		if !ok || !textOK || text == nil || structured["capability"] != outputguard.Marker || !strings.HasSuffix(text.Text, "|"+outputguard.Marker) || strings.Contains(string(encoded), capability) {
+			t.Fatal("actual connected result did not guard the echoed local capability")
+		}
+	}
 	if !bypass {
 		for _, secret := range [][]byte{[]byte("synthetic startup Basic credential"), []byte("Basic " + string(basicEncoded)), basicEncoded, []byte("synthetic MCP custom header")} {
 			if strings.Contains(string(encoded), string(secret)) {

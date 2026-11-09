@@ -45,8 +45,8 @@ receipted. The launch and its authentication-literal guard stay owned by the
 startup credentials through shutdown; the supervised bridge runtime consumes
 the one-shot upstream handles through Take and the guard through an explicit
 close callback, so exactly one consumer exists. Empty confirmed choices persist
-without a launch. The
-Linux/amd64 selector/startup PTY acceptance source is authored but has not been
-run and is not Windows/macOS acceptance; native bridge acceptance remains task
-#318. Task #358 covers MCP archive export/import; #359 is the final gate. Task
-#317 remains incomplete.
+without a launch. Platform-neutral startup and connected native acceptance is
+authored for Linux, Windows and macOS, but actual three-OS runtime acceptance and
+exact-SHA public CI receipts are pending owner CI. Historical runtime receipt
+`6913e5f` and archive receipt `07290ca` are verified CI evidence for distinct
+earlier sources; dedicated task #359 remains pending.

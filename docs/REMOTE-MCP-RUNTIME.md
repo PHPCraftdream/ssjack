@@ -103,10 +103,12 @@ credential material, and the child joins its bridge clients separately. The
 residual unjoinable surface is goroutines a handler implementation leaks
 beyond `processResult` — none exists for this runtime's nil-options client —
 plus behavior not provable from source alone. The keepalive goroutine is not
-armed here (nil client options). This is a mechanism-level statement, not a
-full proof: native acceptance (#318) must still exercise real cross-process
-cleanup, upstream-driven cancellation timing, and the actual content of
-SDK-internal log output on a live upstream.
+armed here (nil client options). This is a mechanism-level statement, not a full
+proof. Task #318 now authors source exercising the real cross-process bridge
+against a private local upstream on Linux, Windows and macOS, including
+active-call cancellation and cleanup observations. It does not establish
+SDK-internal log behavior against a public live upstream or SDK-wide goroutine
+joining. Actual exact-SHA runtime receipts are pending owner CI.
 
 Shutdown order is fixed: cleanup first joins active bridge operations, then
 per slot calls `session.Close()` and `session.Wait()` (or a bare connection
@@ -141,6 +143,9 @@ runtime lifetime; per-message handler contexts only cancel their own operation.
 the caller-supplied known output snapshot with the mandatory channel
 secrets.
 
-Native bridge acceptance remains #318; MCP archives are #358; the final gate
-is #359. This pocket is not complete: no CI acceptance result or executed test
-is claimed here.
+Native acceptance source for #318 covers Linux, Windows and macOS; it is not
+actual three-OS runtime acceptance. Exact-SHA public CI receipts remain pending
+owner CI. Historical runtime acceptance at `6913e5f` and archive receipts at
+`07290ca` are distinct verified CI evidence, not receipts for this source
+revision. Dedicated task #359 remains the full gate. This pocket makes no claim
+that tests have executed here.

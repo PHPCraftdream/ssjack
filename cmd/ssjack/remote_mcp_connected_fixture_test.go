@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package main
 
 import (
@@ -172,13 +170,19 @@ func (s *remoteMCPConnectedServer) closeAdmission() {
 
 func (s *remoteMCPConnectedServer) handlerForRequest(requestCtx context.Context) http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "synthetic-connected-upstream", Version: "1"}, nil)
-	server.AddTool(&mcp.Tool{Name: "echo", Description: "synthetic verified TLS echo", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	server.AddTool(&mcp.Tool{Name: "echo", Description: "synthetic verified TLS echo", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if !s.beginWork() {
 			return nil, context.Canceled
 		}
 		defer s.endWork()
 		s.calls.Add(1)
-		return s.result(false), nil
+		var input struct {
+			Capability string `json:"capability"`
+		}
+		if request != nil && request.Params != nil {
+			_ = json.Unmarshal(request.Params.Arguments, &input)
+		}
+		return s.result(false, input.Capability), nil
 	})
 	server.AddTool(&mcp.Tool{Name: "fail", Description: "synthetic guarded error result", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if !s.beginWork() {
@@ -221,13 +225,18 @@ func (s *remoteMCPConnectedServer) wait(ctx, requestCtx context.Context) (*mcp.C
 	}
 }
 
-func (s *remoteMCPConnectedServer) result(isError bool) *mcp.CallToolResult {
+func (s *remoteMCPConnectedServer) result(isError bool, capability ...string) *mcp.CallToolResult {
 	raw := "synthetic startup Basic credential"
 	joined := "synthetic-mcp-owner:" + raw
 	encoded := base64.StdEncoding.EncodeToString([]byte(joined))
 	authorization := "Basic " + encoded
 	text := raw + "|" + authorization + "|" + encoded + "|synthetic MCP custom header|synthetic-unselected-account-secret|" + string(s.knownLiteral)
-	return &mcp.CallToolResult{IsError: isError, Content: []mcp.Content{&mcp.TextContent{Text: text}}, StructuredContent: map[string]any{"raw": raw, "authorization": authorization, "encoded": encoded, "custom": "synthetic MCP custom header", "known": "synthetic-unselected-account-secret", "owner": string(s.knownLiteral), "n": 7}}
+	structured := map[string]any{"raw": raw, "authorization": authorization, "encoded": encoded, "custom": "synthetic MCP custom header", "known": "synthetic-unselected-account-secret", "owner": string(s.knownLiteral), "n": 7}
+	if len(capability) != 0 && capability[0] != "" {
+		text += "|" + capability[0]
+		structured["capability"] = capability[0]
+	}
+	return &mcp.CallToolResult{IsError: isError, Content: []mcp.Content{&mcp.TextContent{Text: text}}, StructuredContent: structured}
 }
 
 func remoteMCPDeterministicSSHKeyPEM(private ed25519.PrivateKey, comment string) []byte {

@@ -9,9 +9,13 @@ have their own acceptance gates; see `OWNER-NATIVE-STORAGE.md`.
 Runtime acceptance at `873308d` passed full CI `42176754203` and scoped CI
 `42176752481`. Actual keeper, CLI helper, interactive helper, human SSH and writer
 refusal processes passed on all three operating systems. Actual linked/unlinked
-text-consumer CLI acceptance remains Linux amd64 only. This does not deliver the remote MCP bridge, launch selector or output guard. MCP
-archive selection is explicitly integrated into the existing owner archive flow;
-that format and its CI coverage are described in
+text-consumer CLI acceptance remains Linux amd64 only. This historical owner-IPC
+acceptance predates the remote MCP bridge, selector and output-guard source. Task
+#318 now authors a native bridge gate, reusing the existing owner CLI/TUI
+management effects and human SSH acceptance unchanged. Actual three-OS runtime
+receipts for its exact source SHA remain pending owner CI. MCP archive selection
+is integrated into the existing owner archive flow; that format and CI coverage
+are described in
 [owner export format](application-store/OWNER-EXPORT-FORMAT.md). It remains separate
 from the runtime bridge and does not create grants or sessions.
 

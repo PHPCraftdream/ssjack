@@ -111,7 +111,7 @@ jobs:
           go test -v -mod=readonly -p 1 -run '^TestVaultTextOwnerFullProfile$' -count=1 -timeout 180s ./cmd/ssjack | tee "$RUNNER_TEMP/text-owner.log"
           grep -q '^--- PASS: TestVaultTextOwnerFullProfile ' "$RUNNER_TEMP/text-owner.log"
       - name: Remote MCP startup with production KDF
-        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        if: steps.scope.outputs.appstorecli == 'true'
         shell: bash
         env:
           SSJACK_TEST_FULL_KDF: '1'
@@ -121,13 +121,19 @@ jobs:
           grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-startup.log"
           for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report PASS: $name"; exit 1; }
+            grep -q -- "REMOTE-MCP-STARTUP-OBSERVED:$name" "$RUNNER_TEMP/remote-mcp-startup.log" || { echo "Mandatory remote MCP startup acceptance did not report observed evidence: $name"; exit 1; }
           done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )' "$RUNNER_TEMP/remote-mcp-startup.log"; then
+            echo 'Remote MCP startup acceptance reported a skipped top-level test or scenario'
+            exit 1
+          fi
       - name: Connected remote MCP startup with production KDF
-        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        if: steps.scope.outputs.appstorecli == 'true'
         shell: bash
         run: |
           set -o pipefail
           python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
           for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
           done
@@ -179,6 +185,16 @@ jobs:
           .\build.ps1 -InstallDir $prefix -NoPathUpdate
           $identity = & (Join-Path $prefix 'ssjack.exe') --version
           if ($LASTEXITCODE -ne 0 -or $identity -notlike "*$(git rev-parse HEAD)*") { throw 'Source install identity mismatch' }
+      - name: Retain native remote MCP acceptance logs
+        if: always() && steps.scope.outputs.appstorecli == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-remote-mcp-${{ runner.os }}-${{ runner.arch }}-feature
+          path: |
+            ${{ runner.temp }}/remote-mcp-startup.log
+            ${{ runner.temp }}/remote-mcp-connected.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain selection evidence
         if: always()
         uses: actions/upload-artifact@v4
