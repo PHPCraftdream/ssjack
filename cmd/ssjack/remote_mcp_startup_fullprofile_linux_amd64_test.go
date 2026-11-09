@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +106,9 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 			}
 		}
 	}
-	if scenario == "connected-bypass" && !capture.Contains([]byte(outputFilterWarning)) {
+	if scenario == "connected-bypass" &&
+		!capture.Contains([]byte(outputFilterWarning)) &&
+		!capture.Contains([]byte(strings.ReplaceAll(outputFilterWarning, "\n", "\r\n"))) {
 		t.Fatal("connected explicit bypass omitted its warning")
 	}
 	after, err := os.ReadFile(fixture.path)

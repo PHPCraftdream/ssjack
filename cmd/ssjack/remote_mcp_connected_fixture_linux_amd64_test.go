@@ -43,6 +43,13 @@ type remoteMCPConnectedServer struct {
 	waitStart    sync.Once
 	waitEnd      sync.Once
 	knownLiteral []byte
+	shutdown     chan struct{}
+	serveDone    chan struct{}
+	workMu       sync.Mutex
+	closing      bool
+	active       int
+	activeDone   chan struct{}
+	shutdownOnce sync.Once
 }
 
 func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPConnectedServer, string) {
@@ -63,33 +70,14 @@ func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPC
 		t.Fatal("cannot listen for private TLS fixture")
 	}
 	fixture := &remoteMCPConnectedServer{listener: listener, rootDER: der, waitStarted: make(chan struct{}), waitFinish: make(chan struct{}), knownLiteral: append([]byte(nil), knownLiteral...)}
-	server := mcp.NewServer(&mcp.Implementation{Name: "synthetic-connected-upstream", Version: "1"}, nil)
-	server.AddTool(&mcp.Tool{Name: "echo", Description: "synthetic verified TLS echo", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		fixture.calls.Add(1)
-		return fixture.result(false), nil
-	})
-	server.AddTool(&mcp.Tool{Name: "fail", Description: "synthetic guarded error result", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		fixture.calls.Add(1)
-		var input struct {
-			RPC bool `json:"rpc"`
-		}
-		if request != nil && request.Params != nil && json.Unmarshal(request.Params.Arguments, &input) == nil && input.RPC {
-			return nil, errors.New("synthetic private RPC detail")
-		}
-		return fixture.result(true), nil
-	})
-	server.AddTool(&mcp.Tool{Name: "wait", Description: "synthetic cancellable call", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		fixture.calls.Add(1)
-		fixture.waitCalls.Add(1)
-		fixture.waitStart.Do(func() { close(fixture.waitStarted) })
-		defer fixture.waitEnd.Do(func() { close(fixture.waitFinish) })
-		<-ctx.Done()
-		fixture.waitDone.Add(1)
-		return nil, ctx.Err()
-	})
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: true})
+	fixture.initLifetime()
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("synthetic-mcp-owner:synthetic startup Basic credential"))
 	fixture.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !fixture.beginWork() {
+			http.Error(w, "fixture shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		defer fixture.endWork()
 		if r.TLS == nil || r.URL.Path != "/mcp" || r.Header.Get("Authorization") != want || r.Header.Get("X-Api-Key") != "synthetic MCP custom header" {
 			fixture.rejected.Add(1)
 			http.Error(w, "fixture refused", http.StatusUnauthorized)
@@ -97,12 +85,41 @@ func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPC
 		}
 		fixture.authorized.Add(1)
 		w.Header().Set("Cache-Control", "no-store")
-		handler.ServeHTTP(w, r)
+		fixture.handlerForRequest(r.Context()).ServeHTTP(w, r)
 	})}
 	go func() {
+		defer close(fixture.serveDone)
 		_ = fixture.server.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{keypair}, MinVersion: tls.VersionTLS12}))
 	}()
-	t.Cleanup(func() { _ = fixture.server.Close(); clear(fixture.knownLiteral) })
+	t.Cleanup(func() {
+		fixture.closeAdmission()
+		closeErr := fixture.server.Close()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		fixture.workMu.Lock()
+		activeDone := fixture.activeDone
+		fixture.workMu.Unlock()
+		joined := true
+		select {
+		case <-fixture.serveDone:
+		case <-cleanupCtx.Done():
+			joined = false
+		}
+		select {
+		case <-activeDone:
+		case <-cleanupCtx.Done():
+			joined = false
+		}
+		if !joined {
+			t.Error("connected fixture shutdown did not finish within 10 seconds")
+			return
+		}
+		if closeErr != nil {
+			t.Error("connected fixture HTTP server did not close")
+			return
+		}
+		clear(fixture.knownLiteral)
+	})
 	metadata, err := json.Marshal(remoteMCPConnectedRoute{Address: listener.Addr().String(), RootDER: der})
 	if err != nil {
 		t.Fatal("cannot encode private route metadata")
@@ -110,6 +127,98 @@ func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPC
 	encoded := base64.RawStdEncoding.EncodeToString(metadata)
 	clear(metadata)
 	return fixture, encoded
+}
+
+func (s *remoteMCPConnectedServer) initLifetime() {
+	s.shutdown = make(chan struct{})
+	s.serveDone = make(chan struct{})
+	s.activeDone = make(chan struct{})
+}
+
+func (s *remoteMCPConnectedServer) beginWork() bool {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.active++
+	return true
+}
+
+func (s *remoteMCPConnectedServer) endWork() {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	s.active--
+	if s.closing && s.active == 0 {
+		close(s.activeDone)
+	}
+}
+
+func (s *remoteMCPConnectedServer) stopWaitWorkers() {
+	s.shutdownOnce.Do(func() { close(s.shutdown) })
+}
+
+func (s *remoteMCPConnectedServer) closeAdmission() {
+	s.workMu.Lock()
+	if !s.closing {
+		s.closing = true
+		if s.active == 0 {
+			close(s.activeDone)
+		}
+	}
+	s.workMu.Unlock()
+	s.stopWaitWorkers()
+}
+
+func (s *remoteMCPConnectedServer) handlerForRequest(requestCtx context.Context) http.Handler {
+	server := mcp.NewServer(&mcp.Implementation{Name: "synthetic-connected-upstream", Version: "1"}, nil)
+	server.AddTool(&mcp.Tool{Name: "echo", Description: "synthetic verified TLS echo", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if !s.beginWork() {
+			return nil, context.Canceled
+		}
+		defer s.endWork()
+		s.calls.Add(1)
+		return s.result(false), nil
+	})
+	server.AddTool(&mcp.Tool{Name: "fail", Description: "synthetic guarded error result", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if !s.beginWork() {
+			return nil, context.Canceled
+		}
+		defer s.endWork()
+		s.calls.Add(1)
+		var input struct {
+			RPC bool `json:"rpc"`
+		}
+		if request != nil && request.Params != nil && json.Unmarshal(request.Params.Arguments, &input) == nil && input.RPC {
+			return nil, errors.New("synthetic private RPC detail")
+		}
+		return s.result(true), nil
+	})
+	server.AddTool(&mcp.Tool{Name: "wait", Description: "synthetic cancellable call", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if !s.beginWork() {
+			return nil, context.Canceled
+		}
+		defer s.endWork()
+		return s.wait(ctx, requestCtx)
+	})
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+}
+
+func (s *remoteMCPConnectedServer) wait(ctx, requestCtx context.Context) (*mcp.CallToolResult, error) {
+	s.calls.Add(1)
+	s.waitCalls.Add(1)
+	s.waitStart.Do(func() { close(s.waitStarted) })
+	defer s.waitEnd.Do(func() { close(s.waitFinish) })
+	select {
+	case <-ctx.Done():
+		s.waitDone.Add(1)
+		return nil, ctx.Err()
+	case <-requestCtx.Done():
+		s.waitDone.Add(1)
+		return nil, requestCtx.Err()
+	case <-s.shutdown:
+		return nil, context.Canceled
+	}
 }
 
 func (s *remoteMCPConnectedServer) result(isError bool) *mcp.CallToolResult {
