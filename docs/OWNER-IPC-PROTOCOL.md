@@ -372,9 +372,9 @@ authenticated owner packet; the snapshot clone keeps it independent of the sourc
 status. The owner TUI renders it as last-observed metadata. The known flags preserve
 unknown versus revision zero. It exposes no plaintext credential getter.
 
-Source tests for this slice have been authored but not run. Exact-source CI
-acceptance is pending; earlier owner-IPC acceptance does not cover this live
-credential-refresh slice.
+Acceptance requires exact-source public CI, including an explicit PASS for the
+ordinary SSH live lifecycle scenario. Earlier owner-IPC acceptance does not cover
+this live credential-refresh slice or coordinated server-side key rotation.
 
 ## Protected text-consumer lifetime
 

@@ -114,8 +114,8 @@ This is not generic reconciliation or a guarantee that all consumers adopted an
 edit. Live status is process/session metadata, not a durable credential-revision
 journal; restart loses delivery/adoption evidence. See
 [owner IPC limitations](OWNER-IPC-PROTOCOL.md#ordinary-full-mode-ssh-job-refresh).
-The source tests for this slice have not been run; exact-source CI acceptance is
-pending.
+Acceptance requires exact-source public CI for the ordinary SSH live lifecycle;
+this does not establish coordinated server-side key installation or revocation.
 
 ## Remote MCP management
 

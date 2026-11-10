@@ -42,8 +42,8 @@ saved state refuses a new job rather than falling back to startup credentials.
 This is credential delivery, not general reconciliation or server-side rotation.
 It does not establish that every current consumer adopted an edit. Runtime status
 is metadata only and held in session memory; restart loses delivery/adoption
-evidence. Source tests for this slice have not been run, and exact-source CI
-acceptance is pending.
+evidence. Acceptance requires exact-source public CI, including the ordinary SSH
+live lifecycle scenario; earlier frozen-runner acceptance is not sufficient.
 
 ## Formats
 
