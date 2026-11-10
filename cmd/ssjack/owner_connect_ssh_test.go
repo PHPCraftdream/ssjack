@@ -33,7 +33,7 @@ type loopbackSSH struct {
 	identities  []string
 	exits       []uint32
 	passwords   map[string]string
-	holdStarted chan string
+	holdStarted chan syntheticSSHHold
 	holdRelease chan struct{}
 	holdOnce    sync.Once
 	accepted    int // raw TCP connections, counted before any SSH handshake
@@ -86,7 +86,7 @@ func startLoopbackSSH(t *testing.T, allowed ssh.PublicKey, password, marker stri
 	server = &loopbackSSH{
 		listener: listener, config: config, hostKey: signer.PublicKey(), marker: marker,
 		conns: make(map[net.Conn]struct{}), passwords: map[string]string{password: "default"},
-		holdStarted: make(chan string, 8), holdRelease: make(chan struct{}),
+		holdStarted: make(chan syntheticSSHHold, 8), holdRelease: make(chan struct{}),
 	}
 	server.wg.Add(1)
 	go server.accept()
@@ -120,12 +120,12 @@ func (s *loopbackSSH) releaseSyntheticHolds() {
 	s.holdOnce.Do(func() { close(s.holdRelease) })
 }
 
-func (s *loopbackSSH) waitSyntheticHold(ctx context.Context) (string, error) {
+func (s *loopbackSSH) waitSyntheticHold(ctx context.Context) (syntheticSSHHold, error) {
 	select {
-	case identity := <-s.holdStarted:
-		return identity, nil
+	case hold := <-s.holdStarted:
+		return hold, nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return syntheticSSHHold{}, ctx.Err()
 	}
 }
 
@@ -203,6 +203,13 @@ func (s *loopbackSSH) serve(conn net.Conn) {
 	}
 	conn.SetDeadline(time.Time{})
 	defer connection.Close()
+	connectionDone := make(chan struct{})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		_ = connection.Wait()
+		close(connectionDone)
+	}()
 	s.mu.Lock()
 	s.identities = append(s.identities, connection.User()+"|"+connection.Permissions.Extensions["identity"])
 	s.records = append(s.records, connection.User()+"|"+connection.Permissions.Extensions["method"])
@@ -219,11 +226,11 @@ func (s *loopbackSSH) serve(conn net.Conn) {
 			channel.Reject(ssh.UnknownChannelType, "sessions only")
 			continue
 		}
-		s.session(connection.User(), connection.Permissions.Extensions["identity"], channel)
+		s.session(connection.User(), connection.Permissions.Extensions["identity"], channel, connectionDone)
 	}
 }
 
-func (s *loopbackSSH) session(login, identity string, opened ssh.NewChannel) {
+func (s *loopbackSSH) session(login, identity string, opened ssh.NewChannel, connectionDone <-chan struct{}) {
 	channel, requests, err := opened.Accept()
 	if err != nil {
 		return
@@ -236,7 +243,7 @@ func (s *loopbackSSH) session(login, identity string, opened ssh.NewChannel) {
 		defer close(finished)
 		var once sync.Once
 		for request := range requests {
-			if request.Type == "exec" && (nativeGuardSSHReply(s, channel, request) || syntheticLiveReply(s, identity, channel, request)) {
+			if request.Type == "exec" && (nativeGuardSSHReply(s, channel, request) || syntheticLiveReply(s, identity, channel, request, connectionDone)) {
 				return
 			}
 			ok := request.Type == "pty-req" || request.Type == "shell"

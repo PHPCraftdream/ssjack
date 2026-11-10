@@ -26,6 +26,20 @@ import (
 
 const connectPassword = "synthetic SSH account password"
 
+type syntheticSSHHold struct {
+	identity       string
+	connectionDone <-chan struct{}
+}
+
+func (hold syntheticSSHHold) alive() bool {
+	select {
+	case <-hold.connectionDone:
+		return false
+	default:
+		return true
+	}
+}
+
 // ownerConnectionAcceptance drives the picker's real SSH handoff through a
 // pseudo-terminal against a loopback synthetic server. The server ID is stable
 // across the earlier rename, so the database is addressed by ID.
@@ -241,7 +255,7 @@ func liveReadJob(t *testing.T, ctx context.Context, jobs *remote.Manager, id str
 	}
 }
 
-func syntheticLiveReply(server *loopbackSSH, identity string, channel ssh.Channel, request *ssh.Request) bool {
+func syntheticLiveReply(server *loopbackSSH, identity string, channel ssh.Channel, request *ssh.Request, connectionDone <-chan struct{}) bool {
 	var command struct{ Command string }
 	if server.marker != "owner-control" || ssh.Unmarshal(request.Payload, &command) != nil ||
 		(command.Command != "synthetic-live-hold" && command.Command != "synthetic-live-once") {
@@ -254,8 +268,17 @@ func syntheticLiveReply(server *loopbackSSH, identity string, channel ssh.Channe
 		return true
 	}
 	if command.Command == "synthetic-live-hold" {
-		server.holdStarted <- identity
-		<-server.holdRelease
+		hold := syntheticSSHHold{identity: identity, connectionDone: connectionDone}
+		select {
+		case server.holdStarted <- hold:
+		case <-connectionDone:
+			return true
+		}
+		select {
+		case <-server.holdRelease:
+		case <-connectionDone:
+			return true
+		}
 	}
 	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 	_ = channel.Close()

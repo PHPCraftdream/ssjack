@@ -61,6 +61,9 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 		case 'g':
 			nativeGuardHarnessCheck(t, ctx, session, true)
 			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED")
+		case 'r':
+			nativeGuardHarnessRefusesChangedScope(t, ctx, session)
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED")
 		case '\r', '\n':
 		default:
 			t.Fatal("keeper harness received an unexpected fixture command")
@@ -84,7 +87,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 		t.Fatal(err)
 	}
 	for _, cycle := range cycles {
-		t.Run(cycle, func(t *testing.T) {
+		if !t.Run(cycle, func(t *testing.T) {
 			lifetime, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
 			environment := make([]string, 0)
@@ -152,8 +155,15 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				t.Run("native-interactive-helper", func(t *testing.T) {
 					nativeInteractiveAcceptance(t, lifetime, path, password, server, observer)
 				})
-				t.Run("native-human-ssh", func(t *testing.T) {
+				if !t.Run("native-human-ssh", func(t *testing.T) {
 					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
+				}) {
+					return
+				}
+				nativeKeeperRestoreHumanScope(t, lifetime, path, server, observer, shell, func() {
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
+						t.Fatal("actual keeper did not refuse the changed human SSH scope")
+					}
 				})
 			} else if cycle == "restart" {
 				metadata, err := observer.Backend().Metadata()
@@ -169,8 +179,15 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 					t.Fatal("restarted actual keeper lost the confirmed helper account")
 				}
 			} else {
-				t.Run("native-human-ssh", func(t *testing.T) {
+				if !t.Run("native-human-ssh", func(t *testing.T) {
 					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
+				}) {
+					return
+				}
+				nativeKeeperRestoreHumanScope(t, lifetime, path, server, observer, shell, func() {
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
+						t.Fatal("actual keeper did not refuse the changed human SSH scope")
+					}
 				})
 			}
 			if err := observer.Close(lifetime); err != nil {
@@ -223,13 +240,48 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 					t.Error("standalone control cleanup failed")
 				}
 			}()
-			nativeServerAddress(t, reopenCtx, reopened, server, shell.address())
+			metadata, err := reopened.Backend().Metadata()
+			status := reopened.Backend().Status()
+			digest, digestErr := credentialCipherDigest(path)
+			if err != nil || len(metadata.Servers) != 1 || metadata.Servers[0].ID != server || metadata.Servers[0].Address != shell.address() || status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Database.Revision != status.Database.SavedRevision || digestErr != nil || digest == ([32]byte{}) {
+				t.Fatal("restarted fixture did not retain the explicitly restored human SSH scope")
+			}
 			if err := reopened.Close(reopenCtx); err != nil {
 				if reopenCtx.Err() != nil {
 					t.Fatal("standalone reopen phase budget ended")
 				}
 				t.Fatal("standalone control close failed")
 			}
-		})
+		}) {
+			return
+		}
+	}
+}
+
+func nativeKeeperRestoreHumanScope(t *testing.T, ctx context.Context, path, server string, observer *ownercontrol.Control, shell *loopbackSSH, refuse func()) {
+	t.Helper()
+	metadata, err := observer.Backend().Metadata()
+	status := observer.Backend().Status()
+	if err != nil || len(metadata.Servers) != 1 || metadata.Servers[0].ID != server || metadata.Servers[0].Address != "127.0.0.1:3" || status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Database.Revision != status.Database.SavedRevision {
+		t.Fatal("human SSH scope change was not saved as the exact fixture endpoint")
+	}
+	connections := shell.acceptedConnections()
+	refuse()
+	if shell.acceptedConnections() != connections {
+		t.Fatal("refused changed-scope MCP operation opened an SSH connection")
+	}
+	probe, err := ownerlocal.Dial(ctx, path)
+	if err != nil {
+		t.Fatal("changed-scope refusal released the actual keeper role")
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal("actual keeper role probe did not close")
+	}
+	nativeServerAddress(t, ctx, observer, server, shell.address())
+	metadata, err = observer.Backend().Metadata()
+	status = observer.Backend().Status()
+	digest, digestErr := credentialCipherDigest(path)
+	if err != nil || len(metadata.Servers) != 1 || metadata.Servers[0].ID != server || metadata.Servers[0].Address != shell.address() || status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Database.Revision != status.Database.SavedRevision || digestErr != nil || digest == ([32]byte{}) {
+		t.Fatal("explicit human SSH scope restoration did not produce a healthy saved fixture")
 	}
 }

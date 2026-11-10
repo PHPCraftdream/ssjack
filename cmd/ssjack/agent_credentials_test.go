@@ -205,7 +205,8 @@ func ordinarySSHLiveAcceptance(t *testing.T, parent context.Context) {
 	if err != nil {
 		t.Fatal("initial live SSH job was not admitted")
 	}
-	if identity, err := f.server.waitSyntheticHold(f.ctx); err != nil || identity != "old" {
+	hold, err := f.server.waitSyntheticHold(f.ctx)
+	if err != nil || hold.identity != "old" {
 		t.Fatal("held job did not authenticate as the original identity")
 	}
 	if err := liveEditAccount(f.ctx, f.helper, f.selected.ServerID, f.selected.Revision, []byte("synthetic ordinary live rejected password")); err != nil {
@@ -247,8 +248,8 @@ func ordinarySSHLiveAcceptance(t *testing.T, parent context.Context) {
 		t.Fatal("authenticated owner did not report the replacement as desired, delivered, and adopted")
 	}
 	stillHeld, err := f.jobs.Read(remote.ReadInput{JobID: old.JobID})
-	if err != nil || stillHeld.Done || !strings.Contains(string(stillHeld.Stdout), "SYNTHETIC-LIVE:old") {
-		t.Fatal("pre-edit job did not retain its original live connection")
+	if err != nil || stillHeld.Done || hold.identity != "old" || !hold.alive() {
+		t.Fatal("pre-edit job did not retain its original live SSH connection")
 	}
 	if _, err := io.WriteString(stdin, "human-after-edit\r"); err != nil {
 		t.Fatal("human shell closed during credential replacement")

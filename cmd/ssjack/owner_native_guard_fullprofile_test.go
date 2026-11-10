@@ -142,6 +142,32 @@ func nativeGuardHarnessSession(t *testing.T, ctx context.Context) *mcp.ClientSes
 	return session
 }
 
+func nativeGuardHarnessRefusesChangedScope(t *testing.T, parent context.Context, session *mcp.ClientSession) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+	var targets remote.TargetsOutput
+	nativeGuardMCPCall(t, ctx, session, "remote_targets", map[string]any{}, &targets)
+	if len(targets.Targets) != 1 {
+		t.Fatal("actual harness did not retain its exact SSH scope")
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_exec", Arguments: map[string]any{"target": targets.Targets[0], "command": nativeGuardCommand}})
+	if err != nil || result == nil || !result.IsError {
+		t.Fatal("actual harness did not return a scoped admission refusal")
+	}
+	foundAdmissionError := false
+	for _, content := range result.Content {
+		text, ok := content.(*mcp.TextContent)
+		if ok && text.Text == remote.ErrAdmission.Error() {
+			foundAdmissionError = true
+			break
+		}
+	}
+	if !foundAdmissionError {
+		t.Fatal("actual harness refusal was not the fixed capability admission error")
+	}
+}
+
 func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.ClientSession, refreshed bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
