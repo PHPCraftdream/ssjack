@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/PHPCraftdream/ssjack/internal/sshlive"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
@@ -60,11 +62,10 @@ func TestOwnerQueueAdmissionRejectsNilClosingAndClosed(t *testing.T) {
 }
 
 type agentSourceFixture struct {
-	session         *Session
-	profile         string
-	materialProfile string
-	revision        uint64
-	digest          [32]byte
+	session  *Session
+	profile  string
+	revision uint64
+	digest   [32]byte
 }
 
 func newAgentSourceFixture(t *testing.T) agentSourceFixture {
@@ -73,7 +74,7 @@ func newAgentSourceFixture(t *testing.T) agentSourceFixture {
 	digest := [32]byte{1}
 	return agentSourceFixture{
 		session: &Session{state: state, revision: revision, saved: revision, savedCipher: digest},
-		profile: "production", materialProfile: "production", revision: revision, digest: digest,
+		profile: "production", revision: revision, digest: digest,
 	}
 }
 
@@ -84,16 +85,24 @@ func (f *agentSourceFixture) confirmHealthyChange() {
 	f.session.savedCipher = f.digest
 }
 
-func (f *agentSourceFixture) source(_ context.Context) (sshlive.Material, error) {
+type agentSSHMaterial struct {
+	Config   *ssh.ClientConfig
+	Address  string
+	Scope    string
+	Revision uint64
+	Guard    *outputguard.Snapshot
+}
+
+func (f *agentSourceFixture) source() (agentSSHMaterial, error) {
 	config, address, scope, err := f.session.AgentSSHAt(f.revision, f.digest, f.profile)
 	if err != nil {
-		return sshlive.Material{}, errors.New("synthetic source unavailable")
+		return agentSSHMaterial{}, errors.New("synthetic source unavailable")
 	}
 	guard, err := f.session.OutputGuardAt(f.revision, f.digest)
 	if err != nil {
-		return sshlive.Material{}, errors.New("synthetic guard unavailable")
+		return agentSSHMaterial{}, errors.New("synthetic guard unavailable")
 	}
-	return sshlive.Material{Profile: f.materialProfile, Scope: scope, Revision: f.revision, Config: config, Address: address, Guard: guard}, nil
+	return agentSSHMaterial{Scope: scope, Revision: f.revision, Config: config, Address: address, Guard: guard}, nil
 }
 
 func TestAgentSSHRejectsUnconfirmedOrIneligibleState(t *testing.T) {

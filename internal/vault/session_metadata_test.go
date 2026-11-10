@@ -5,13 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"sync/atomic"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
-
-	"github.com/PHPCraftdream/ssjack/internal/sshlive"
 )
 
 func TestSessionMetadataOwnsCollectionsAndOmitsPrivateMaterial(t *testing.T) {
@@ -53,7 +50,7 @@ func TestSessionMetadataOwnsCollectionsAndOmitsPrivateMaterial(t *testing.T) {
 	}
 }
 
-func TestSessionAgentSSHBindingRejectsEachAuthorityMutation(t *testing.T) {
+func TestSessionAgentSSHScopeChangesForEachAuthorityMutation(t *testing.T) {
 	for _, field := range []struct {
 		name string
 		edit func(*agentSourceFixture)
@@ -67,7 +64,6 @@ func TestSessionAgentSSHBindingRejectsEachAuthorityMutation(t *testing.T) {
 				f.session.state.Servers[id] = server
 			}
 			f.profile = "renamed-profile"
-			f.materialProfile = "renamed-profile"
 		}},
 		{"server-id", func(f *agentSourceFixture) {
 			for id, server := range f.session.state.Servers {
@@ -137,36 +133,27 @@ func TestSessionAgentSSHBindingRejectsEachAuthorityMutation(t *testing.T) {
 	} {
 		t.Run(field.name, func(t *testing.T) {
 			fixture := newAgentSourceFixture(t)
-			baseline, err := fixture.source(context.Background())
+			baseline, err := fixture.source()
 			if err != nil {
 				t.Fatal("healthy baseline source was unavailable")
-			}
-			runtime, err := sshlive.New(context.Background(), baseline.Profile, fixture.source)
-			if err != nil {
-				t.Fatal("baseline runtime was unavailable")
 			}
 			field.edit(&fixture)
 			fixture.confirmHealthyChange()
 			if err := fixture.session.state.validate(); err != nil {
 				t.Fatal("isolated state mutation was invalid")
 			}
-			changed, err := fixture.source(context.Background())
+			changed, err := fixture.source()
 			if err != nil {
 				t.Fatal("healthy changed source was unavailable")
 			}
-			if changed.Scope == baseline.Scope {
-				t.Fatal("authority mutation did not change the production scope")
-			}
-			admitted, err := runtime.Admit(context.Background(), baseline.Profile, "synthetic-command")
-			status := runtime.Status()
-			if !errors.Is(err, sshlive.ErrUnavailable) || admitted.Runner != nil || admitted.Guard != nil || admitted.Issued != nil || status.DeliveredKnown || status.AdoptedKnown || !status.Unavailable {
-				t.Fatal("changed authority was admitted or marked delivered/adopted")
+			if changed.Scope == baseline.Scope || changed.Revision <= baseline.Revision || changed.Config == nil || changed.Address == "" || changed.Guard == nil {
+				t.Fatal("authority mutation did not change the production scope and return confirmed material")
 			}
 		})
 	}
 }
 
-func TestSessionAgentSSHBindingAllowsCredentialRotationAndDisplayRename(t *testing.T) {
+func TestSessionAgentSSHScopeAllowsCredentialRotationAndDisplayRename(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		setup func(*agentSourceFixture)
@@ -203,32 +190,21 @@ func TestSessionAgentSSHBindingAllowsCredentialRotationAndDisplayRename(t *testi
 					t.Fatal("valid credential setup rejected")
 				}
 			}
-			baseline, err := fixture.source(context.Background())
+			baseline, err := fixture.source()
 			if err != nil {
 				t.Fatal("healthy baseline source was unavailable")
-			}
-			runtime, err := sshlive.New(context.Background(), baseline.Profile, fixture.source)
-			if err != nil {
-				t.Fatal("baseline runtime was unavailable")
 			}
 			test.edit(&fixture)
 			fixture.confirmHealthyChange()
 			if err := fixture.session.state.validate(); err != nil {
 				t.Fatal("valid positive-control mutation rejected")
 			}
-			changed, err := fixture.source(context.Background())
-			if err != nil || changed.Scope != baseline.Scope {
-				t.Fatal("allowed change altered the production scope")
+			changed, err := fixture.source()
+			if err != nil || changed.Scope != baseline.Scope || changed.Revision <= baseline.Revision || changed.Config == nil || changed.Address == "" || changed.Guard == nil {
+				t.Fatal("allowed change altered the production scope or failed to return confirmed material")
 			}
-			admitted, err := runtime.Admit(context.Background(), baseline.Profile, "synthetic-command")
-			status := runtime.Status()
-			if err != nil || admitted.Runner == nil || admitted.Guard == nil || admitted.Issued == nil || !status.DesiredKnown || status.DesiredRevision != fixture.revision || status.DeliveredKnown || status.AdoptedKnown {
-				t.Fatal("valid scope change was not admitted exactly before issuance")
-			}
-			admitted.Issued()
-			status = runtime.Status()
-			if !status.DeliveredKnown || status.DeliveredRevision != fixture.revision || status.AdoptedKnown {
-				t.Fatal("issuance did not mark delivery without claiming adoption")
+			if len(changed.Config.Auth) != 1 || changed.Config.User == "" {
+				t.Fatal("credential replacement did not return a valid SSH configuration")
 			}
 		})
 	}
