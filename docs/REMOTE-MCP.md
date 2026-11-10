@@ -218,6 +218,29 @@ or global client config, no
 URL/account/header/method selection, and only the frozen selected bindings are
 visible.
 
+`ssjack mcp` also performs a read-only consistency check of the fixed
+`<cwd>/.mcp.json`, using the cwd established by normal launch. The literal
+`mcpServers.ssjack` entry must use `command: "ssjack"`, `args: ["mcp"]`,
+optional `type: "stdio"`, and must not contain `env` or `cwd`. Normal launch
+writes this fixed entry only when the file is absent; an existing file is never
+rewritten. This check is not an authenticated client-origin binding: it does
+not establish which client, configuration source or executable invoked the
+bridge, attest `PATH`, or exclude alternate/global/CLI config. Same-user
+processes can inspect the bootstrap environment and change configuration after
+the read (TOCTOU). The bridge captures reserved bootstrap/channel values, then
+scrubs its own environment before config/channel early returns; this is partial
+reduction of bridge/descendant early-return custody, not erasure. The parent
+harness still holds bearer environment values, and its generic launcher cannot
+prevent unrelated harness children from inheriting copied values. A cooperative
+attach-only handoff and trusted config-origin binding remain missing.
+
+The per-launch keeper's initial attachment deadline defaults to 2 minutes and
+is configurable up to 10 minutes. Each per-binding local channel descriptor has
+a bootstrap expiry bounded by that configured TTL and the channel runtime
+lifetime; the hard runtime lease is 10 minutes and parent-context cancellation
+shortens it. These existing bounds do not prevent environment inspection or
+inheritance.
+
 Sessions are lazy: no upstream network occurs before the child bridge first
 asks. Inventory is discovered once per binding and frozen. SDK protocol-version
 negotiation refuses unknown versions (2025-06-18, 2025-03-26 and 2024-11-05 are
@@ -232,21 +255,27 @@ cursors, empty, partial, oversized or invalid-name inventories permanently
 refuse that binding with fixed diagnostics; nothing is silently truncated.
 
 The parsed-result guard masks text content, structured-content string leaves
-and inventory prose with the runtime's configured output guard — the mandatory
-snapshot unioned from the channel and bootstrap tokens plus the caller-supplied
-known-output snapshot installed via `ConfigureOutput` before the first message —
-covering every transmitted literal
-including Basic's encoded component. Non-text content is replaced by the fixed
-placeholder `[remote MCP content omitted]`. Schema strings and object keys
-whose masked form would differ are refused, never rewritten, because
-rewriting could change control semantics; this is a bounded refusal, not a
-generic DLP layer. SDK transport and error bodies stay
-behind fixed diagnostics (`remote MCP tool call failed` and similar). Failed or
-timed-out calls are never automatically replayed; an explicit later model call
-is a new bounded request. Under trusted-terminal `--no-output-filter`, only
-the known-literal portion of the guard is disabled — including known upstream
-literals — while channel/bootstrap tokens, fixed error boundaries and all
-size/budget bounds remain mandatory in that mode.
+and inventory prose with the runtime's configured output snapshot. Full-mode
+CLI startup installs `launch.Options.PrepareOutput`; `launch.Run` creates an
+opaque snapshot for its per-launch keeper token and invokes this callback before
+`EnsureMCP` and `broker.Listen`. The callback combines that snapshot with the
+current fail-closed output-guard provider. When the bridge runtime is present,
+`ConfigureOutput` installs the union of that known-output snapshot, per-binding
+channel tokens and the keeper token before the first keeper message. This
+wiring is present for every full-mode CLI launch; the callback/provider path
+also fails closed if output-guard setup is not completed. The snapshot contains
+no token getter or printable token value. The known-output guard covers
+transmitted credential literals, including Basic's encoded component. Under
+trusted-terminal `--no-output-filter`, the caller-supplied known-literal portion
+is disabled (including known upstream literals), while channel and keeper
+tokens, fixed diagnostics and all size bounds remain mandatory. Non-text
+content is replaced by the fixed placeholder. Schema strings and object keys
+whose masked form would differ are refused, never rewritten, because rewriting
+could change control semantics; this is a bounded refusal, not a generic DLP
+layer. SDK transport and error bodies stay behind fixed diagnostics
+(`remote MCP tool call failed` and similar). Failed or timed-out calls are
+never automatically replayed; an explicit later model call is a new bounded
+request.
 
 Shutdown order: keeper disconnect (handler-context supervision) or harness exit
 cancels and joins SDK sessions first, then the launch close callback joins the
@@ -258,10 +287,19 @@ Close using a fresh context, while terminal slot cleanup errors are retained
 and every later Close reports the fixed failure
 (`internal/mcpbridge/lifecycle.go:224–235, :259`).
 
-The runtime's mandatory output guard is exactly the channel/bootstrap-token
-union from `mcpchannel` combined with the caller-supplied known-literal
-snapshot installed at startup (`ConfigureOutput`); the channel token guard is
-never disabled by any flag.
+The runtime's output guard combines per-binding local channel-bootstrap
+tokens, the per-launch keeper bootstrap token, and the caller-supplied
+known-literal snapshot. Full-mode CLI startup wires the opaque keeper-token
+snapshot through `launch.Options.PrepareOutput`; `launch.Run` invokes it before
+`EnsureMCP` and `broker.Listen`. The setup callback installs the token snapshot
+in the dynamic fail-closed guard provider and, when an MCP bridge runtime is
+present, calls `ConfigureOutput` with the known-output/channel-token snapshot
+and the keeper-token snapshot before the first keeper message. This callback is
+installed for every full-mode CLI launch. No token string is exposed by the
+callback. `--no-output-filter` disables only the caller-supplied known-literal
+portion; channel-token and keeper-token masking remain mandatory. This is a
+source-level wiring description, not evidence that runtime tests or CI have
+executed.
 
 Each binding is a distinct namespace, session and failure domain. The local
 transport to the child is the new per-binding pinned-TLS loopback brokers
@@ -288,14 +326,14 @@ and cancellation boundaries, and observed cleanup before positive markers. The
 prepared-launch scenario dials and closes the native owner IPC endpoint, verifies
 post-cleanup refusal, and checks one-shot access and retained launch-guard
 cleanup. The connected harness verifies rejected one-use reconnect while the
-original session remains usable, masks the echoed one-use channel token even
-under bypass, and checks password/route material does not cross the child
-boundary. These are authored source checks, not executed runtime receipts:
-exact-SHA public CI on all three OSes is pending owner CI. They do not assert
-native expiry/revocation flows, HTTP-disconnect rollback, or that the SDK joins
-every goroutine. Runtime acceptance at `6913e5f` and archive receipts at
-`07290ca` are historical, verified CI receipts for distinct earlier sources;
-dedicated #359 remains pending.
+original session remains usable. Echoes of the one-use channel and per-launch
+keeper tokens must be masked in text and structured output even under bypass;
+the harness also checks that password/route material does not cross the child
+boundary. These are authored source checks, not executed runtime receipts: exact-SHA public CI on
+all three OSes is pending owner CI. They do not assert native expiry/revocation
+flows, HTTP-disconnect rollback, or that the SDK joins every goroutine. Runtime
+acceptance at `6913e5f` and archive receipts at `07290ca` are historical,
+verified CI receipts for distinct earlier sources; dedicated #359 remains pending.
 
 ## Compatibility and acceptance
 

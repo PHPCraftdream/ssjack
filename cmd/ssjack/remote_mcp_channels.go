@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
@@ -13,6 +14,59 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
+
+func prepareMCPBootstrapOutput(ctx context.Context, known remote.GuardProvider, runtime *mcpbridge.Runtime) (remote.GuardProvider, func(*outputguard.Snapshot) error) {
+	var mu sync.RWMutex
+	var mandatory *outputguard.Snapshot
+	attempted := false
+	setup := func(snapshot *outputguard.Snapshot) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if attempted {
+			return mcpchannel.ErrSetup
+		}
+		attempted = true
+		if snapshot == nil || known == nil || ctx == nil || ctx.Err() != nil {
+			return mcpchannel.ErrSetup
+		}
+		knownSnapshot, err := known(ctx)
+		if err != nil || knownSnapshot == nil {
+			return mcpchannel.ErrSetup
+		}
+		if _, err := outputguard.Union(knownSnapshot, snapshot); err != nil || ctx.Err() != nil {
+			return mcpchannel.ErrSetup
+		}
+		if runtime != nil && runtime.ConfigureOutput(knownSnapshot, snapshot) != nil {
+			return mcpchannel.ErrSetup
+		}
+		if ctx.Err() != nil {
+			return mcpchannel.ErrSetup
+		}
+		mandatory = snapshot
+		return nil
+	}
+	provider := func(ctx context.Context) (*outputguard.Snapshot, error) {
+		if ctx == nil || ctx.Err() != nil || known == nil {
+			return nil, outputguard.ErrGuard
+		}
+		knownSnapshot, err := known(ctx)
+		if err != nil || knownSnapshot == nil {
+			return nil, outputguard.ErrGuard
+		}
+		mu.RLock()
+		tokenSnapshot := mandatory
+		mu.RUnlock()
+		if tokenSnapshot == nil {
+			return nil, outputguard.ErrGuard
+		}
+		combined, err := outputguard.Union(knownSnapshot, tokenSnapshot)
+		if err != nil || ctx.Err() != nil {
+			return nil, outputguard.ErrGuard
+		}
+		return combined, nil
+	}
+	return provider, setup
+}
 
 func prepareRemoteMCPChannels(ctx context.Context, credentials *agentCredentials, known remote.GuardProvider, ttl time.Duration) (remote.GuardProvider, string, error) {
 	if credentials == nil || credentials.mcpBridge == nil {

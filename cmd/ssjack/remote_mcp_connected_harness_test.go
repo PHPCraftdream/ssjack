@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -87,7 +88,12 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		if err != nil || len(descriptors) != 1 || descriptors[0].Ordinal != 0 {
 			t.Fatal("confirmed local channel capability is unavailable")
 		}
-		capability = descriptors[0].Token
+		channelToken := descriptors[0].Token
+		keeperToken := os.Getenv(broker.EnvToken)
+		if len(channelToken) != 64 || len(keeperToken) != 64 || channelToken == keeperToken {
+			t.Fatal("connected harness did not receive distinct per-launch capabilities")
+		}
+		capability = channelToken + "|" + keeperToken
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -232,10 +238,11 @@ func remoteMCPConnectedCall(t *testing.T, ctx context.Context, session *mcp.Clie
 	joined := []byte("synthetic-mcp-owner:synthetic startup Basic credential")
 	basicEncoded := []byte(base64.StdEncoding.EncodeToString(joined))
 	if capability != "" {
-		structured, ok := result.StructuredContent.(map[string]any)
+		channelToken, keeperToken, ok := strings.Cut(capability, "|")
+		structured, structuredOK := result.StructuredContent.(map[string]any)
 		text, textOK := result.Content[0].(*mcp.TextContent)
-		if !ok || !textOK || text == nil || structured["capability"] != outputguard.Marker || !strings.HasSuffix(text.Text, "|"+outputguard.Marker) || strings.Contains(string(encoded), capability) {
-			t.Fatal("actual connected result did not guard the echoed local capability")
+		if !ok || channelToken == "" || keeperToken == "" || !structuredOK || !textOK || text == nil || structured["capability"] != outputguard.Marker+"|"+outputguard.Marker || !strings.HasSuffix(text.Text, "|"+outputguard.Marker+"|"+outputguard.Marker) || strings.Contains(string(encoded), channelToken) || strings.Contains(string(encoded), keeperToken) {
+			t.Fatal("actual connected result did not guard both local capabilities")
 		}
 	}
 	if !bypass {

@@ -17,25 +17,30 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
+	"github.com/PHPCraftdream/ssjack/internal/mcpjson"
+	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/uiplugin"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
+type OutputSetup func(*outputguard.Snapshot) error
+
 type Options struct {
-	Root         string
-	Mode         broker.Mode
-	Executable   string
-	Command      []string
-	BootstrapTTL time.Duration
-	Handler      broker.Handler
-	Metadata     *enrollment.Metadata
-	Policy       *enrollment.Policy
-	Identity     *enrollment.Snapshot
-	Synthetic    *declarativeslice.Session
-	Stdin        io.Reader
-	Stdout       io.Writer
-	Stderr       io.Writer
-	RemoteMCP    string
+	Root          string
+	Mode          broker.Mode
+	Executable    string
+	Command       []string
+	BootstrapTTL  time.Duration
+	Handler       broker.Handler
+	Metadata      *enrollment.Metadata
+	Policy        *enrollment.Policy
+	Identity      *enrollment.Snapshot
+	Synthetic     *declarativeslice.Session
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
+	RemoteMCP     string
+	PrepareOutput OutputSetup
 }
 
 func Environment(base []string, bootstrap broker.Bootstrap, executable string) []string {
@@ -62,27 +67,62 @@ func Environment(base []string, bootstrap broker.Bootstrap, executable string) [
 		broker.EnvEndpoint+"="+bootstrap.Endpoint, broker.EnvPin+"="+bootstrap.Pin)
 }
 
+func ValidateMCP(root string) error {
+	file, err := os.Open(filepath.Join(root, ".mcp.json"))
+	if err != nil {
+		return errors.New("MCP bridge requires a readable fixed .mcp.json")
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+	if err != nil || len(data) > 64<<10 {
+		return errors.New("MCP bridge requires a readable fixed .mcp.json")
+	}
+	decoded, err := mcpjson.Decode(data, 64*1024, 16, 4096)
+	config, ok := decoded.(map[string]any)
+	if err != nil || !ok {
+		return errors.New("MCP bridge refuses invalid fixed .mcp.json")
+	}
+	for key := range config {
+		if strings.EqualFold(key, "mcpServers") && key != "mcpServers" {
+			return errors.New("MCP bridge refuses ambiguous server map fields")
+		}
+	}
+	servers, ok := config["mcpServers"].(map[string]any)
+	if !ok {
+		return errors.New("MCP bridge refuses invalid fixed .mcp.json")
+	}
+	for key := range servers {
+		if strings.EqualFold(key, "ssjack") && key != "ssjack" {
+			return errors.New("MCP bridge refuses ambiguous ssjack entry fields")
+		}
+	}
+	entry, ok := servers["ssjack"].(map[string]any)
+	if !ok {
+		return errors.New("MCP bridge requires a literal ssjack stdio entry in fixed .mcp.json")
+	}
+	for key := range entry {
+		lower := strings.ToLower(key)
+		if key != lower && (lower == "type" || lower == "command" || lower == "args" || lower == "env" || lower == "cwd") {
+			return errors.New("MCP bridge refuses ambiguous ssjack configuration fields")
+		}
+	}
+	command, commandOK := entry["command"].(string)
+	args, argsOK := entry["args"].([]any)
+	typeValue, hasType := entry["type"]
+	_, hasEnv := entry["env"]
+	_, hasCwd := entry["cwd"]
+	if !commandOK || command != "ssjack" || (hasType && typeValue != "stdio") || !argsOK || len(args) != 1 || args[0] != "mcp" || hasEnv || hasCwd {
+		return errors.New("MCP bridge requires command=ssjack, args=[mcp], optional type=stdio, and no env or cwd")
+	}
+	return nil
+}
+
 func EnsureMCP(root string) error {
 	entry := map[string]any{"type": "stdio", "command": "ssjack", "args": []string{"mcp"}}
 	path := filepath.Join(root, ".mcp.json")
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if os.IsExist(err) {
-		data, readErr := os.ReadFile(path)
-		if readErr != nil || len(data) > 64*1024 {
-			return errors.New("failed to read the existing .mcp.json")
-		}
-		var config struct {
-			Servers map[string]struct {
-				Type    string   `json:"type"`
-				Command string   `json:"command"`
-				Args    []string `json:"args"`
-			} `json:"mcpServers"`
-		}
-		if json.Unmarshal(data, &config) != nil {
-			return errors.New("existing .mcp.json is invalid")
-		}
-		existing, ok := config.Servers["ssjack"]
-		if !ok || (existing.Type != "" && existing.Type != "stdio") || existing.Command != "ssjack" || len(existing.Args) != 1 || existing.Args[0] != "mcp" {
+		if validateErr := ValidateMCP(root); validateErr != nil {
 			return errors.New("existing .mcp.json was not changed: add an ssjack stdio server with command=ssjack and args=[mcp]")
 		}
 		return nil
@@ -164,6 +204,25 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	session, err := wire.RandomToken()
+	if err != nil {
+		return 1, err
+	}
+	envToken, err := wire.RandomToken()
+	if err != nil {
+		return 1, err
+	}
+	tokenBytes := []byte(envToken)
+	tokenSnapshot, err := outputguard.New([][]byte{tokenBytes})
+	for i := range tokenBytes {
+		tokenBytes[i] = 0
+	}
+	if err != nil {
+		return 1, errors.New("MCP bootstrap output guard setup failed")
+	}
+	if opts.PrepareOutput != nil && opts.PrepareOutput(tokenSnapshot) != nil {
+		return 1, errors.New("MCP bootstrap output guard setup failed")
+	}
 	if err := EnsureMCP(root); err != nil {
 		return 1, err
 	}
@@ -172,14 +231,6 @@ func Run(ctx context.Context, opts Options) (int, error) {
 		return 1, fmt.Errorf("failed to prepare ssjack UI: %w", err)
 	}
 	if err := hooks.RemoveDisplay(root); err != nil {
-		return 1, err
-	}
-	session, err := wire.RandomToken()
-	if err != nil {
-		return 1, err
-	}
-	envToken, err := wire.RandomToken()
-	if err != nil {
 		return 1, err
 	}
 	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, dispatch)

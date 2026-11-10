@@ -20,7 +20,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
-	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
+	"github.com/PHPCraftdream/ssjack/internal/mcpstart"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -307,6 +307,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var streamRunner remote.StreamRunner
 	var targets []string
 	var remoteMCPDescriptor string
+	var bootstrapOutput launch.OutputSetup
 	if *modeFlag == string(broker.ModeFull) {
 		applicationOptions, err = registeredClawwright(*clawwrightDirectory, *clawwrightEntry, *clawwrightContainer, *clawwrightUser, profile, nil)
 		if err != nil {
@@ -331,6 +332,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		if err != nil {
 			return 1, errors.New("remote MCP channel setup failed")
 		}
+		guard, bootstrapOutput = prepareMCPBootstrapOutput(ctx, guard, credentials.mcpBridge)
 		if named {
 			if err := bindNamedApplication(applicationOptions, targets); err != nil {
 				return 1, err
@@ -371,7 +373,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	} else {
 		fmt.Fprintln(os.Stderr, "Starting declarative session. MCP access will attach once to this session.")
 	}
-	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, RemoteMCP: remoteMCPDescriptor, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, RemoteMCP: remoteMCPDescriptor, PrepareOutput: bootstrapOutput, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
 func runHook(args []string) (int, error) {
@@ -393,26 +395,11 @@ func runHook(args []string) (int, error) {
 }
 
 func runMCP(ctx context.Context) (int, error) {
-	encodedChannels, suppliedChannels := os.LookupEnv(mcpchannel.Env)
-	_ = os.Unsetenv(mcpchannel.Env)
-	var descriptors []mcpchannel.Descriptor
-	if suppliedChannels {
-		var err error
-		descriptors, err = mcpchannel.DecodeDescriptors(encodedChannels)
-		if err != nil {
-			return 1, errors.New("remote MCP channel descriptors are invalid")
-		}
+	bootstrap, descriptors, err := mcpstart.ReadEnvironment()
+	if err != nil {
+		return 1, err
 	}
-	bootstrap := broker.Bootstrap{
-		Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint),
-		Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken),
-	}
-	for _, name := range []string{broker.EnvFile, broker.EnvToken, broker.EnvSession, broker.EnvEndpoint, broker.EnvPin, "SSJACK_APP_ENDPOINT", "SSJACK_APP_TOKEN", "SSJACK_APP_CERTIFICATE_SHA256"} {
-		os.Unsetenv(name)
-	}
-	if bootstrap.Endpoint == "" || bootstrap.Pin == "" || bootstrap.Session == "" || bootstrap.Token == "" {
-		return 1, errors.New("start the MCP bridge through an ssjack session")
-	}
+	defer func() { bootstrap.Token = "" }()
 	client, err := broker.ConnectBootstrap(ctx, bootstrap)
 	bootstrap.Token = ""
 	if err != nil {

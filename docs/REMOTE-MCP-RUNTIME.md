@@ -40,18 +40,20 @@ bound for the slot's lifetime. Inventory is discovered once per binding and
 frozen for the launch; partial, empty or oversized inventory permanently
 refuses the binding instead of silently hiding tools.
 
-The parsed-result guard applies to everything model-facing: text and
-structured results and inventory prose are masked with the runtime's
-configured output guard — the mandatory snapshot unioned from the channel and
-bootstrap tokens plus the caller-supplied known-output snapshot installed via
-`ConfigureOutput` before the first keeper message. Under trusted-terminal
-`--no-output-filter` the known-literal portion is disabled (including known
-upstream literals), while the channel/bootstrap tokens, fixed diagnostics and
-all size bounds remain mandatory. Non-text content is replaced by a fixed
-placeholder. It refuses — never rewrites — schema strings and object keys
-whose masked form would differ, because rewriting either could change control
-semantics; this is a bounded control-string refusal, not a generic DLP layer.
-Parsed-result diagnostics exposed by the bridge remain fixed and do not
+The parsed-result guard masks text content, structured-content string leaves
+and inventory prose. In full mode, `main` passes
+`prepareMCPBootstrapOutput` as `launch.Run`'s `PrepareOutput` callback;
+`launch.Run` supplies the opaque keeper-token snapshot before `EnsureMCP` and
+`broker.Listen`. The callback unions it with the known-output snapshot
+(including transmitted credential literals, including Basic's encoded
+component) and channel-output snapshot, then configures the bridge before the
+first keeper message. The wrapped job guard provider fails closed until setup
+succeeds; the bridge's parsed-result guard is configured separately before child access. `--no-output-filter` disables only the known-output guard; both the
+keeper-token and channel guards remain mandatory. Non-text content is replaced
+by a fixed placeholder. It refuses — never rewrites — schema strings and object
+keys whose masked form would differ, because rewriting either could change
+control semantics; this is a bounded control-string refusal, not a generic DLP
+layer. Parsed-result diagnostics exposed by the bridge remain fixed and do not
 include raw SDK transport or read errors. No failed or timed-out call is ever
 automatically replayed, and a later explicit model call is a new bounded
 request.
@@ -139,9 +141,13 @@ readErr and writeErr, so orderly owned shutdown reports clean while genuine
 failures stay terminal. The
 constructor parent (or explicit `BindLifetime` keeper context) supervises
 runtime lifetime; per-message handler contexts only cancel their own operation.
-`ConfigureOutput` must be called before the first keeper message to union
-the caller-supplied known output snapshot with the mandatory channel
-secrets.
+`ConfigureOutput` is called before the first keeper message to install
+mandatory channel secrets and the caller-supplied known-output snapshot. The
+full-mode CLI also wires the keeper's opaque token snapshot through
+`launch.Options.PrepareOutput`, called by `launch.Run` before `EnsureMCP` and
+`broker.Listen`; it adds the keeper token to the fail-closed job guard provider
+and, for the bridge runtime, to `ConfigureOutput` before any keeper message.
+This is source wiring, not a test-execution or runtime-acceptance claim.
 
 Native acceptance source for #318 covers Linux, Windows and macOS; it is not
 actual three-OS runtime acceptance. Exact-SHA public CI receipts remain pending
