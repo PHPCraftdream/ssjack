@@ -138,3 +138,137 @@ func TestGuardedRunnerErrorUsesFixedDiagnosticAndClosesBothStreams(t *testing.T)
 		t.Fatal("runner error leaked diagnostics, lost safe tails or changed exit code")
 	}
 }
+
+func admittedGuard(t *testing.T, secret string) *outputguard.Snapshot {
+	t.Helper()
+	snapshot, err := outputguard.New([][]byte{[]byte(secret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func TestAdmittedOperationIsCapturedBeforeStartReturns(t *testing.T) {
+	guard := admittedGuard(t, "admitted-secret")
+	var issued atomic.Int32
+	h := newAdmissionTestHarness(t, func(h *admissionTestHarness) AdmissionProvider {
+		return func(_ context.Context, _, _ string) (AdmittedOperation, error) {
+			close(h.entered)
+			select {
+			case <-h.release:
+			case <-h.ctx.Done():
+				return AdmittedOperation{}, h.ctx.Err()
+			}
+			return AdmittedOperation{
+				Guard:  guard,
+				Issued: func() { issued.Add(1) },
+				Runner: func(_ context.Context, _, _ string, stdout, _ io.Writer) (int, error) {
+					if issued.Load() != 1 {
+						return -1, errors.New("runner started before issuance")
+					}
+					_, err := stdout.Write([]byte("admitted-secret"))
+					return 0, err
+				},
+			}, nil
+		}
+	})
+	h.start(StartInput{Target: "test", Command: "run"})
+	h.wait(t, h.entered, "admission provider did not reach barrier")
+	select {
+	case <-h.startResult:
+		t.Fatal("Start returned before admission completed")
+	default:
+	}
+	h.openGate()
+	if !h.awaitStart(t) {
+		return
+	}
+	if h.startErr != nil || issued.Load() != 1 {
+		t.Fatal("admission failed or issuance did not precede the worker")
+	}
+	awaitJob(t, h.manager, h.started.JobID)
+	out, err := h.manager.Read(ReadInput{JobID: h.started.JobID})
+	if err != nil || !out.Done || string(out.Stdout) != outputguard.Marker {
+		t.Fatal("admitted runner did not use its captured guard")
+	}
+}
+
+func TestAdmissionFailureAndIncompleteCaptureScheduleNoJob(t *testing.T) {
+	var issued atomic.Int32
+	validRunner := Runner(func(context.Context, string, string, io.Writer, io.Writer) (int, error) { return 0, nil })
+	cases := []struct {
+		name     string
+		provider AdmissionProvider
+	}{
+		{"provider error", func(context.Context, string, string) (AdmittedOperation, error) {
+			return AdmittedOperation{Issued: func() { issued.Add(1) }}, privateJobError{}
+		}},
+		{"missing runner", func(context.Context, string, string) (AdmittedOperation, error) {
+			return AdmittedOperation{Guard: admittedGuard(t, "secret"), Issued: func() { issued.Add(1) }}, nil
+		}},
+		{"missing guard", func(context.Context, string, string) (AdmittedOperation, error) {
+			return AdmittedOperation{Runner: validRunner, Issued: func() { issued.Add(1) }}, nil
+		}},
+		{"invalid guard", func(context.Context, string, string) (AdmittedOperation, error) {
+			return AdmittedOperation{Runner: validRunner, Guard: &outputguard.Snapshot{}, Issued: func() { issued.Add(1) }}, nil
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			issued.Store(0)
+			m := NewAdmittedManager(context.Background(), []string{"test"}, test.provider)
+			started, err := m.Start(StartInput{Target: "test", Command: "run"})
+			m.Close()
+			if err != ErrAdmission || started.JobID != "" || len(m.jobs) != 0 || m.active != 0 || issued.Load() != 0 {
+				t.Fatal("failed admission created a scheduled job or exposed provider diagnostics")
+			}
+		})
+	}
+}
+
+func TestCapturedAdmissionSurvivesProviderChangeBeforeReturn(t *testing.T) {
+	oldGuard := admittedGuard(t, "old-secret")
+	newGuard := admittedGuard(t, "new-secret")
+	current := AdmittedOperation{
+		Guard: oldGuard,
+		Runner: func(_ context.Context, _, _ string, stdout, _ io.Writer) (int, error) {
+			_, err := stdout.Write([]byte("old-secret"))
+			return 0, err
+		},
+	}
+	var providerCalls atomic.Int32
+	h := newAdmissionTestHarness(t, func(h *admissionTestHarness) AdmissionProvider {
+		return func(_ context.Context, _, _ string) (AdmittedOperation, error) {
+			providerCalls.Add(1)
+			admitted := current
+			close(h.entered)
+			select {
+			case <-h.release:
+			case <-h.ctx.Done():
+				return AdmittedOperation{}, h.ctx.Err()
+			}
+			return admitted, nil
+		}
+	})
+	h.start(StartInput{Target: "test", Command: "run"})
+	h.wait(t, h.entered, "admission provider did not reach barrier")
+	current = AdmittedOperation{
+		Guard: newGuard,
+		Runner: func(_ context.Context, _, _ string, stdout, _ io.Writer) (int, error) {
+			_, err := stdout.Write([]byte("new-runner"))
+			return 0, err
+		},
+	}
+	h.openGate()
+	if !h.awaitStart(t) {
+		return
+	}
+	if h.startErr != nil || providerCalls.Load() != 1 {
+		t.Fatal("admission was not captured synchronously")
+	}
+	awaitJob(t, h.manager, h.started.JobID)
+	out, err := h.manager.Read(ReadInput{JobID: h.started.JobID})
+	if err != nil || !out.Done || string(out.Stdout) != outputguard.Marker {
+		t.Fatal("worker did not use the admitted runner and guard")
+	}
+}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/sshlive"
+	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 )
 
 func TestOwnerQueueAdmissionIsRevisionLockedAndDoesNotEdit(t *testing.T) {
@@ -53,5 +56,90 @@ func TestOwnerQueueAdmissionRejectsNilClosingAndClosed(t *testing.T) {
 	s.Discard()
 	if err := s.AdmitAt(0, func() error { called = true; return nil }); err == nil || called {
 		t.Fatal("closed session admitted new owner work")
+	}
+}
+
+type agentSourceFixture struct {
+	session         *Session
+	profile         string
+	materialProfile string
+	revision        uint64
+	digest          [32]byte
+}
+
+func newAgentSourceFixture(t *testing.T) agentSourceFixture {
+	state, _ := directoryFixture(t)
+	const revision = 7
+	digest := [32]byte{1}
+	return agentSourceFixture{
+		session: &Session{state: state, revision: revision, saved: revision, savedCipher: digest},
+		profile: "production", materialProfile: "production", revision: revision, digest: digest,
+	}
+}
+
+func (f *agentSourceFixture) confirmHealthyChange() {
+	f.revision++
+	f.digest = [32]byte{byte(f.revision)}
+	f.session.revision, f.session.saved = f.revision, f.revision
+	f.session.savedCipher = f.digest
+}
+
+func (f *agentSourceFixture) source(_ context.Context) (sshlive.Material, error) {
+	config, address, scope, err := f.session.AgentSSHAt(f.revision, f.digest, f.profile)
+	if err != nil {
+		return sshlive.Material{}, errors.New("synthetic source unavailable")
+	}
+	guard, err := f.session.OutputGuardAt(f.revision, f.digest)
+	if err != nil {
+		return sshlive.Material{}, errors.New("synthetic guard unavailable")
+	}
+	return sshlive.Material{Profile: f.materialProfile, Scope: scope, Revision: f.revision, Config: config, Address: address, Guard: guard}, nil
+}
+
+func TestAgentSSHRejectsUnconfirmedOrIneligibleState(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		edit         func(*agentSourceFixture)
+		wantRevision uint64
+		wantDigest   [32]byte
+	}{
+		{"revision", nil, 8, [32]byte{1}},
+		{"unsaved", func(f *agentSourceFixture) { f.session.saved-- }, 7, [32]byte{1}},
+		{"save-error", func(f *agentSourceFixture) { f.session.saveErr = errors.New("synthetic save failure") }, 7, [32]byte{1}},
+		{"digest-mismatch", func(f *agentSourceFixture) { f.session.savedCipher[0]++ }, 7, [32]byte{1}},
+		{"saved-digest-zero", func(f *agentSourceFixture) { f.session.savedCipher = [32]byte{} }, 7, [32]byte{1}},
+		{"requested-digest-zero", nil, 7, [32]byte{}},
+		{"human-only", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Usage = "human"
+			f.session.state.Targets[f.profile] = target
+		}, 7, [32]byte{1}},
+		{"proxy", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Proxy = &sshproxy.Config{Type: "socks5", Address: "127.0.0.1:1080"}
+			f.session.state.Targets[f.profile] = target
+		}, 7, [32]byte{1}},
+		{"owner-pending", func(f *agentSourceFixture) { f.session.state.OwnerStore = &OwnerStore{Pending: &OwnerIntent{}} }, 7, [32]byte{1}},
+		{"multiple-profiles", func(f *agentSourceFixture) {
+			for id, server := range f.session.state.Servers {
+				server.Accounts["secondary"] = f.profile
+				f.session.state.Servers[id] = server
+			}
+		}, 7, [32]byte{1}},
+		{"closed", func(f *agentSourceFixture) { f.session.closed = true }, 7, [32]byte{1}},
+		{"closing", func(f *agentSourceFixture) { f.session.closing = true }, 7, [32]byte{1}},
+		{"missing-state", func(f *agentSourceFixture) { f.session.state = nil }, 7, [32]byte{1}},
+		{"unsupported-state-version", func(f *agentSourceFixture) { f.session.state.Version = 1 }, 7, [32]byte{1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAgentSourceFixture(t)
+			if test.edit != nil {
+				test.edit(&fixture)
+			}
+			config, address, scope, err := fixture.session.AgentSSHAt(test.wantRevision, test.wantDigest, fixture.profile)
+			if err == nil || config != nil || address != "" || scope != "" {
+				t.Fatal("unconfirmed or ineligible state exposed SSH material")
+			}
+		})
 	}
 }

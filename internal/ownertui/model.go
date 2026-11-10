@@ -227,7 +227,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	var out strings.Builder
 	out.WriteString("ssjack — owner database\n")
-	description := m.describe()
+	description := m.describe() + m.status.Database.SSH.Display()
 	out.WriteString(description + "\n")
 	if m.form != nil {
 		out.WriteString(escaped(m.form.action) + "\n\n")

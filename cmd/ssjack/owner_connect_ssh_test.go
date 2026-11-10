@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/subtle"
@@ -21,17 +22,22 @@ import (
 // It records only handshakes that completed authentication, so a client that
 // rejects the host key never shows up in the records.
 type loopbackSSH struct {
-	listener net.Listener
-	config   *ssh.ServerConfig
-	hostKey  ssh.PublicKey
-	marker   string
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	conns    map[net.Conn]struct{}
-	records  []string
-	exits    []uint32
-	accepted int // raw TCP connections, counted before any SSH handshake
-	stopped  bool
+	listener    net.Listener
+	config      *ssh.ServerConfig
+	hostKey     ssh.PublicKey
+	marker      string
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	conns       map[net.Conn]struct{}
+	records     []string
+	identities  []string
+	exits       []uint32
+	passwords   map[string]string
+	holdStarted chan string
+	holdRelease chan struct{}
+	holdOnce    sync.Once
+	accepted    int // raw TCP connections, counted before any SSH handshake
+	stopped     bool
 }
 
 func startLoopbackSSH(t *testing.T, allowed ssh.PublicKey, password, marker string) *loopbackSSH {
@@ -44,19 +50,30 @@ func startLoopbackSSH(t *testing.T, allowed ssh.PublicKey, password, marker stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted := func(method string) (*ssh.Permissions, error) {
-		return &ssh.Permissions{Extensions: map[string]string{"method": method}}, nil
+	var server *loopbackSSH
+	accepted := func(method, identity string) (*ssh.Permissions, error) {
+		return &ssh.Permissions{Extensions: map[string]string{"method": method, "identity": identity}}, nil
 	}
 	config := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, attempt []byte) (*ssh.Permissions, error) {
-			if c.User() == "second" && subtle.ConstantTimeCompare(attempt, []byte(password)) == 1 {
-				return accepted("password")
+			if c.User() == "second" && server != nil {
+				server.mu.Lock()
+				identity := ""
+				for candidate, label := range server.passwords {
+					if subtle.ConstantTimeCompare(attempt, []byte(candidate)) == 1 {
+						identity = label
+					}
+				}
+				server.mu.Unlock()
+				if identity != "" {
+					return accepted("password", identity)
+				}
 			}
 			return nil, errors.New("rejected")
 		},
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if bytes.Equal(key.Marshal(), allowed.Marshal()) {
-				return accepted("publickey")
+				return accepted("publickey", "key")
 			}
 			return nil, errors.New("rejected")
 		},
@@ -66,7 +83,11 @@ func startLoopbackSSH(t *testing.T, allowed ssh.PublicKey, password, marker stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &loopbackSSH{listener: listener, config: config, hostKey: signer.PublicKey(), marker: marker, conns: make(map[net.Conn]struct{})}
+	server = &loopbackSSH{
+		listener: listener, config: config, hostKey: signer.PublicKey(), marker: marker,
+		conns: make(map[net.Conn]struct{}), passwords: map[string]string{password: "default"},
+		holdStarted: make(chan string, 8), holdRelease: make(chan struct{}),
+	}
 	server.wg.Add(1)
 	go server.accept()
 	t.Cleanup(server.stop)
@@ -74,6 +95,39 @@ func startLoopbackSSH(t *testing.T, allowed ssh.PublicKey, password, marker stri
 }
 
 func (s *loopbackSSH) address() string { return s.listener.Addr().String() }
+
+func (s *loopbackSSH) setPasswordLabel(password, label string, enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if enabled {
+		s.passwords[password] = label
+	} else {
+		delete(s.passwords, password)
+	}
+}
+
+func (s *loopbackSSH) hasIdentityLabel(want string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, identity := range s.identities {
+		if identity == want {
+			return true
+		}
+	}
+	return false
+}
+func (s *loopbackSSH) releaseSyntheticHolds() {
+	s.holdOnce.Do(func() { close(s.holdRelease) })
+}
+
+func (s *loopbackSSH) waitSyntheticHold(ctx context.Context) (string, error) {
+	select {
+	case identity := <-s.holdStarted:
+		return identity, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
 
 func (s *loopbackSSH) accept() {
 	defer s.wg.Done()
@@ -106,6 +160,7 @@ func (s *loopbackSSH) track(conn net.Conn) bool {
 
 func (s *loopbackSSH) stop() {
 	s.listener.Close()
+	s.releaseSyntheticHolds()
 	s.mu.Lock()
 	s.stopped = true
 	for conn := range s.conns {
@@ -149,6 +204,7 @@ func (s *loopbackSSH) serve(conn net.Conn) {
 	conn.SetDeadline(time.Time{})
 	defer connection.Close()
 	s.mu.Lock()
+	s.identities = append(s.identities, connection.User()+"|"+connection.Permissions.Extensions["identity"])
 	s.records = append(s.records, connection.User()+"|"+connection.Permissions.Extensions["method"])
 	s.mu.Unlock()
 	// Helper goroutines join s.wg: serve holds a count, so Add cannot race Wait,
@@ -163,12 +219,11 @@ func (s *loopbackSSH) serve(conn net.Conn) {
 			channel.Reject(ssh.UnknownChannelType, "sessions only")
 			continue
 		}
-		s.session(connection.User(), channel)
-
+		s.session(connection.User(), connection.Permissions.Extensions["identity"], channel)
 	}
 }
 
-func (s *loopbackSSH) session(login string, opened ssh.NewChannel) {
+func (s *loopbackSSH) session(login, identity string, opened ssh.NewChannel) {
 	channel, requests, err := opened.Accept()
 	if err != nil {
 		return
@@ -181,7 +236,7 @@ func (s *loopbackSSH) session(login string, opened ssh.NewChannel) {
 		defer close(finished)
 		var once sync.Once
 		for request := range requests {
-			if request.Type == "exec" && nativeGuardSSHReply(s, channel, request) {
+			if request.Type == "exec" && (nativeGuardSSHReply(s, channel, request) || syntheticLiveReply(s, identity, channel, request)) {
 				return
 			}
 			ok := request.Type == "pty-req" || request.Type == "shell"

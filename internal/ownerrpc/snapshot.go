@@ -8,6 +8,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -89,6 +90,14 @@ func cloneMCP(m mcpdirectory.Metadata) mcpdirectory.Metadata {
 	return out
 }
 
+func cloneSSH(status *sshstatus.Status) *sshstatus.Status {
+	if status == nil {
+		return nil
+	}
+	cloned := *status
+	return &cloned
+}
+
 // SnapshotReply copies caller-owned metadata into a closed reply, never a getter.
 func SnapshotReply(s ownerdb.Snapshot, err error) ownerpacket.Reply { return encodeSnapshot(s, err) }
 
@@ -98,6 +107,7 @@ func encodeSnapshot(s ownerdb.Snapshot, err error) ownerpacket.Reply {
 		Revision: s.Status.Database.Revision, SavedRevision: s.Status.Database.SavedRevision,
 		Saving: s.Status.Database.Pending, DatabaseFailed: s.Status.Database.Err != nil,
 		Busy: s.Status.Busy, Pending: s.Status.Pending, Failed: s.Status.Err != nil, CipherDigest: s.CipherDigest,
+		SSH: cloneSSH(s.Status.Database.SSH),
 	}
 	r.Metadata.RemoteMCP = cloneMCP(s.Directory.RemoteMCP)
 	if s.Directory.Secrets != nil {
@@ -129,7 +139,7 @@ func encodeSnapshot(s ownerdb.Snapshot, err error) ownerpacket.Reply {
 
 func decodeSnapshot(r ownerpacket.Reply) (ownerdb.Snapshot, error) {
 	s := ownerdb.Snapshot{CipherDigest: r.Status.CipherDigest}
-	s.Status = ownerdb.Status{Database: vault.SessionStatus{Revision: r.Status.Revision, SavedRevision: r.Status.SavedRevision, Pending: r.Status.Saving}, Busy: r.Status.Busy, Pending: r.Status.Pending}
+	s.Status = ownerdb.Status{Database: vault.SessionStatus{Revision: r.Status.Revision, SavedRevision: r.Status.SavedRevision, Pending: r.Status.Saving, SSH: cloneSSH(r.Status.SSH)}, Busy: r.Status.Busy, Pending: r.Status.Pending}
 	if r.Status.DatabaseFailed {
 		s.Status.Database.Err = errDatabase
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -278,6 +279,8 @@ func (m *Manager) importCommitted(change vault.OwnerChange, refs []appstoreref.R
 	}
 	m.importCommittedWith(change, refs, metadata.Secrets)
 }
+
+func (m *Manager) SetSSHStatus(status func() sshstatus.Status) { m.db.SetSSHStatus(status) }
 
 func (m *Manager) importCommittedWith(change vault.OwnerChange, refs []appstoreref.Ref, secrets map[string]vault.SecretBinding) {
 	m.mu.Lock()

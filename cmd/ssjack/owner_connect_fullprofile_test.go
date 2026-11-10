@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -217,4 +219,45 @@ func restrictToSingleHuman(t *testing.T, ctx context.Context, path string, passw
 	if err := manager.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func liveReadJob(t *testing.T, ctx context.Context, jobs *remote.Manager, id string) remote.ReadOutput {
+	t.Helper()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		result, err := jobs.Read(remote.ReadInput{JobID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Done {
+			return result
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("synthetic SSH operation did not finish")
+		case <-ticker.C:
+		}
+	}
+}
+
+func syntheticLiveReply(server *loopbackSSH, identity string, channel ssh.Channel, request *ssh.Request) bool {
+	var command struct{ Command string }
+	if server.marker != "owner-control" || ssh.Unmarshal(request.Payload, &command) != nil ||
+		(command.Command != "synthetic-live-hold" && command.Command != "synthetic-live-once") {
+		return false
+	}
+	if request.WantReply {
+		_ = request.Reply(true, nil)
+	}
+	if _, err := fmt.Fprintf(channel, "SYNTHETIC-LIVE:%s\n", identity); err != nil {
+		return true
+	}
+	if command.Command == "synthetic-live-hold" {
+		server.holdStarted <- identity
+		<-server.holdRelease
+	}
+	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+	_ = channel.Close()
+	return true
 }

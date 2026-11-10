@@ -19,6 +19,10 @@ func sshStageError(ctx context.Context, message string) error {
 }
 
 func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, func(), error) {
+	return connectSSHAdmitted(ctx, address, config, nil)
+}
+
+func connectSSHAdmitted(ctx context.Context, address string, config *ssh.ClientConfig, acknowledge func()) (*ssh.Client, func(), error) {
 	prepared, used, err := sshauth.ForConnection(config)
 	if err != nil {
 		return nil, nil, err
@@ -43,6 +47,9 @@ func connectSSH(ctx context.Context, address string, config *ssh.ClientConfig) (
 	}
 	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, channels, requests)
+	if acknowledge != nil {
+		acknowledge()
+	}
 	return client, func() { stop(); client.Close() }, nil
 }
 
@@ -70,12 +77,35 @@ func NewCredentialStreamRunner(name, address string, config *ssh.ClientConfig) (
 	}, nil
 }
 
+func NewAcknowledgedCredentialRunner(name, address string, config *ssh.ClientConfig, acknowledge func()) (Runner, error) {
+	if name == "" || address == "" || config == nil || config.HostKeyCallback == nil || config.User == "" || len(config.Auth) == 0 || acknowledge == nil {
+		return nil, errors.New("credentials require a name, address, user, authentication, verified host keys, and acknowledgment")
+	}
+	return func(ctx context.Context, target, command string, stdout, stderr io.Writer) (int, error) {
+		if target != name {
+			return -1, errors.New("unapproved credential name")
+		}
+		return runSSHInputAcknowledged(ctx, address, config, command, nil, stdout, stderr, acknowledge)
+	}, nil
+}
+
 func runSSH(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdout, stderr io.Writer) (int, error) {
 	return runSSHInput(ctx, address, config, command, nil, stdout, stderr)
 }
 
 func runSSHInput(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	client, closeClient, err := connectSSH(ctx, address, config)
+	return runSSHInputAcknowledged(ctx, address, config, command, stdin, stdout, stderr, nil)
+}
+
+func runSSHInputAcknowledged(ctx context.Context, address string, config *ssh.ClientConfig, command string, stdin io.Reader, stdout, stderr io.Writer, acknowledge func()) (int, error) {
+	var client *ssh.Client
+	var closeClient func()
+	var err error
+	if acknowledge == nil {
+		client, closeClient, err = connectSSH(ctx, address, config)
+	} else {
+		client, closeClient, err = connectSSHAdmitted(ctx, address, config, acknowledge)
+	}
 	if err != nil {
 		return -1, err
 	}

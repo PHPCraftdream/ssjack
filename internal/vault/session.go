@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 )
 
 type SessionStatus struct {
@@ -15,6 +16,8 @@ type SessionStatus struct {
 	SavedRevision uint64
 	Pending       bool
 	Err           error
+	// SSH is the last observed SSH metadata; metadata reads do not refresh it.
+	SSH *sshstatus.Status
 }
 
 type sessionJob struct {
@@ -43,6 +46,7 @@ type Session struct {
 	savedCipher [sha256.Size]byte
 	exportKey   *keyfile.Unlocked
 	writer      *writerRole
+	sshStatus   func() sshstatus.Status
 	closeErr    error
 }
 
@@ -178,7 +182,7 @@ func (s *Session) apply(expected *uint64, edit func(*Vault) error) error {
 func (s *Session) Status() SessionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return SessionStatus{Revision: s.revision, SavedRevision: s.saved, Pending: s.saved != s.revision, Err: s.saveErr}
+	return SessionStatus{Revision: s.revision, SavedRevision: s.saved, Pending: s.saved != s.revision, Err: s.saveErr, SSH: s.sshSnapshot()}
 }
 
 // Retry is explicit; a revision conflict never authorizes overwriting the file.

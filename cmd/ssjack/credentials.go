@@ -21,6 +21,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerservice"
+	"github.com/PHPCraftdream/ssjack/internal/ownerssh"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -136,6 +137,11 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 		return nil, err
 	}
 	credentials := &agentCredentials{runner: runner, stream: stream, targets: []string{selected}, guard: fixedOutputGuard(nil)}
+	liveSSH := false
+	if v.Version == 2 {
+		selectedTarget, exists := v.Targets[selected]
+		liveSSH = exists && selectedTarget.Proxy == nil
+	}
 	if v.Version == 2 {
 		var choice mcpselect.Choice
 		var capture *mcpgrant.Capture
@@ -243,6 +249,13 @@ func loadAgentCredentials(ctx context.Context, path, name string) (*agentCredent
 				}
 				return merged, nil
 			}
+		}
+		if liveSSH {
+			credentials.ssh, err = ownerssh.Open(ctx, path, selected, owner)
+			if err != nil {
+				return credentials, ownerssh.ErrUnavailable
+			}
+			owner.SetSSHStatus(credentials.ssh.Status)
 		}
 		service, err := ownerservice.Start(ctx, owner)
 		if err != nil {

@@ -64,66 +64,12 @@ type CancelOutput struct {
 	Cancelled bool `json:"cancelled"`
 }
 
-type capture struct {
-	mu    sync.Mutex
-	data  []byte
-	total int64
-}
-
-func (b *capture) Write(data []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := len(data)
-	b.total += int64(n)
-	if n >= outputLimit {
-		b.data = append(b.data[:0], data[n-outputLimit:]...)
-	} else {
-		if excess := len(b.data) + n - outputLimit; excess > 0 {
-			copy(b.data, b.data[excess:])
-			b.data = b.data[:len(b.data)-excess]
-		}
-		b.data = append(b.data, data...)
-	}
-	return n, nil
-}
-
-func (b *capture) read(offset int64) ([]byte, int64, bool, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if offset < 0 || offset > b.total {
-		return nil, offset, false, errors.New("invalid output offset")
-	}
-	start := b.total - int64(len(b.data))
-	lost := offset < start
-	if lost {
-		offset = start
-	}
-	index := int(offset - start)
-	end := min(index+chunkLimit, len(b.data))
-	return append([]byte{}, b.data[index:end]...), offset + int64(end-index), lost, nil
-}
-
-func (b *capture) more(offset int64) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return offset < b.total
-}
-
-type job struct {
-	stdout capture
-	stderr capture
-	cancel context.CancelFunc
-	done   chan struct{}
-	mu     sync.Mutex
-	exit   int
-	err    string
-}
-
 type Manager struct {
 	mu      sync.Mutex
 	ctx     context.Context
 	cancel  context.CancelFunc
 	runner  Runner
+	admit   AdmissionProvider
 	targets map[string]bool
 	jobs    map[string]*job
 	order   []string
@@ -188,15 +134,40 @@ func (m *Manager) Start(input StartInput) (StartOutput, error) {
 		return StartOutput{}, err
 	}
 	ctx, cancel := context.WithTimeout(m.ctx, time.Duration(input.TimeoutSeconds)*time.Second)
+	runner := m.runner
+	var issued func()
+	if m.admit != nil {
+		admitted, err := m.admit(ctx, input.Target, input.Command)
+		if err != nil || ctx.Err() != nil {
+			cancel()
+			return StartOutput{}, ErrAdmission
+		}
+		runner, err = prepareAdmitted(admitted)
+		if err != nil || ctx.Err() != nil {
+			cancel()
+			return StartOutput{}, ErrAdmission
+		}
+		issued = admitted.Issued
+	} else if runner == nil {
+		cancel()
+		return StartOutput{}, ErrAdmission
+	}
+	if ctx.Err() != nil {
+		cancel()
+		return StartOutput{}, ErrAdmission
+	}
 	j := &job{cancel: cancel, done: make(chan struct{}), exit: -1}
 	m.jobs[id] = j
 	m.order = append(m.order, id)
 	m.active++
 	m.wg.Add(1)
+	if issued != nil {
+		issued()
+	}
 	go func() {
 		defer m.wg.Done()
 		defer cancel()
-		exit, err := m.runner(ctx, input.Target, input.Command, &j.stdout, &j.stderr)
+		exit, err := runner(ctx, input.Target, input.Command, &j.stdout, &j.stderr)
 		j.mu.Lock()
 		j.exit = exit
 		if err != nil {

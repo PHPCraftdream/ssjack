@@ -1,6 +1,9 @@
 package vault
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 
@@ -8,6 +11,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 )
 
 type AccountMetadata struct {
@@ -48,12 +52,26 @@ func (s *Session) Metadata() (DirectoryMetadata, error) {
 	return s.metadata()
 }
 
+func (s *Session) SetSSHStatus(status func() sshstatus.Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sshStatus = status
+}
+
+func (s *Session) sshSnapshot() *sshstatus.Status {
+	if s.sshStatus == nil {
+		return nil
+	}
+	status := s.sshStatus()
+	return &status
+}
+
 // MetadataSnapshot binds display data and persistence evidence to one revision.
 func (s *Session) MetadataSnapshot() (DirectoryMetadata, SessionStatus, [32]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	metadata, err := s.metadata()
-	status := SessionStatus{Revision: s.revision, SavedRevision: s.saved, Pending: s.saved != s.revision, Err: s.saveErr}
+	status := SessionStatus{Revision: s.revision, SavedRevision: s.saved, Pending: s.saved != s.revision, Err: s.saveErr, SSH: s.sshSnapshot()}
 	var digest [32]byte
 	if err == nil && s.saveErr == nil && s.saved == s.revision {
 		digest = s.savedCipher
@@ -103,6 +121,82 @@ func (s *Session) metadata() (DirectoryMetadata, error) {
 		}
 	}
 	return result, nil
+}
+
+func (s *Session) AgentSSHAt(expected uint64, digest [32]byte, profile string) (*ssh.ClientConfig, string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unavailable := errors.New("agent SSH configuration unavailable")
+	if s.closed || s.closing || s.state == nil || s.state.Version != 2 || s.revision != expected || s.saved != expected || s.saveErr != nil || digest == ([32]byte{}) || digest != s.savedCipher || (s.state.OwnerStore != nil && s.state.OwnerStore.Pending != nil) {
+		return nil, "", "", unavailable
+	}
+	var serverID, account string
+	for id, server := range s.state.Servers {
+		for name, selected := range server.Accounts {
+			if selected == profile {
+				if serverID != "" {
+					return nil, "", "", unavailable
+				}
+				serverID, account = id, name
+			}
+		}
+	}
+	original, exists := s.state.Targets[profile]
+	if serverID == "" || !exists {
+		return nil, "", "", unavailable
+	}
+	target := ownTarget(original)
+	defer clear(target.PrivateKey)
+	defer clear(target.Password)
+	defer target.Proxy.Clear()
+	if target.Proxy != nil || target.RequireUsage("agent") != nil {
+		return nil, "", "", unavailable
+	}
+	config, err := target.ClientConfig()
+	if err != nil || config.User != target.User {
+		return nil, "", "", unavailable
+	}
+	pins := make([]string, 0, len(target.HostKeys))
+	for _, encoded := range target.HostKeys {
+		key, err := ParseHostKey([]byte(encoded))
+		if err != nil {
+			return nil, "", "", unavailable
+		}
+		pins = append(pins, hex.EncodeToString(key.Marshal()))
+	}
+	sort.Strings(pins)
+	policy := struct {
+		HostKeys     []string `json:"host_keys"`
+		KeyExchanges []string `json:"key_exchanges"`
+		Ciphers      []string `json:"ciphers"`
+		MACs         []string `json:"macs"`
+	}{
+		HostKeys:     append([]string{}, target.SSHPolicy.HostKeys...),
+		KeyExchanges: append([]string{}, target.SSHPolicy.KeyExchanges...),
+		Ciphers:      append([]string{}, target.SSHPolicy.Ciphers...),
+		MACs:         append([]string{}, target.SSHPolicy.MACs...),
+	}
+	authentication := "key"
+	if len(target.Password) != 0 {
+		authentication = "password"
+	}
+	canonical, err := json.Marshal(struct {
+		Profile        string   `json:"profile"`
+		ServerID       string   `json:"server_id"`
+		Account        string   `json:"account"`
+		Address        string   `json:"address"`
+		User           string   `json:"user"`
+		Authentication string   `json:"authentication"`
+		Usage          string   `json:"usage"`
+		HostKeys       []string `json:"host_keys"`
+		Policy         any      `json:"ssh_policy"`
+	}{profile, serverID, account, target.Address, target.User, authentication, target.EffectiveUsage(), pins, policy})
+	if err != nil {
+		return nil, "", "", unavailable
+	}
+	scopeDigest := sha256.Sum256(canonical)
+	scope := hex.EncodeToString(scopeDigest[:])
+	return config, target.Address, scope, nil
 }
 
 // HumanSSH is the single narrow credential path for an owner-selected

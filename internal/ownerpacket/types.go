@@ -9,6 +9,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 )
 
 const (
@@ -107,6 +108,7 @@ type Status struct {
 	Revision, SavedRevision                       uint64
 	Saving, DatabaseFailed, Busy, Pending, Failed bool
 	CipherDigest                                  [32]byte
+	SSH                                           *sshstatus.Status `json:"ssh,omitempty"`
 }
 type Conflict struct{ Kind, Subject string }
 type ImportSecret struct {
@@ -276,6 +278,11 @@ func (r Reply) valid() bool {
 			if len(selected) > mcpdirectory.MaxSelections {
 				return false
 			}
+		}
+	}
+	if status := r.Status.SSH; status != nil {
+		if len(status.Profile) > 64 || (status.AdoptedKnown && (!status.DeliveredKnown || status.AdoptedRevision > status.DeliveredRevision)) || (status.DeliveredKnown && (!status.DesiredKnown || status.DeliveredRevision > status.DesiredRevision)) {
+			return false
 		}
 	}
 	return r.Status.SavedRevision <= r.Status.Revision

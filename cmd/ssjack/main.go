@@ -302,7 +302,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	}
 	var err error
 	var applicationOptions *application.Options
-	var runner remote.Runner
+	var sshSetup agentSSHSetup
 	var guard remote.GuardProvider
 	var streamRunner remote.StreamRunner
 	var targets []string
@@ -323,7 +323,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		if credentials == nil {
 			return 1, errors.New("credential session is unavailable")
 		}
-		runner, streamRunner, targets, guard = credentials.runner, credentials.stream, credentials.targets, credentials.guard
+		sshSetup, streamRunner, targets, guard = credentials.sshSetup(), credentials.stream, credentials.targets, credentials.guard
 		guard, err = selectOutputGuard(guard, *noOutputFilter, os.Stderr)
 		if err != nil {
 			return 1, err
@@ -343,7 +343,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var manager *remote.Manager
 	var applicationManager *application.Manager
 	if *modeFlag == string(broker.ModeFull) {
-		manager = remote.NewGuardedManager(ctx, targets, runner, guard)
+		manager = sshSetup.manager(ctx, targets, guard, *noOutputFilter)
 		defer manager.Close()
 		if applicationOptions != nil {
 			applicationOptions.Runner, applicationOptions.Guard = streamRunner, guard

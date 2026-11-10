@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/PHPCraftdream/ssjack/internal/sshlive"
 )
 
 func TestSessionMetadataOwnsCollectionsAndOmitsPrivateMaterial(t *testing.T) {
@@ -47,6 +50,187 @@ func TestSessionMetadataOwnsCollectionsAndOmitsPrivateMaterial(t *testing.T) {
 	again, err := s.Metadata()
 	if err != nil || again.Servers[0].Name != "production" || again.Servers[0].Accounts[0].User == "caller-mutated" || again.Servers[0].Fingerprints[0] == "caller-mutated" || again.Secrets[alias].Name != "existing" || again.OwnerStore.PendingPhase != "draft" || saves.Load() != 0 {
 		t.Fatal("read-only metadata mutated the database, leaked collections, or queued persistence")
+	}
+}
+
+func TestSessionAgentSSHBindingRejectsEachAuthorityMutation(t *testing.T) {
+	for _, field := range []struct {
+		name string
+		edit func(*agentSourceFixture)
+	}{
+		{"profile", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			delete(f.session.state.Targets, f.profile)
+			f.session.state.Targets["renamed-profile"] = target
+			for id, server := range f.session.state.Servers {
+				server.Accounts["main"] = "renamed-profile"
+				f.session.state.Servers[id] = server
+			}
+			f.profile = "renamed-profile"
+			f.materialProfile = "renamed-profile"
+		}},
+		{"server-id", func(f *agentSourceFixture) {
+			for id, server := range f.session.state.Servers {
+				delete(f.session.state.Servers, id)
+				replacementID := id[:31] + "1"
+				if replacementID == id {
+					replacementID = id[:31] + "2"
+				}
+				f.session.state.Servers[replacementID] = server
+				return
+			}
+		}},
+		{"account", func(f *agentSourceFixture) {
+			for id, server := range f.session.state.Servers {
+				delete(server.Accounts, "main")
+				server.Accounts["renamed-account"] = f.profile
+				f.session.state.Servers[id] = server
+			}
+		}},
+		{"address", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Address = "changed.example:2222"
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"user", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.User = "changed-user"
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"authentication", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Password = []byte("synthetic-password")
+			target.PrivateKey = nil
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"usage", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Usage = "agent"
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"host-pins", func(f *agentSourceFixture) {
+			target, other := f.session.state.Targets[f.profile], testTarget(t)
+			target.HostKeys = append([]string(nil), other.HostKeys...)
+			clear(other.PrivateKey)
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"policy-hostkeys", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.SSHPolicy.HostKeys = []string{ssh.SupportedAlgorithms().HostKeys[0]}
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"policy-kex", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.SSHPolicy.KeyExchanges = []string{ssh.SupportedAlgorithms().KeyExchanges[0]}
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"policy-ciphers", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.SSHPolicy.Ciphers = []string{ssh.SupportedAlgorithms().Ciphers[0]}
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"policy-macs", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.SSHPolicy.MACs = []string{ssh.SupportedAlgorithms().MACs[0]}
+			f.session.state.Targets[f.profile] = target
+		}},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			fixture := newAgentSourceFixture(t)
+			baseline, err := fixture.source(context.Background())
+			if err != nil {
+				t.Fatal("healthy baseline source was unavailable")
+			}
+			runtime, err := sshlive.New(context.Background(), baseline.Profile, fixture.source)
+			if err != nil {
+				t.Fatal("baseline runtime was unavailable")
+			}
+			field.edit(&fixture)
+			fixture.confirmHealthyChange()
+			if err := fixture.session.state.validate(); err != nil {
+				t.Fatal("isolated state mutation was invalid")
+			}
+			changed, err := fixture.source(context.Background())
+			if err != nil {
+				t.Fatal("healthy changed source was unavailable")
+			}
+			if changed.Scope == baseline.Scope {
+				t.Fatal("authority mutation did not change the production scope")
+			}
+			admitted, err := runtime.Admit(context.Background(), baseline.Profile, "synthetic-command")
+			status := runtime.Status()
+			if !errors.Is(err, sshlive.ErrUnavailable) || admitted.Runner != nil || admitted.Guard != nil || admitted.Issued != nil || status.DeliveredKnown || status.AdoptedKnown || !status.Unavailable {
+				t.Fatal("changed authority was admitted or marked delivered/adopted")
+			}
+		})
+	}
+}
+
+func TestSessionAgentSSHBindingAllowsCredentialRotationAndDisplayRename(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*agentSourceFixture)
+		edit  func(*agentSourceFixture)
+	}{
+		{"key-rotation", nil, func(f *agentSourceFixture) {
+			target, replacement := f.session.state.Targets[f.profile], testTarget(t)
+			target.PrivateKey = append([]byte(nil), replacement.PrivateKey...)
+			clear(replacement.PrivateKey)
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"password-rotation", func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Password, target.PrivateKey = []byte("synthetic-password"), nil
+			f.session.state.Targets[f.profile] = target
+		}, func(f *agentSourceFixture) {
+			target := f.session.state.Targets[f.profile]
+			target.Password = []byte("rotated-password")
+			f.session.state.Targets[f.profile] = target
+		}},
+		{"display-name", nil, func(f *agentSourceFixture) {
+			for id, server := range f.session.state.Servers {
+				server.Name = "renamed-display"
+				f.session.state.Servers[id] = server
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAgentSourceFixture(t)
+			if test.setup != nil {
+				test.setup(&fixture)
+				fixture.confirmHealthyChange()
+				if err := fixture.session.state.validate(); err != nil {
+					t.Fatal("valid credential setup rejected")
+				}
+			}
+			baseline, err := fixture.source(context.Background())
+			if err != nil {
+				t.Fatal("healthy baseline source was unavailable")
+			}
+			runtime, err := sshlive.New(context.Background(), baseline.Profile, fixture.source)
+			if err != nil {
+				t.Fatal("baseline runtime was unavailable")
+			}
+			test.edit(&fixture)
+			fixture.confirmHealthyChange()
+			if err := fixture.session.state.validate(); err != nil {
+				t.Fatal("valid positive-control mutation rejected")
+			}
+			changed, err := fixture.source(context.Background())
+			if err != nil || changed.Scope != baseline.Scope {
+				t.Fatal("allowed change altered the production scope")
+			}
+			admitted, err := runtime.Admit(context.Background(), baseline.Profile, "synthetic-command")
+			status := runtime.Status()
+			if err != nil || admitted.Runner == nil || admitted.Guard == nil || admitted.Issued == nil || !status.DesiredKnown || status.DesiredRevision != fixture.revision || status.DeliveredKnown || status.AdoptedKnown {
+				t.Fatal("valid scope change was not admitted exactly before issuance")
+			}
+			admitted.Issued()
+			status = runtime.Status()
+			if !status.DeliveredKnown || status.DeliveredRevision != fixture.revision || status.AdoptedKnown {
+				t.Fatal("issuance did not mark delivery without claiming adoption")
+			}
+		})
 	}
 }
 

@@ -47,9 +47,12 @@ live service. Legacy writers must acquire the same native role before effects.
 Full-mode startup with a directory payload now transfers the already authenticated
 vault into `ownerdb.Adopt` and retains that owner session until the harness and its
 remote/application consumers have stopped. Adoption does not derive another key or
-request another password. Captured SSH runners remain immutable: later database
-edits do not silently change their address, login, authentication or usage capture.
-Shutdown uses a separate bounded context so cancellation of the harness does not
+request another password. Captured SSH operations remain immutable: later database
+edits do not change an admitted job or its existing connections. Ordinary full-mode
+version-2 non-proxied SSH jobs can capture a persisted credential-only replacement
+for a later job; this does not refresh startup stream captures, human SSH, application
+grants, or version-1/proxied startup paths. Shutdown uses a separate bounded context
+so cancellation of the harness does not
 skip owner persistence. An owner-close failure overrides a successful harness exit
 with a fixed recovery error; it is never reported as a saved success.
 
@@ -311,6 +314,68 @@ encrypted archive reading/import into a fresh database and preservation of the
 keeper after helper detach. This archive fixture is separate from MCP runtime
 bridge acceptance and creates neither grants nor sessions.
 
+## Ordinary full-mode SSH job refresh
+
+A directory edit does not mutate a previously captured operation. Separately, an
+ordinary full-mode version-2 startup with a non-proxied agent SSH account can
+resolve a credential-only update for each later SSH job. The job's start admission
+synchronously obtains the selected account's host-pin-verified SSH configuration
+and its output guard from one healthy saved session revision and ciphertext digest;
+the disk digest is checked as well. Unsaved, failed, busy, or mismatched state
+refuses admission. Once admitted, the job and connections it opens keep that
+private capture. A later persisted credential edit can affect only a later new job.
+The normal output path unions this capture's output guard with the incoming startup
+guard; the explicit known-literal-filter bypass still retains incoming mandatory
+channel-token and keeper-token masking.
+
+The live scope binds server ID, account profile and account name, endpoint, login,
+authentication type, effective usage, host pins and SSH policy. A change to that
+scope blocks new live admission; it does not fall back to startup credentials.
+Within the same scope, this supports key-to-key or password-to-password
+credential-only replacement. The replacement must be installed on the server by
+the owner through an independently trusted procedure before editing the saved
+account. Owner edits retain their existing expected-revision conflict checks; an
+uncertain IPC outcome is not automatically replayed. The owner edit itself does not
+contact or remotely verify the server. A later admitted job uses the selected
+identity, and its SSH handshake verifies authentication for that connection only;
+that does not establish who issued or installed the credential, install it, or
+revoke any identity. ssjack does not automatically revoke the previous identity.
+The existing legacy key-rotation command still claims the writer role and refuses
+before network access when a keeper owns the database. This feature adds no
+coordinated install/revoke rotation protocol.
+
+Human SSH, startup stream captures, application fixed-text grants and version-1 or
+proxied startup paths keep their existing frozen behavior. This is demand-time
+credential capture, not generic reconciliation, automatic adoption enqueueing or
+a guarantee about all current consumers.
+
+The in-memory `sshstatus.Status` has `Profile`, `DesiredRevision`,
+`DesiredKnown`, `DeliveredRevision`, `DeliveredKnown`, `AdoptedRevision`,
+`AdoptedKnown` and `Unavailable`. `internal/sshstatus` contains only this shared
+status metadata type and uses only standard-library dependencies, keeping it
+independent of `remote`; runtime `sshlive.Status` is an alias of
+`sshstatus.Status`. Desired tracks the most recent healthy persisted revision
+observed at startup or during successful fresh job admission; owner metadata reads
+do not refresh it. It is not a claim about unobserved or all current owner updates.
+Delivered records a private capture issued for a job; adopted records a
+selected-credential verified SSH handshake. Each revision has a separate known
+bit, so revision zero is distinguishable from unknown. A handshake can be recorded
+even if the later command fails; it does not mean the command succeeded or that all
+consumers adopted the revision. Unavailable status does not erase the last confirmed
+desired revision. These are metadata only, not proof that all data was persisted or
+consumers were updated. The runtime does not enqueue adoption. This metadata is not
+a durable credential-revision journal: restart loses the delivery and adoption
+evidence.
+
+The status is carried as `SessionStatus.SSH` and included as `Status.SSH` in the
+authenticated owner packet; the snapshot clone keeps it independent of the source
+status. The owner TUI renders it as last-observed metadata. The known flags preserve
+unknown versus revision zero. It exposes no plaintext credential getter.
+
+Source tests for this slice have been authored but not run. Exact-source CI
+acceptance is pending; earlier owner-IPC acceptance does not cover this live
+credential-refresh slice.
+
 ## Protected text-consumer lifetime
 
 Every version-2 Linux amd64 text-adapter startup retains its single vault unlock,
@@ -357,10 +422,11 @@ bounded close to retain an unfinished borrower and preserve fixed recovery error
 The actual-process gate additionally builds ssjack itself and runs three non-root
 PTY cases: unlinked-positive, linked-positive and linked-stale. It checks coordinator
 existence before helper attachment and before answering the unlinked master prompt.
-Directory edits cannot redirect the captured SSH delivery; a linked store commit
-before the first hydrate must stale the old grant with zero SSH effects. Graceful
-exit must release both the database role and installation lease, and encrypted
-reopen must preserve the intended linked/unlinked scope.
+Directory edits cannot redirect an already captured SSH job; a later ordinary
+non-proxied job may capture persisted credential-only edits as described above. A
+linked store commit before the first hydrate must stale the old grant with zero SSH
+effects. Graceful exit must release both the database role and installation lease,
+and encrypted reopen must preserve the intended linked/unlinked scope.
 
 ## Manager dispatch and helper ownership
 

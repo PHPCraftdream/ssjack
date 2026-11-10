@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerclone"
@@ -273,6 +275,10 @@ func (m *Manager) LocalOwnerPeer(binding [32]byte) (*ownerpacket.Client, error) 
 }
 func (m *Manager) MetadataSnapshot() (vault.DirectoryMetadata, vault.SessionStatus, [32]byte, error) {
 	return m.db.MetadataSnapshot()
+}
+
+func (m *Manager) AgentSSHAt(expected uint64, digest [32]byte, profile string) (*ssh.ClientConfig, string, string, error) {
+	return m.db.AgentSSHAt(expected, digest, profile)
 }
 
 func clonePreview(p vault.ImportPreview) vault.ImportPreview { return ownerclone.Preview(p) }

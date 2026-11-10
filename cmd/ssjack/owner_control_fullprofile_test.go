@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/pem"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,8 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/sshauth"
+	"github.com/PHPCraftdream/ssjack/internal/startupsecret"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -130,4 +134,145 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	t.Run("actual-keeper-process", func(t *testing.T) {
 		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production", server)
 	})
+	t.Run("ordinary-ssh-live", func(t *testing.T) { ordinarySSHLiveAcceptance(t, ctx) })
+}
+
+const ordinaryLiveOldPassword = "synthetic ordinary live old password"
+const ordinaryLiveNewPassword = "synthetic ordinary live replacement password"
+
+type ordinaryLiveFixture struct {
+	ctx         context.Context
+	server      *loopbackSSH
+	credentials *agentCredentials
+	jobs        *remote.Manager
+	helper      *ownercontrol.Control
+	selected    ownertui.Connection
+}
+
+func newOrdinaryLiveFixture(t *testing.T, parent context.Context) *ordinaryLiveFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	public, err := ssh.NewPublicKey(private.Public())
+	clear(private)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	server := startLoopbackSSH(t, public, connectPassword, "owner-control")
+	oldPassword := []byte(ordinaryLiveOldPassword)
+	newPassword := []byte(ordinaryLiveNewPassword)
+	server.setPasswordLabel(string(oldPassword), "old", true)
+	server.setPasswordLabel(string(newPassword), "new", true)
+	v := vault.NewDirectory()
+	target := vault.Target{Address: server.address(), User: "second", Password: oldPassword, HostKeys: []string{string(ssh.MarshalAuthorizedKey(server.hostKey))}, Usage: "both"}
+	serverID, err := v.AddServer("production", "main", target)
+	if err != nil {
+		cancel()
+		v.Close()
+		t.Fatal(err)
+	}
+	vaultPassword := []byte("synthetic ordinary live vault password")
+	path := filepath.Join(t.TempDir(), "ordinary-live.ktav")
+	err = vault.CreateWithRecords(ctx, path, v, vaultPassword)
+	v.Close()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	startup := startupsecret.New(string(vaultPassword), true)
+	clear(vaultPassword)
+	credentials, err := loadAgentCredentials(context.WithValue(ctx, startupPasswordKey{}, startup), path, "@production/main")
+	startup.Close()
+	clear(oldPassword)
+	clear(newPassword)
+	if err != nil || credentials == nil || credentials.ssh == nil || len(credentials.targets) != 1 {
+		cancel()
+		t.Fatal("synthetic agent startup did not retain its authenticated owner")
+	}
+	jobs := credentials.sshSetup().manager(ctx, credentials.targets, credentials.guard, false)
+	helper, err := ownercontrol.Open(ctx, path, []byte("synthetic ordinary live vault password"))
+	if err != nil {
+		cancel()
+		t.Fatal("owner helper did not attach to the synthetic agent")
+	}
+	selected := ownertui.Connection{ServerID: serverID, Account: "main", Revision: helper.Backend().Status().Database.Revision}
+	fixture := &ordinaryLiveFixture{ctx: ctx, server: server, credentials: credentials, jobs: jobs, helper: helper, selected: selected}
+	t.Cleanup(func() {
+		server.releaseSyntheticHolds()
+		jobs.Close()
+		helper.Detach()
+		code := 0
+		var result error
+		finishAgentCredentials(credentials, &code, &result)
+		cancel()
+		if code != 0 || result != nil {
+			t.Error("synthetic agent owner did not close cleanly")
+		}
+	})
+	return fixture
+}
+
+func liveEditAccount(ctx context.Context, helper *ownercontrol.Control, serverID string, revision uint64, password []byte) error {
+	change := ownerpacket.DirectoryChange{
+		Action: "edit-account", ServerID: serverID, Account: "main",
+		Fields: [][]byte{
+			[]byte("main"), []byte("second"), []byte("password"),
+			append([]byte(nil), password...), []byte("both"),
+		},
+	}
+	defer func() {
+		for _, field := range change.Fields {
+			clear(field)
+		}
+	}()
+	backend := helper.Backend()
+	scoped := backend.(interface {
+		AtImportPlan(uint64, uint64) ownertui.Backend
+	}).AtImportPlan(revision, 0)
+	if err := scoped.(interface {
+		ApplyDirectory(ownerpacket.DirectoryChange) error
+	}).ApplyDirectory(change); err != nil {
+		return err
+	}
+	return backend.Flush(ctx)
+}
+func liveHumanShell(t *testing.T, ctx context.Context, helper *ownercontrol.Control, selected ownertui.Connection) (*ssh.Client, *ssh.Session, *bufio.Reader, io.WriteCloser) {
+	t.Helper()
+	config, address, err := helper.HumanSSH(ctx, selected)
+	if err != nil {
+		t.Fatal("helper did not capture the original human SSH identity")
+	}
+	prepared, used, err := sshauth.ForConnection(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := sshauth.DialContext(ctx, address, config)
+	if err != nil {
+		t.Fatal("captured human SSH identity did not connect")
+	}
+	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	t.Cleanup(func() { stopClose(); _ = conn.Close() })
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, prepared)
+	if err != nil || !used() {
+		t.Fatal("human connection did not authenticate with the captured identity")
+	}
+	client := ssh.NewClient(sshConn, channels, requests)
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := session.StdinPipe()
+	if err != nil || session.Shell() != nil {
+		t.Fatal("captured human SSH shell did not open")
+	}
+	reader := bufio.NewReader(stdout)
+	if line, err := reader.ReadString('\n'); err != nil || !strings.Contains(line, "SYNTHETIC-SSH-READY") {
+		t.Fatal("human shell did not become observable")
+	}
+	return client, session, reader, stdin
 }

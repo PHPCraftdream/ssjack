@@ -25,7 +25,11 @@ IPC after its own single unlock. Only a proven absent endpoint permits exclusive
 standalone control. Unsafe, busy, unauthenticated or uncertain endpoints never
 trigger standalone fallback. Successful helper exit flushes and detaches its peer,
 not the keeper. Human SSH from the interactive picker captures the exact displayed
-saved revision; later owner edits do not change that captured connection.
+saved revision; later owner edits do not change that already captured human connection.
+In ordinary full-mode version-2 startup, new non-proxied SSH jobs can instead
+refresh credential-only changes from the saved owner revision; each admitted job
+and its existing connections remain frozen. See the live SSH credential-refresh
+notes in [OWNER-IPC-PROTOCOL.md](OWNER-IPC-PROTOCOL.md).
 
 ## Syntax and selectors
 
@@ -82,6 +86,36 @@ by `|`. It is not discovery or trust-on-first-use. `--key-file` explicitly selec
 key authentication and conflicts with `--auth password`. Blank credentials on
 edit retain the existing matching credential kind, as in the menu. Proxy-password
 retention likewise requires unchanged type/address/login. See [proxy limits](PROXY.md).
+
+## Ordinary SSH job credential refresh
+
+During a keeper's ordinary full-mode version-2 session, an owner can persist a
+credential-only replacement for the selected non-proxied agent account using the
+existing trusted `edit-account` form/command. This covers key-to-key and
+password-to-password changes only. Install the replacement on the server through
+an independently trusted procedure first. The owner edit changes the local saved
+credential; it does not contact or remotely verify the server. A later admitted job
+uses the selected identity, and its SSH handshake verifies authentication for that
+connection only; that does not establish who issued or installed the credential,
+install it, or revoke any identity. ssjack does not automatically revoke the previous
+identity.
+
+Each new ordinary SSH job synchronously captures its SSH configuration and
+matching output guard against one saved session revision and ciphertext digest.
+The admitted job and its existing SSH connections keep that capture; only later
+jobs use a persisted replacement. Human SSH connections, startup stream captures,
+application grants and proxied or version-1 startup paths retain their existing
+frozen behavior. Scope changes to server/account identity, account name, endpoint,
+login, authentication type, effective usage, host pins or SSH policy make new live
+admission unavailable instead of falling back to startup credentials. A display-only
+server rename does not change this scope.
+
+This is not generic reconciliation or a guarantee that all consumers adopted an
+edit. Live status is process/session metadata, not a durable credential-revision
+journal; restart loses delivery/adoption evidence. See
+[owner IPC limitations](OWNER-IPC-PROTOCOL.md#ordinary-full-mode-ssh-job-refresh).
+The source tests for this slice have not been run; exact-source CI acceptance is
+pending.
 
 ## Remote MCP management
 

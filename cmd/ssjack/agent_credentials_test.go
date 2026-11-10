@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/launch"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 func assertGuardMasks(t *testing.T, snapshot *outputguard.Snapshot, value []byte) {
@@ -189,5 +192,76 @@ func TestKeeperClosesAnOwnedPartialStartupButRefusesMissingCredentials(t *testin
 	cliLoadAgentCredentials = func(context.Context, string, string) (*agentCredentials, error) { return nil, nil }
 	if code, err := run(context.Background(), []string{"run", "fixture"}); code != 1 || err == nil || launched {
 		t.Fatal("missing credential session reached the harness")
+	}
+}
+
+func ordinarySSHLiveAcceptance(t *testing.T, parent context.Context) {
+	t.Helper()
+	f := newOrdinaryLiveFixture(t, parent)
+	human, session, reader, stdin := liveHumanShell(t, f.ctx, f.helper, f.selected)
+	defer human.Close()
+	defer session.Close()
+	old, err := f.jobs.Start(remote.StartInput{Target: f.credentials.targets[0], Command: "synthetic-live-hold", TimeoutSeconds: 60})
+	if err != nil {
+		t.Fatal("initial live SSH job was not admitted")
+	}
+	if identity, err := f.server.waitSyntheticHold(f.ctx); err != nil || identity != "old" {
+		t.Fatal("held job did not authenticate as the original identity")
+	}
+	if err := liveEditAccount(f.ctx, f.helper, f.selected.ServerID, f.selected.Revision, []byte("synthetic ordinary live rejected password")); err != nil {
+		t.Fatal("owner helper could not save the rejected replacement")
+	}
+	badRevision := f.helper.Backend().Status().Database.Revision
+	probe, err := f.jobs.Start(remote.StartInput{Target: f.credentials.targets[0], Command: "synthetic-live-once", TimeoutSeconds: 30})
+	if err != nil {
+		t.Fatal("rejected replacement authentication probe was not admitted")
+	}
+	failed := liveReadJob(t, f.ctx, f.jobs, probe.JobID)
+	if !failed.Done || failed.Error == "" {
+		t.Fatal("fixture accepted the deliberately rejected credential")
+	}
+	if status := f.credentials.ssh.Status(); !status.AdoptedKnown || status.AdoptedRevision >= badRevision {
+		t.Fatal("failed authentication was reported as adopted or prior authentication was not recorded")
+	}
+	if err := liveEditAccount(f.ctx, f.helper, f.selected.ServerID, badRevision, []byte(ordinaryLiveNewPassword)); err != nil {
+		t.Fatal("owner helper could not save the valid replacement")
+	}
+	current := f.helper.Backend().Status().Database.Revision
+	connections := f.server.acceptedConnections()
+	if err := liveEditAccount(f.ctx, f.helper, f.selected.ServerID, f.selected.Revision, []byte("synthetic stale credential")); !errors.Is(err, vault.ErrOwnerRevision) {
+		t.Fatal("stale owner revision was not refused")
+	}
+	if f.server.acceptedConnections() != connections || f.helper.Backend().Status().Database.Revision != current {
+		t.Fatal("stale edit changed owner state or opened an SSH connection")
+	}
+	fresh, err := f.jobs.Start(remote.StartInput{Target: f.credentials.targets[0], Command: "synthetic-live-once", TimeoutSeconds: 30})
+	if err != nil {
+		t.Fatal("new live SSH job was not admitted")
+	}
+	result := liveReadJob(t, f.ctx, f.jobs, fresh.JobID)
+	if !result.Done || result.Error != "" || !strings.Contains(string(result.Stdout), "SYNTHETIC-LIVE:new") {
+		t.Fatal("new job did not use the confirmed replacement identity")
+	}
+	status := f.helper.Backend().Status().Database.SSH
+	if status == nil || !status.DesiredKnown || status.DesiredRevision != current || !status.DeliveredKnown || status.DeliveredRevision != current || !status.AdoptedKnown || status.AdoptedRevision != current {
+		t.Fatal("authenticated owner did not report the replacement as desired, delivered, and adopted")
+	}
+	stillHeld, err := f.jobs.Read(remote.ReadInput{JobID: old.JobID})
+	if err != nil || stillHeld.Done || !strings.Contains(string(stillHeld.Stdout), "SYNTHETIC-LIVE:old") {
+		t.Fatal("pre-edit job did not retain its original live connection")
+	}
+	if _, err := io.WriteString(stdin, "human-after-edit\r"); err != nil {
+		t.Fatal("human shell closed during credential replacement")
+	}
+	if line, err := reader.ReadString('\n'); err != nil || !strings.Contains(line, "ECHO:human-after-edit") {
+		t.Fatal("captured human shell did not survive the credential replacement")
+	}
+	f.server.releaseSyntheticHolds()
+	oldResult := liveReadJob(t, f.ctx, f.jobs, old.JobID)
+	if !oldResult.Done || oldResult.Error != "" || !strings.Contains(string(oldResult.Stdout), "SYNTHETIC-LIVE:old") {
+		t.Fatal("held original job did not complete on its original identity")
+	}
+	if !f.server.hasIdentityLabel("second|old") || !f.server.hasIdentityLabel("second|new") {
+		t.Fatal("fixture did not observe both original and replacement identities")
 	}
 }

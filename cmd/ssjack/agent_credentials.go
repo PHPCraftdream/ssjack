@@ -10,6 +10,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/sshlive"
 )
 
 type ownerSession interface {
@@ -36,6 +37,46 @@ type agentCredentials struct {
 	mcpLaunch     *mcpgrant.Launch
 	mcpLaunchUsed bool
 	channels      *mcpchannel.ChannelSet
+	ssh           *sshlive.Runtime
+}
+
+type agentSSHSetup struct {
+	runner  remote.Runner
+	runtime *sshlive.Runtime
+}
+
+func (credentials *agentCredentials) sshSetup() agentSSHSetup {
+	return agentSSHSetup{runner: credentials.runner, runtime: credentials.ssh}
+}
+
+func (setup agentSSHSetup) manager(ctx context.Context, targets []string, guard remote.GuardProvider, noOutputFilter bool) *remote.Manager {
+	if setup.runtime == nil {
+		return remote.NewGuardedManager(ctx, targets, setup.runner, guard)
+	}
+	return remote.NewAdmittedManager(ctx, targets, func(admitCtx context.Context, target, command string) (remote.AdmittedOperation, error) {
+		if guard == nil {
+			return remote.AdmittedOperation{}, remote.ErrAdmission
+		}
+		extra, err := guard(admitCtx)
+		if err != nil || extra == nil {
+			return remote.AdmittedOperation{}, remote.ErrAdmission
+		}
+		operation, err := setup.runtime.Admit(admitCtx, target, command)
+		if err != nil {
+			return remote.AdmittedOperation{}, remote.ErrAdmission
+		}
+		if noOutputFilter {
+			// Keep mandatory upstream masks while bypassing known-literal filtering.
+			operation.Guard = extra
+			return operation, nil
+		}
+		merged, err := outputguard.Union(operation.Guard, extra)
+		if err != nil {
+			return remote.AdmittedOperation{}, remote.ErrAdmission
+		}
+		operation.Guard = merged
+		return operation, nil
+	})
 }
 
 func (credentials *agentCredentials) WithMCPLaunch(use func(*mcpgrant.Launch) error) error {

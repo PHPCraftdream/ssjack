@@ -12,6 +12,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -111,5 +112,64 @@ func TestSnapshotErrorsAreFixedCodesWithoutPrivateDiagnostics(t *testing.T) {
 	}
 	if !errors.Is(codeError("unknown"), ownerpacket.ErrProtocol) {
 		t.Fatal("unknown error code was treated as success")
+	}
+}
+
+func TestSnapshotSSHStatusRoundTripAndCloning(t *testing.T) {
+	cases := []struct {
+		name   string
+		status sshstatus.Status
+	}{
+		{name: "known-zero", status: sshstatus.Status{Profile: "profile", DesiredKnown: true, DeliveredKnown: true, AdoptedKnown: true}},
+		{name: "unknown-zero", status: sshstatus.Status{Profile: "profile"}},
+		{name: "not-adopted-zero", status: sshstatus.Status{Profile: "profile", DesiredKnown: true, DeliveredKnown: true}},
+		{name: "revisions", status: sshstatus.Status{Profile: "profile", DesiredRevision: 41, DesiredKnown: true, DeliveredRevision: 40, DeliveredKnown: true, AdoptedRevision: 39, AdoptedKnown: true, Unavailable: true}},
+	}
+	encoders := []struct {
+		name string
+		fn   func(ownerdb.Snapshot, error) ownerpacket.Reply
+	}{
+		{name: "SnapshotReply", fn: SnapshotReply},
+		{name: "encodeSnapshot", fn: encodeSnapshot},
+	}
+	for _, test := range cases {
+		for _, encoder := range encoders {
+			t.Run(test.name+"/"+encoder.name, func(t *testing.T) {
+				owned := test.status
+				expected := owned
+				original := ownerdb.Snapshot{}
+				original.Status.Database.SSH = &owned
+				reply := encoder.fn(original, nil)
+				owned = sshstatus.Status{Profile: "mutated-original"}
+				if reply.Status.SSH == nil || !reflect.DeepEqual(*reply.Status.SSH, expected) {
+					t.Fatal("encoded reply did not preserve an independent SSH status value")
+				}
+				decoded, err := decodeSnapshot(reply)
+				if err != nil || decoded.Status.Database.SSH == nil || !reflect.DeepEqual(*decoded.Status.Database.SSH, expected) {
+					t.Fatalf("decoded SSH status changed: got %#v, want %#v (err %v)", decoded.Status.Database.SSH, expected, err)
+				}
+				*reply.Status.SSH = sshstatus.Status{Profile: "mutated-reply"}
+				if !reflect.DeepEqual(*decoded.Status.Database.SSH, expected) {
+					t.Fatal("decoded snapshot aliases the reply SSH status")
+				}
+			})
+		}
+	}
+}
+
+func TestSnapshotSSHStatusUsesFixedMetadataShape(t *testing.T) {
+	packetField, ok := reflect.TypeOf(ownerpacket.Status{}).FieldByName("SSH")
+	if !ok || packetField.Type != reflect.TypeOf((*sshstatus.Status)(nil)) {
+		t.Fatal("owner packet SSH status is not a status-only pointer")
+	}
+	wantFields := []string{"Profile", "DesiredRevision", "DesiredKnown", "DeliveredRevision", "DeliveredKnown", "AdoptedRevision", "AdoptedKnown", "Unavailable"}
+	statusType := reflect.TypeOf(sshstatus.Status{})
+	if statusType.NumField() != len(wantFields) {
+		t.Fatalf("SSH status shape has %d fields, want %d fixed metadata fields", statusType.NumField(), len(wantFields))
+	}
+	for i, want := range wantFields {
+		if got := statusType.Field(i).Name; got != want {
+			t.Fatalf("SSH status field %d is %q, want %q", i, got, want)
+		}
 	}
 }

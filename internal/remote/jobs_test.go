@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,108 @@ func awaitJob(t *testing.T, m *Manager, id string) {
 	case <-j.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("operation did not finish")
+	}
+}
+
+type admissionStartResult struct {
+	started StartOutput
+	err     error
+}
+
+type admissionTestHarness struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
+	release       chan struct{}
+	entered       chan struct{}
+	gateOnce      sync.Once
+	manager       *Manager
+	startResult   chan admissionStartResult
+	startedDone   chan struct{}
+	started       StartOutput
+	startErr      error
+	startLaunched bool
+}
+
+func newAdmissionTestHarness(t *testing.T, provider func(*admissionTestHarness) AdmissionProvider) *admissionTestHarness {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	h := &admissionTestHarness{
+		ctx: ctx, cancel: cancel,
+		release: make(chan struct{}), entered: make(chan struct{}),
+		startResult: make(chan admissionStartResult, 1), startedDone: make(chan struct{}),
+	}
+	h.manager = NewAdmittedManager(ctx, []string{"test"}, provider(h))
+	// Cleanup is installed before any provider barrier can block the test.
+	t.Cleanup(func() {
+		h.openGate()
+		h.cancel()
+		if h.startLaunched {
+			select {
+			case <-h.startedDone:
+			case <-time.After(5 * time.Second):
+				t.Error("Start goroutine did not join; manager left open")
+				return
+			}
+		}
+		closed := make(chan struct{})
+		go func() {
+			h.manager.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Error("manager workers did not join during cleanup")
+		}
+	})
+	return h
+}
+
+func (h *admissionTestHarness) openGate() {
+	h.gateOnce.Do(func() { close(h.release) })
+}
+
+func (h *admissionTestHarness) start(input StartInput) {
+	h.startLaunched = true
+	go func() {
+		started, err := h.manager.Start(input)
+		h.startResult <- admissionStartResult{started: started, err: err}
+		close(h.startedDone)
+	}()
+}
+
+func (h *admissionTestHarness) wait(t *testing.T, barrier <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-barrier:
+	case <-h.ctx.Done():
+		t.Fatal(message)
+	case <-time.After(5 * time.Second):
+		t.Fatal(message)
+	}
+}
+
+func (h *admissionTestHarness) awaitStart(t *testing.T) bool {
+	t.Helper()
+	select {
+	case result := <-h.startResult:
+		h.started, h.startErr = result.started, result.err
+	case <-h.ctx.Done():
+		t.Fatal("Start did not return")
+		return false
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return")
+		return false
+	}
+	select {
+	case <-h.startedDone:
+		return true
+	case <-h.ctx.Done():
+		t.Fatal("Start goroutine did not join")
+		return false
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start goroutine did not join")
+		return false
 	}
 }
 
