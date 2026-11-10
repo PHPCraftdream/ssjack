@@ -7,6 +7,16 @@ against placing secrets in arguments or environment variables.
 
 ## Disclosure warning
 
+When existing-vault unlock reads a supplied startup source, ssjack emits this
+fixed warning before returning the password to unlock work:
+
+```
+WARNING: vault password supplied through argv/environment; hidden terminal input is safer.
+```
+
+The warning contains no password value. If no explicit source is supplied, hidden
+terminal input remains the default and this warning is not emitted.
+
 A literal command-line password may appear in shell history, process inspection,
 process creation auditing, crash dumps or terminal recording. Environment variables
 are also readable to processes with sufficient access. Neither source provides the
@@ -64,7 +74,11 @@ parameters, data-layer count, permissions or grant boundaries.
 
 Unit/native CI checks precedence, single consumption, bounded input, cleanup,
 non-echoing flag errors, terminal requirements and non-forwarding to the harness.
-The mandatory full-profile startup acceptance creates a real encrypted database,
-opens it through environment and argument sources, refuses a wrong password and
-checks that read-only startup preserves ciphertext. No production KDF overlay is
-used for that acceptance.
+The actual-run startup regression uses a mocked credential loader and harness
+launcher to verify the warning precedes synthetic unlock and harness boundary
+markers, and that the startup source is stripped before the harness boundary; it
+does not exercise a real child process. These authored regressions require exact-
+source public CI before runtime acceptance. The mandatory full-profile startup
+acceptance creates a real encrypted database, opens it through environment and
+argument sources, refuses a wrong password and checks that read-only startup
+preserves ciphertext. No production KDF overlay is used for that acceptance.
