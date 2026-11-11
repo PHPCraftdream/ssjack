@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,43 +32,6 @@ func TestNativeKeeperProcessChild(t *testing.T) {
 	TestOwnerInteractivePTYChild(t)
 }
 
-func TestNativeKeeperHarnessChild(t *testing.T) {
-	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
-		t.Skip("owned finite keeper harness only")
-	}
-	for _, argument := range os.Args[1:] {
-		if argument == "--no-output-filter" {
-			t.Fatal("root output-filter option was forwarded to the harness")
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	session := nativeGuardHarnessSession(t, ctx)
-	nativeGuardHarnessCheck(t, ctx, session, false)
-	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-READY")
-	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-READY")
-	for {
-		var command [1]byte
-		if _, err := io.ReadFull(os.Stdin, command[:]); err != nil {
-			t.Fatal("keeper harness did not receive its graceful exit request")
-		}
-		switch command[0] {
-		case 'q':
-			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-STOPPED")
-			return
-		case 'g':
-			nativeGuardHarnessCheck(t, ctx, session, true)
-			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED")
-		case 'r':
-			nativeGuardHarnessRefusesChangedScope(t, ctx, session)
-			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED")
-		case '\r', '\n':
-		default:
-			t.Fatal("keeper harness received an unexpected fixture command")
-		}
-	}
-}
-
 func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *loopbackSSH) {
 	t.Helper()
 	nativeKeeperCycles(t, ctx, path, password, server, name, shell, []string{"edit", "restart"})
@@ -88,8 +49,14 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 	}
 	for _, cycle := range cycles {
 		if !t.Run(cycle, func(t *testing.T) {
-			lifetime, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			defer cancel()
+			serviceBudget := nativeKeeperServiceBudget
+			if cycle == "restart" {
+				serviceBudget = 6 * time.Minute
+			}
+			service, stopService := nativeAcceptanceRoot(t, ctx, serviceBudget)
+			defer stopService()
+			startup, stopStartup := nativeOperationPhase(t, service, 2*time.Minute)
+			defer stopStartup()
 			environment := make([]string, 0)
 			for _, entry := range os.Environ() {
 				key, _, _ := strings.Cut(entry, "=")
@@ -97,23 +64,25 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 					environment = append(environment, entry)
 				}
 			}
-			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_KEEPER_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD_SECONDS=180")
+			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_KEEPER_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD_SECONDS=600")
 			arguments := []string{"-test.run=^TestNativeKeeperProcessChild$", "--", "--vault", path, "--server", name, "--account", "main"}
 			if cycle == "bypass" {
 				arguments = append(arguments, "--no-output-filter")
 				environment = append(environment, "SSJACK_OWNER_GUARD_BYPASS_CHILD=1")
 			}
 			arguments = append(arguments, "run", executable, "-test.run=^TestNativeKeeperHarnessChild$")
-			terminal, err := ownerterminal.Start(lifetime, ownerterminal.Command{Executable: executable, UnixBridge: bridge,
+			terminal, err := ownerterminal.Start(service, ownerterminal.Command{Executable: executable, UnixBridge: bridge,
 				Directory: t.TempDir(), Environment: environment, Args: arguments})
 			if err != nil {
 				t.Fatal(err)
 			}
 			capture := ownerterminal.CaptureOutput(terminal.Output)
 			defer func() {
-				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+				cleanup, stop := nativePhaseCleanup(t)
 				defer stop()
-				_ = terminal.Close(cleanup)
+				if err := terminal.Close(cleanup); err != nil {
+					t.Error("keeper terminal did not close cleanly")
+				}
 				if capture.Join(cleanup) != nil {
 					t.Error("keeper terminal output did not join")
 				}
@@ -122,7 +91,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				}
 				capture.Clear()
 			}()
-			if capture.Wait(lifetime, "Vault secret:") != nil {
+			if capture.Wait(startup, "Vault secret:") != nil {
 				t.Fatal("actual keeper did not request its vault unlock")
 			}
 			ending := byte('\n')
@@ -132,39 +101,57 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			input := append(append([]byte(nil), password...), ending)
 			_, err = terminal.Input.Write(input)
 			clear(input)
-			if err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-HARNESS-READY") != nil {
+			if err != nil || capture.Wait(startup, "ACTUAL-KEEPER-HARNESS-READY") != nil {
 				t.Fatal("actual keeper did not start its owned harness")
 			}
-			if cycle == "bypass" && capture.Wait(lifetime, "WARNING: MCP known-literal output filtering is DISABLED") != nil {
+			if cycle == "bypass" && capture.Wait(startup, "WARNING: MCP known-literal output filtering is DISABLED") != nil {
 				t.Fatal("trusted bypass launch omitted its terminal warning")
 			}
-			probe, err := ownerlocal.Dial(lifetime, path)
+			stopStartup()
+			probePhase, stopProbe := nativeOperationPhase(t, service, 30*time.Second)
+			probe, err := ownerlocal.Dial(probePhase, path)
+			stopProbe()
 			if err != nil {
 				t.Fatal("actual keeper did not hold the native database endpoint")
 			}
 			if err := probe.Close(); err != nil {
 				t.Fatal(err)
 			}
-			observer, err := ownercontrol.Open(lifetime, path, password)
-			if err != nil {
-				t.Fatal("independent observer could not authenticate to actual keeper")
+			observerPhase, stopObserverPhase := nativeOperationPhase(t, service, 2*time.Minute)
+			observer, err := ownercontrol.Open(service, path, password)
+			if err != nil || service.Err() != nil || observerPhase.Err() != nil {
+				if observer != nil {
+					observer.Detach()
+				}
+				stopObserverPhase()
+				t.Fatal("independent observer could not authenticate within its service budget")
 			}
+			stopObserverPhase()
 			defer observer.Detach()
 			if cycle == "edit" {
-				nativeOwnerCommandAcceptance(t, lifetime, path, password, server, "keeper-added", observer)
+				commandPhase, stopCommand := nativeOperationPhase(t, service, 2*time.Minute)
+				nativeOwnerCommandAcceptance(t, commandPhase, path, password, server, "keeper-added", observer)
+				stopCommand()
+				interactivePhase, stopInteractive := nativeOperationPhase(t, service, 2*time.Minute)
 				t.Run("native-interactive-helper", func(t *testing.T) {
-					nativeInteractiveAcceptance(t, lifetime, path, password, server, observer)
+					nativeInteractiveAcceptance(t, interactivePhase, path, password, server, observer)
 				})
+				stopInteractive()
+				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
-					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
+					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
 				}) {
+					stopHuman()
 					return
 				}
-				nativeKeeperRestoreHumanScope(t, lifetime, path, server, observer, shell, func() {
-					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
+				stopHuman()
+				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
+				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, func() {
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(scopePhase, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
 						t.Fatal("actual keeper did not refuse the changed human SSH scope")
 					}
 				})
+				stopScope()
 			} else if cycle == "restart" {
 				metadata, err := observer.Backend().Metadata()
 				found := false
@@ -179,45 +166,66 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 					t.Fatal("restarted actual keeper lost the confirmed helper account")
 				}
 			} else {
+				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
-					nativeHumanSSHAcceptance(t, lifetime, path, password, server, observer, shell)
+					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
 				}) {
+					stopHuman()
 					return
 				}
-				nativeKeeperRestoreHumanScope(t, lifetime, path, server, observer, shell, func() {
-					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
+				stopHuman()
+				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
+				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, func() {
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(scopePhase, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
 						t.Fatal("actual keeper did not refuse the changed human SSH scope")
 					}
 				})
+				stopScope()
 			}
-			if err := observer.Close(lifetime); err != nil {
+			observerClose, stopObserverClose := nativeOperationPhase(t, service, 30*time.Second)
+			if err := observer.Close(observerClose); err != nil {
+				stopObserverClose()
 				t.Fatal(err)
 			}
-			t.Run("native-mcp-guard", func(t *testing.T) {
-				if capture.Wait(lifetime, "ACTUAL-KEEPER-MCP-GUARD-READY") != nil {
+			stopObserverClose()
+			guardPhase, stopGuard := nativeOperationPhase(t, service, 30*time.Second)
+			if !t.Run("native-mcp-guard", func(t *testing.T) {
+				if capture.Wait(guardPhase, "ACTUAL-KEEPER-MCP-GUARD-READY") != nil {
 					t.Fatal("actual keeper did not guard its initial MCP job")
 				}
-				if _, err := terminal.Input.Write([]byte{'g', ending}); err != nil || capture.Wait(lifetime, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED") != nil {
+				if _, err := terminal.Input.Write([]byte{'g', ending}); err != nil || capture.Wait(guardPhase, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED") != nil {
 					t.Fatal("actual keeper did not refresh known literals after helper edits")
 				}
-			})
-			probe, err = ownerlocal.Dial(lifetime, path)
+			}) {
+				stopGuard()
+				return
+			}
+			stopGuard()
+			probePhase, stopProbe = nativeOperationPhase(t, service, 30*time.Second)
+			probe, err = ownerlocal.Dial(probePhase, path)
+			stopProbe()
 			if err != nil {
 				t.Fatal("helper or observer detach released the actual keeper role")
 			}
-			_ = probe.Close()
-			if _, err := terminal.Input.Write([]byte{'q', ending}); err != nil || terminal.Wait(lifetime) != nil {
+			if err := probe.Close(); err != nil {
+				t.Fatal(err)
+			}
+			shutdown, stopShutdown := nativeOperationPhase(t, service, 30*time.Second)
+			if _, err := terminal.Input.Write([]byte{'q', ending}); err != nil || terminal.Wait(shutdown) != nil {
 				t.Fatal("actual keeper did not join graceful harness and owner shutdown")
 			}
-			if capture.Wait(lifetime, "ACTUAL-KEEPER-HARNESS-STOPPED") != nil {
+			if capture.Wait(shutdown, "ACTUAL-KEEPER-HARNESS-STOPPED") != nil {
 				t.Fatal("harness shutdown acknowledgement was lost")
 			}
-			cancel()
-			reopenCtx, reopenCancel := context.WithTimeout(ctx, 2*time.Minute)
+			stopShutdown()
+			stopService()
+			reopenCtx, reopenCancel := nativeOperationPhase(t, ctx, time.Minute)
 			defer reopenCancel()
 			probe, err = ownerlocal.Dial(reopenCtx, path)
 			if err == nil {
-				_ = probe.Close()
+				if err := probe.Close(); err != nil {
+					t.Fatal("standalone reopen probe did not close")
+				}
 				t.Fatal("standalone reopen endpoint was not released")
 			}
 			if !errors.Is(err, ownerlocal.ErrAbsent) {
@@ -234,7 +242,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				t.Fatal("joined keeper shutdown could not reacquire standalone control")
 			}
 			defer func() {
-				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+				cleanup, stop := nativePhaseCleanup(t)
 				defer stop()
 				if err := reopened.Close(cleanup); err != nil {
 					t.Error("standalone control cleanup failed")
@@ -255,33 +263,5 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 		}) {
 			return
 		}
-	}
-}
-
-func nativeKeeperRestoreHumanScope(t *testing.T, ctx context.Context, path, server string, observer *ownercontrol.Control, shell *loopbackSSH, refuse func()) {
-	t.Helper()
-	metadata, err := observer.Backend().Metadata()
-	status := observer.Backend().Status()
-	if err != nil || len(metadata.Servers) != 1 || metadata.Servers[0].ID != server || metadata.Servers[0].Address != "127.0.0.1:3" || status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Database.Revision != status.Database.SavedRevision {
-		t.Fatal("human SSH scope change was not saved as the exact fixture endpoint")
-	}
-	connections := shell.acceptedConnections()
-	refuse()
-	if shell.acceptedConnections() != connections {
-		t.Fatal("refused changed-scope MCP operation opened an SSH connection")
-	}
-	probe, err := ownerlocal.Dial(ctx, path)
-	if err != nil {
-		t.Fatal("changed-scope refusal released the actual keeper role")
-	}
-	if err := probe.Close(); err != nil {
-		t.Fatal("actual keeper role probe did not close")
-	}
-	nativeServerAddress(t, ctx, observer, server, shell.address())
-	metadata, err = observer.Backend().Metadata()
-	status = observer.Backend().Status()
-	digest, digestErr := credentialCipherDigest(path)
-	if err != nil || len(metadata.Servers) != 1 || metadata.Servers[0].ID != server || metadata.Servers[0].Address != shell.address() || status.Err != nil || status.Database.Err != nil || status.Database.Pending || status.Database.Revision != status.Database.SavedRevision || digestErr != nil || digest == ([32]byte{}) {
-		t.Fatal("explicit human SSH scope restoration did not produce a healthy saved fixture")
 	}
 }

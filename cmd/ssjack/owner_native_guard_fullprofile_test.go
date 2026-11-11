@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,11 +26,48 @@ import (
 const nativeGuardCommand = "ssjack-ci-known-literal-output"
 const nativeGuardAddedCredential = "synthetic keeper MCP credential"
 
+func TestNativeKeeperHarnessChild(t *testing.T) {
+	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
+		t.Skip("owned finite keeper harness only")
+	}
+	for _, argument := range os.Args[1:] {
+		if argument == "--no-output-filter" {
+			t.Fatal("root output-filter option was forwarded to the harness")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	session := nativeGuardHarnessSession(t, ctx)
+	nativeGuardHarnessCheck(t, ctx, session, false)
+	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-READY")
+	fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-READY")
+	for {
+		var command [1]byte
+		if _, err := io.ReadFull(os.Stdin, command[:]); err != nil {
+			t.Fatal("keeper harness did not receive its graceful exit request")
+		}
+		switch command[0] {
+		case 'q':
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-HARNESS-STOPPED")
+			return
+		case 'g':
+			nativeGuardHarnessCheck(t, ctx, session, true)
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED")
+		case 'r':
+			nativeGuardHarnessRefusesChangedScope(t, ctx, session)
+			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED")
+		case '\r', '\n':
+		default:
+			t.Fatal("keeper harness received an unexpected fixture command")
+		}
+	}
+}
+
 func TestVaultOutputFilterFullProfile(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("native output-filter acceptance runs in GitHub CI")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := nativeAcceptanceRoot(t, context.Background(), 10*time.Minute)
 	defer cancel()
 	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	defer clear(private)

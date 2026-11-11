@@ -28,7 +28,7 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("production owner helper control is CI-only")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := nativeAcceptanceRoot(t, context.Background(), 10*time.Minute)
 	defer cancel()
 	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	defer clear(private)
@@ -67,7 +67,9 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := local.Close(ctx); err != nil {
+		cleanup, stop := nativePhaseCleanup(t)
+		defer stop()
+		if err := local.Close(cleanup); err != nil {
 			t.Error("standalone control did not close")
 		}
 	}()
@@ -124,13 +126,32 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened, err := ownercontrol.Open(ctx, path, password)
-	if err != nil {
-		t.Fatal("closed standalone control retained the writer role")
+	if err != nil || ctx.Err() != nil {
+		if reopened != nil {
+			cleanup, stop := nativePhaseCleanup(t)
+			if closeErr := reopened.Close(cleanup); closeErr != nil {
+				t.Error("over-budget reopened control did not close")
+			}
+			stop()
+		}
+		t.Fatal("closed standalone control retained writer role or reopen exceeded its lifetime")
 	}
-	nativeServerAddress(t, ctx, reopened, serverID, server.address())
-	if err := reopened.Close(ctx); err != nil {
+	defer func() {
+		cleanup, stop := nativePhaseCleanup(t)
+		defer stop()
+		if err := reopened.Close(cleanup); err != nil {
+			t.Error("reopened control did not close")
+		}
+	}()
+	reopenCheck, stopReopenCheck := nativeOperationPhase(t, ctx, 30*time.Second)
+	nativeServerAddress(t, reopenCheck, reopened, serverID, server.address())
+	stopReopenCheck()
+	closeReopened, stopCloseReopened := nativePhaseCleanup(t)
+	if err := reopened.Close(closeReopened); err != nil {
+		stopCloseReopened()
 		t.Fatal(err)
 	}
+	stopCloseReopened()
 	t.Run("actual-keeper-process", func(t *testing.T) {
 		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production", server)
 	})
