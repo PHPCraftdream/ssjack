@@ -13,10 +13,32 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
+	"github.com/PHPCraftdream/ssjack/internal/ownerrotatecli"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
+	"github.com/PHPCraftdream/ssjack/internal/startupsecret"
 )
 
 func runOwnerCommand(ctx context.Context, flags *flag.FlagSet, path, server, account string, args []string) (int, error) {
+	if len(args) > 0 && args[0] == "rotate-key" {
+		if flags == nil {
+			return 1, ownercommand.ErrArguments
+		}
+		invalid := false
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name != "vault" && f.Name != "server" && f.Name != "account" {
+				invalid = true
+			}
+		})
+		if invalid {
+			return 1, ownercommand.ErrArguments
+		}
+		var startupPasswordSupplied bool
+		if ctx != nil {
+			input, _ := ctx.Value(startupPasswordKey{}).(*startupsecret.Input)
+			startupPasswordSupplied = input != nil && input.Supplied()
+		}
+		return ownerrotatecli.Run(ctx, path, server, account, args, startupPasswordSupplied, readSecret)
+	}
 	invalid := false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name != "vault" && f.Name != "server" && f.Name != "account" && f.Name != "vault-password" {

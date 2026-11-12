@@ -87,6 +87,63 @@ func TestSessionGuardRequiresExactConfirmedPersistenceEvidence(t *testing.T) {
 	}
 }
 
+func TestCredentialGuardCapturesBothPendingRotationKeys(t *testing.T) {
+	state := NewDirectory()
+	state.Targets["active"] = Target{PrivateKey: []byte("synthetic-active-key")}
+	state.Rotation = &RotationJournal{
+		Phase:      RotationPrepared,
+		Original:   Target{PrivateKey: []byte("synthetic-retained-old-key")},
+		NewPrivate: []byte("synthetic-pending-new-key"),
+	}
+	snapshot, err := credentialGuard(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Close()
+	var result bytes.Buffer
+	writer, err := outputguard.NewWriter(snapshot, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("synthetic-active-key|synthetic-retained-old-key|synthetic-pending-new-key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if result.String() != "[REDACTED]|[REDACTED]|[REDACTED]" {
+		t.Fatal("pending rotation credential was not masked after vault buffers were cleared")
+	}
+}
+
+func TestCredentialGuardCapturesOldKeyAfterCommitAndNotArchivedArtifact(t *testing.T) {
+	state := NewDirectory()
+	state.Targets["active"] = Target{PrivateKey: []byte("synthetic-current-new-key")}
+	state.Rotation = &RotationJournal{
+		Phase:      RotationComplete,
+		Original:   Target{PrivateKey: []byte("synthetic-retained-old-key")},
+		NewPrivate: []byte("synthetic-current-new-key"),
+	}
+	snapshot, err := credentialGuard(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Close()
+	var result bytes.Buffer
+	writer, err := outputguard.NewWriter(snapshot, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("synthetic-retained-old-key|synthetic-current-new-key|synthetic-archived-only-key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if result.String() != "[REDACTED]|[REDACTED]|synthetic-archived-only-key" {
+		t.Fatal("completed journal keys or archive boundary were not handled as expected")
+	}
+}
 func TestCredentialGuardRefusesWholeOversizedCredentialSet(t *testing.T) {
 	state := New()
 	state.Targets["large"] = Target{PrivateKey: make([]byte, outputguard.MaxPatternSize+1)}
@@ -102,5 +159,97 @@ func TestCredentialGuardRefusesWholeOversizedCredentialSet(t *testing.T) {
 	state.RemoteMCP.Accounts["many"] = account
 	if snapshot, err := credentialGuard(state); snapshot != nil || err != outputguard.ErrGuard {
 		t.Fatal("credential count overflow was truncated")
+	}
+}
+
+func TestRotationJournalCodecRoundTripsPreparedCancelledAndComplete(t *testing.T) {
+	public, private := rotationTestIdentity(t)
+	defer clear(public)
+	defer clear(private)
+	for _, phase := range []string{RotationPrepared, RotationCancelled, RotationComplete} {
+		t.Run(phase, func(t *testing.T) {
+			v, server := directoryFixture(t)
+			old := ownTarget(v.Targets["production"])
+			defer clear(old.PrivateKey)
+			journal := &RotationJournal{
+				ID: "0102030405060708090a0b0c0d0e0f10", PlanID: 3, BaseRevision: 7,
+				Phase: phase, ServerID: server, Account: "main", Profile: "production",
+			}
+			if phase == RotationCancelled {
+				journal.Original = Target{}
+			} else {
+				journal.Original = old
+				journal.NewPrivate = append([]byte(nil), private...)
+				journal.NewPublic = append([]byte(nil), public...)
+				journal.OldPublic = testPublic(t, old.PrivateKey)
+			}
+			if phase == RotationComplete {
+				current := v.Targets["production"]
+				clear(current.PrivateKey)
+				current.PrivateKey = append([]byte(nil), private...)
+				v.Targets["production"] = current
+				journal.CommitRevision = 0
+				journal.CommitDigest = "0101010101010101010101010101010101010101010101010101010101010101"
+			}
+			v.Rotation = journal
+			if phase == RotationCancelled {
+				encoded, err := marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer clear(encoded)
+				decoded, err := unmarshal(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer decoded.Close()
+				if decoded.Rotation == nil || decoded.Rotation.Phase != RotationCancelled || !rotationTargetEmpty(decoded.Rotation.Original) {
+					t.Fatal("cancelled journal did not round-trip without material")
+				}
+				info := rotationInfo(decoded.Rotation)
+				if info.ID != journal.ID || info.PlanID != journal.PlanID || info.BaseRevision != journal.BaseRevision || info.ServerID != server || info.Account != journal.Account || info.Profile != journal.Profile || info.Address != "" || info.User != "" || info.Usage != "" || len(info.HostKeys) != 0 || len(info.OldPublic) != 0 || len(info.NewPublic) != 0 {
+					t.Fatal("cancelled rotation metadata exposed scrubbed target details")
+				}
+				return
+			}
+			encoded, err := marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(encoded)
+			decoded, err := unmarshal(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer decoded.Close()
+			if decoded.Rotation == nil || decoded.Rotation.Phase != phase || decoded.Rotation.PlanID != 3 {
+				t.Fatal("rotation identity or phase changed during round-trip")
+			}
+			if !bytes.Equal(decoded.Rotation.Original.PrivateKey, old.PrivateKey) || !bytes.Equal(decoded.Rotation.NewPrivate, private) || !bytes.Equal(decoded.Rotation.NewPublic, public) || !bytes.Equal(decoded.Rotation.OldPublic, journal.OldPublic) {
+				t.Fatal("rotation round-trip lost retained old/new key material")
+			}
+			if phase != RotationComplete {
+				return
+			}
+			if err := decoded.RenameServer(server, "renamed-after-completion"); err != nil {
+				t.Fatal(err)
+			}
+			unrelated := ownTarget(decoded.Targets["production"])
+			defer clear(unrelated.PrivateKey)
+			unrelated.User = "unrelated-account"
+			if err := decoded.SetAccount(server, "backup", unrelated); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := marshal(decoded)
+			if err != nil {
+				t.Fatalf("completed history blocked unrelated edits: %v", err)
+			}
+			defer clear(updated)
+			reloaded, err := unmarshal(updated)
+			if err != nil {
+				t.Fatalf("completed history did not survive edited round-trip: %v", err)
+			}
+			reloaded.Close()
+		})
 	}
 }

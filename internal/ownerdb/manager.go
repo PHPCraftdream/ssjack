@@ -130,7 +130,7 @@ func (m *Manager) EditAt(expected uint64, edit func(*vault.Vault) error) error {
 func (m *Manager) edit(expected *uint64, edit func(*vault.Vault) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || edit == nil || m.imp.owns() {
+	if m.closed || m.closing || m.busy || edit == nil || m.imp.owns() || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	apply := m.db.Apply
@@ -164,7 +164,7 @@ func (m *Manager) submit(expected *uint64, change vault.OwnerChange) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.link == nil || m.imp.owns() {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.link == nil || m.imp.owns() || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	var pending *vault.OwnerIntent

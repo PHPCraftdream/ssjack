@@ -15,7 +15,7 @@ import (
 func (m *Manager) queueRecovery(expected *uint64, command, phase string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending == nil || m.pending.Phase != phase {
+	if m.closed || m.closing || m.busy || m.pending == nil || m.pending.Phase != phase || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	return m.admit(expected, func() error {

@@ -11,6 +11,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
+	"github.com/PHPCraftdream/ssjack/internal/ownerrotation"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -91,6 +92,83 @@ func TestSnapshotProjectionOwnsEveryMutableBuffer(t *testing.T) {
 	}
 }
 
+func TestSnapshotRotationRoundTripAndCloning(t *testing.T) {
+	rotation := vault.RotationInfo{
+		ID: "0102030405060708090a0b0c0d0e0f10", Phase: vault.RotationComplete,
+		ServerID: "101112131415161718191a1b1c1d1e1f", Account: "main", Profile: "profile",
+		PlanID: 9, BaseRevision: 7, CommitRevision: 0,
+		CommitDigest: "0101010101010101010101010101010101010101010101010101010101010101",
+		OldPublic:    []byte("old-public"), NewPublic: []byte("new-public"), HostKeys: []string{"SHA256:synthetic"},
+	}
+	want := rotation
+	want.OldPublic = append([]byte(nil), rotation.OldPublic...)
+	want.NewPublic = append([]byte(nil), rotation.NewPublic...)
+	want.HostKeys = append([]string(nil), rotation.HostKeys...)
+	original := ownerdb.Snapshot{
+		Rotation: &rotation, CipherDigest: [32]byte{42},
+		Status: ownerdb.Status{Database: vault.SessionStatus{Revision: 0, SavedRevision: 0}},
+	}
+	reply := encodeSnapshot(original, nil)
+	rotation.OldPublic[0], rotation.NewPublic[0], rotation.HostKeys[0] = 'X', 'Y', "changed"
+	if reply.Rotation == nil || !bytes.Equal(reply.Rotation.OldPublic, want.OldPublic) || !bytes.Equal(reply.Rotation.NewPublic, want.NewPublic) || !reflect.DeepEqual(reply.Rotation.HostKeys, want.HostKeys) {
+		t.Fatal("encoded rotation metadata aliases the source snapshot")
+	}
+	encoded, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &reply); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeSnapshot(reply)
+	if err != nil || decoded.Rotation == nil || !reflect.DeepEqual(*decoded.Rotation, want) {
+		t.Fatalf("rotation metadata changed during round-trip: got %#v, want %#v (err %v)", decoded.Rotation, want, err)
+	}
+	if decoded.Status.Database.Revision != 0 || decoded.Status.Database.SavedRevision != 0 || decoded.CipherDigest != original.CipherDigest || decoded.Rotation.BaseRevision != 7 || decoded.Rotation.CommitRevision != 0 || decoded.Rotation.CommitDigest != want.CommitDigest {
+		t.Fatal("round-trip lost the saved digest or retained completed-rotation proof")
+	}
+	reply.Rotation.OldPublic[0], reply.Rotation.NewPublic[0], reply.Rotation.HostKeys[0] = 'X', 'Y', "changed"
+	if !reflect.DeepEqual(*decoded.Rotation, want) {
+		t.Fatal("decoded rotation metadata aliases the reply")
+	}
+}
+
+func TestSnapshotArchivedRotationRoundTripAndImmutableRecoveryMetadata(t *testing.T) {
+	rotation := vault.RotationInfo{
+		ID: "0102030405060708090a0b0c0d0e0f10", Phase: vault.RotationArchived,
+		ServerID: "101112131415161718191a1b1c1d1e1f", Account: "main", Profile: "profile",
+		PlanID: 9, BaseRevision: 7, CommitRevision: 0,
+		CommitDigest: "0101010101010101010101010101010101010101010101010101010101010101",
+		RecoveryPath: "rotation-recovery.vault", RecoveryDigest: "0202020202020202020202020202020202020202020202020202020202020202",
+	}
+	original := ownerdb.Snapshot{Rotation: &rotation, CipherDigest: [32]byte{42}}
+	reply := encodeSnapshot(original, nil)
+	rotation.RecoveryPath, rotation.RecoveryDigest = "mutated-source", "mutated-digest"
+	if reply.Rotation == nil || reply.Rotation.RecoveryPath != "rotation-recovery.vault" || reply.Rotation.RecoveryDigest != "0202020202020202020202020202020202020202020202020202020202020202" {
+		t.Fatal("encoded archive metadata changed with its source snapshot")
+	}
+	encoded, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range [][]byte{[]byte(`"old_public"`), []byte(`"new_public"`), []byte(`"host_keys"`), []byte(`"address"`), []byte(`"user"`), []byte(`"usage"`)} {
+		if bytes.Contains(encoded, forbidden) {
+			t.Fatalf("archived snapshot serialized forbidden metadata field %s", forbidden)
+		}
+	}
+	if err := json.Unmarshal(encoded, &reply); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeSnapshot(reply)
+	if err != nil || decoded.Rotation == nil || decoded.Rotation.RecoveryPath != "rotation-recovery.vault" || decoded.Rotation.RecoveryDigest != "0202020202020202020202020202020202020202020202020202020202020202" || decoded.Rotation.CommitRevision != 0 {
+		t.Fatalf("archived metadata changed during round-trip: %#v (err %v)", decoded.Rotation, err)
+	}
+	reply.Rotation.RecoveryPath, reply.Rotation.RecoveryDigest = "mutated-reply", "mutated-reply-digest"
+	if decoded.Rotation.RecoveryPath != "rotation-recovery.vault" || decoded.Rotation.RecoveryDigest != "0202020202020202020202020202020202020202020202020202020202020202" {
+		t.Fatal("decoded archive metadata aliases the reply strings")
+	}
+}
+
 func TestSnapshotErrorsAreFixedCodesWithoutPrivateDiagnostics(t *testing.T) {
 	private := errors.New("synthetic-private-diagnostic")
 	original := snapshotFixture()
@@ -104,10 +182,16 @@ func TestSnapshotErrorsAreFixedCodesWithoutPrivateDiagnostics(t *testing.T) {
 	if !errors.Is(err, errOperation) || !errors.Is(decoded.Status.Err, errOperation) || !errors.Is(decoded.Status.Database.Err, errDatabase) || !errors.Is(decoded.Import.Err, errOperation) {
 		t.Fatal("snapshot lost failure states")
 	}
-	for _, original := range []error{vault.ErrOwnerRevision, ownerdb.ErrPending, ownerpacket.ErrUncertain, ownerpacket.ErrAuthentication, ownerpacket.ErrProtocol} {
+	for _, original := range []error{vault.ErrOwnerRevision, ownerdb.ErrPending, ownerpacket.ErrUncertain, ownerpacket.ErrAuthentication, ownerpacket.ErrProtocol, ownerrotation.ErrUncertain} {
 		wrapped := fmt.Errorf("%s: %w", private.Error(), original)
+		if original == ownerrotation.ErrUncertain {
+			if code := errorCode(wrapped); code != "rotation-uncertain" || !errors.Is(codeError(code), ownerrotation.ErrUncertain) {
+				t.Fatal("rotation uncertainty did not preserve its distinct fixed wire code")
+			}
+			continue
+		}
 		if !errors.Is(codeError(errorCode(wrapped)), original) {
-			t.Fatal("fixed code lost a typed refusal or uncertainty")
+			t.Fatal("snapshot code projection changed the existing typed refusal")
 		}
 	}
 	if !errors.Is(codeError("unknown"), ownerpacket.ErrProtocol) {

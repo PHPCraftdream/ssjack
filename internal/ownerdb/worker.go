@@ -282,7 +282,7 @@ func (m *Manager) linkStoreRequest(expected *uint64, directory string, master []
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil || m.link != nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.link != nil || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	return m.admit(expected, func() error {

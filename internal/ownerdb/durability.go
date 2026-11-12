@@ -249,6 +249,7 @@ type Snapshot struct {
 	Directory    vault.DirectoryMetadata
 	Status       Status
 	Import       ImportStatus
+	Rotation     *vault.RotationInfo
 	CipherDigest [32]byte
 }
 
@@ -262,7 +263,7 @@ func (m *Manager) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{Directory: metadata, Status: Status{Database: database, Busy: m.busy, Pending: m.pending != nil, Err: m.err}, Import: m.importStatus(&metadata), CipherDigest: digest}, nil
+	return m.ownerSnapshot(metadata, database, digest)
 }
 
 func (m *Manager) OwnerPeer(binding [32]byte) (*ownerpacket.Server, error) {

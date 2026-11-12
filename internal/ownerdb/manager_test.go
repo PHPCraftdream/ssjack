@@ -101,7 +101,7 @@ func TestInspectImportValidatesAndGatesBeforeQueueing(t *testing.T) {
 	for name, gate := range gates {
 		m := importManager()
 		gate(m)
-		if err := m.InspectImport("archive.zip", []byte("pw")); !errors.Is(err, ErrPending) || m.imp.password != nil || (m.jobs != nil && len(m.jobs) != 0) {
+		if err := m.InspectImport("archive.zip", []byte("pw")); !errors.Is(err, ErrPending) || m.imp.password != nil || (m.jobs != nil && len(m.jobs) != 0) || (activeImportPhase(m.imp.phase) && (!errors.Is(m.rotationAdmission(false), ErrPending) || !errors.Is(m.rotationAdmission(true), ErrPending))) {
 			t.Fatalf("inspection was not refused while %s", name)
 		}
 	}

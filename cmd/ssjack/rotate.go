@@ -15,6 +15,15 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
+// refuseActiveRotation runs before any remote effect: the final save would
+// reject an active journal after the legacy flow had already added a key.
+func refuseActiveRotation(v *vault.Vault) error {
+	if vault.RotationActive(v.Rotation) {
+		return errors.New("a key rotation is active in this vault; resolve it with the owner rotate-key flow")
+	}
+	return nil
+}
+
 func runRotation(ctx context.Context, path, name string) (int, error) {
 	if err := validateCredentialSelection(name); err != nil {
 		return 1, err
@@ -25,6 +34,9 @@ func runRotation(ctx context.Context, path, name string) (int, error) {
 	}
 	defer clear(secret)
 	defer v.Close()
+	if err := refuseActiveRotation(v); err != nil {
+		return 1, err
+	}
 	name, err = chooseCredential(v, name)
 	if err != nil {
 		return 1, err

@@ -53,21 +53,35 @@ func canonicalPublic(data []byte) ([]byte, error) {
 	return ssh.MarshalAuthorizedKey(key), nil
 }
 
-// AddAuthorizedKey keeps the old line and refuses option-bearing key entries.
-func AddAuthorizedKey(ctx context.Context, address string, config *ssh.ClientConfig, oldPublic, newPublic []byte) error {
+// PreflightAdd runs every AddAuthorizedKey check that needs no network.
+func PreflightAdd(config *ssh.ClientConfig, oldPublic, newPublic []byte) error {
+	_, _, err := preflightAdd(config, oldPublic, newPublic)
+	return err
+}
+
+func preflightAdd(config *ssh.ClientConfig, oldPublic, newPublic []byte) ([]byte, []byte, error) {
 	oldKey, err := canonicalPublic(oldPublic)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	newKey, err := canonicalPublic(newPublic)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if bytes.Equal(oldKey, newKey) {
-		return errors.New("rotation requires a different public key")
+		return nil, nil, errors.New("rotation requires a different public key")
 	}
 	if config == nil || config.HostKeyCallback == nil || len(config.Auth) == 0 {
-		return errors.New("rotation requires verified credentials")
+		return nil, nil, errors.New("rotation requires verified credentials")
+	}
+	return oldKey, newKey, nil
+}
+
+// AddAuthorizedKey keeps the old line and refuses option-bearing key entries.
+func AddAuthorizedKey(ctx context.Context, address string, config *ssh.ClientConfig, oldPublic, newPublic []byte) error {
+	oldKey, newKey, err := preflightAdd(config, oldPublic, newPublic)
+	if err != nil {
+		return err
 	}
 	client, closeClient, err := connectSSH(ctx, address, config)
 	if err != nil {

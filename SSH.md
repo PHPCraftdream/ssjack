@@ -45,6 +45,51 @@ is metadata only and held in session memory; restart loses delivery/adoption
 evidence. Acceptance requires exact-source public CI, including the ordinary SSH
 live lifecycle scenario; earlier frozen-runner acceptance is not sufficient.
 
+## Keeper-backed owner rotation
+
+For a direct public-key account, `owner rotate-key` displays the selected
+server/account/profile/endpoint/user/usage, saved server-host-key fingerprints,
+old/new client-key fingerprints, revision, PlanID and operation ID. Each
+invocation requires a fresh hidden owner-database password and trusted terminal.
+Before any remote add, the owner must enter the exact displayed ROTATE
+confirmation bound to the selection, revision and operation. Preparation and
+phase transitions are persisted before possible remote effects. The replacement
+login is verified through the saved host pins before the selected account is
+committed; this does not retire the old remote key or prove adoption by every
+consumer.
+
+An uncertain add outcome is handled only by a separate `--recover` invocation.
+Its exact VERIFY-ONLY confirmation allows login verification and completion; it
+never replays an uncertain add. A prepared no-effect orphan can be cancelled by
+one separate `--recover --cancel-prepared` invocation after its exact
+CANCEL-PREPARED confirmation; the packet recovery action alone only
+inspects/claims the journal.
+
+After completion, another rotation requires explicit preservation. Run
+`owner rotate-key --server NAME --account NAME --archive-completed` as a separate
+invocation. It displays the retained operation and current revision and requires
+an exact ARCHIVE confirmation bound to the selected identity, revision and
+operation ID. Only then does it copy the exact current
+encrypted database snapshot to a random, no-overwrite recovery file, verify and
+durably sync the copy, and retain an archived tombstone receipt containing its
+path and ciphertext SHA-256. The snapshot preserves old and replacement private-
+key recovery material under the same unchanged database encryption; there is no
+plaintext export or new KDF. Archival does not retire remote authorization or
+happen automatically. A subsequent rotation requires yet another separate
+invocation, which prepares the next plan.
+
+The archive command does not automatically unlock secrets found only in its
+preserved snapshot for output masking. The keeper's default model-output
+known-literal guard covers current database credentials and pending/recovery
+new-key material plus the retained old key while that journal remains live,
+within collector bounds; admitted guard history remains in keeper
+memory and is lost on restart. Human SSH terminal sessions remain unfiltered, and
+the mandatory token callback is unchanged. Exact-source public full-profile CI
+acceptance remains pending; no pass is claimed. The
+`TestVaultOwnerRotationRecoveryFullProfile` gate uses the `ownerrotationtest`
+source fixtures, which emulate the SSH add-key protocol in memory rather than
+executing a POSIX `authorized_keys` filesystem operation.
+
 ## Formats
 
 The encrypted ssjack container is not directly readable by OpenSSH. Standard encrypted OpenSSH/PEM keys can be imported into the encrypted database. Interoperability exports must be explicitly requested and protected with their own passphrase; they do not retain the custom container's four Argon2id operations and 1000 AES-GCM data layers.

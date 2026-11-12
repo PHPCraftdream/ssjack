@@ -69,6 +69,7 @@ There is no global fallback or ambiguous account inference in owner commands.
 | `import` | Whole archive | `--file` |
 | `link` | Database | `--directory` |
 | `pending` | Database | `--action retry-db\|reconcile\|resume-draft\|cancel-draft\|resume-import\|abort-import` |
+| `rotate-key` | Existing `--server NAME --account NAME` | `--recover`; `--recover --cancel-prepared`; `--archive-completed` (separate exact-confirmed preservation) |
 
 Server/account export scopes require `--server`; account scope also requires
 `--account`. They include the selected server's local values but not global
@@ -86,6 +87,61 @@ by `|`. It is not discovery or trust-on-first-use. `--key-file` explicitly selec
 key authentication and conflicts with `--auth password`. Blank credentials on
 edit retain the existing matching credential kind, as in the menu. Proxy-password
 retention likewise requires unchanged type/address/login. See [proxy limits](PROXY.md).
+
+## Keeper-backed owner key rotation
+
+`owner rotate-key` is a dedicated trusted-terminal route, not a menu form, and
+remains outside menu parity. Rotation supports direct SSH public-key accounts;
+password and proxied accounts are refused. Exact server/account selectors are
+required. Repeated inherited root `--server`/`--account` selectors remain last-wins; repeated
+action-local selectors after `ACTION` are rejected. The CLI requires a fresh
+hidden owner-database password; startup argv/environment password sources are
+refused. It displays metadata-safe identity and endpoint, selected profile/usage,
+saved host-key fingerprints, old/new client-key fingerprints, saved revision,
+PlanID and opaque operation ID. Before a remote add, the owner must enter the
+exact ROTATE confirmation bound to the displayed identity, revision and operation.
+Preparation and each phase transition are persisted before possible remote
+effects. New-key login is verified through stored host pins before the
+selected-account encrypted commit; completion does not prove every agent adopted
+the key, and active sessions/jobs are not restarted or killed.
+
+An unknown add outcome requires a separate `--recover` invocation with exact
+VERIFY-ONLY confirmation. It verifies with the pending key and commits if
+successful; it never replays an uncertain add. The packet `recover` action only
+inspects/claims state. A prepared no-effect orphan may be cancelled by one
+separate `--recover --cancel-prepared` invocation after its exact
+CANCEL-PREPARED confirmation; no earlier claim command is required.
+
+A completed journal blocks another rotation until the owner explicitly archives
+it. For the exact selected server/account, run a separate command:
+
+```sh
+ssjack --vault DATABASE owner rotate-key --server production --account deploy --archive-completed
+```
+
+The CLI displays the retained completed identity/revision and requires the exact
+ARCHIVE confirmation bound to the selected identity, revision and operation ID.
+The archive path is generated randomly and committed with
+no-overwrite semantics. The operation copies the exact current encrypted database
+ciphertext to that durable recovery file, verifies it and retains an archived
+tombstone receipt with recovery path and ciphertext SHA-256. The preserved
+snapshot contains the old and replacement private-key recovery material inside
+the unchanged database encryption profile; no plaintext export or new KDF is
+used. Archive does not retire remote authorization, and there is no automatic
+archive or retirement. Run a later `rotate-key` command in another invocation
+to prepare the next plan.
+
+Archived recovery path/digest and completion evidence are metadata, not
+authority. The tombstone preserves the original operation ID and PlanID; PlanID
+advances monotonically only when a later, separate prepare succeeds. Archived-only
+private material is outside the live database and is not automatically unlocked
+for the model-output guard merely by masking. In the running keeper, the default
+credential guard covers current credentials and pending/recovery new-key
+material plus the retained old key while that journal remains live, within
+collector bounds; guard history covers previously admitted values in RAM
+and is lost on restart. Human terminal sessions stay unfiltered, and the mandatory
+token callback remains unchanged. Exact-source public CI acceptance for this
+route is pending; no pass is claimed.
 
 ## Ordinary SSH job credential refresh
 

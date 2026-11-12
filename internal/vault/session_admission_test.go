@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -58,6 +59,36 @@ func TestOwnerQueueAdmissionRejectsNilClosingAndClosed(t *testing.T) {
 	s.Discard()
 	if err := s.AdmitAt(0, func() error { called = true; return nil }); err == nil || called {
 		t.Fatal("closed session admitted new owner work")
+	}
+}
+
+func TestZeroValueSessionRotationSnapshotIsMetadataOnly(t *testing.T) {
+	s := &Session{}
+	if info, err := s.RotationSnapshot(); err != nil || !reflect.DeepEqual(info, RotationInfo{}) {
+		t.Fatalf("zero-value snapshot = (%+v, %v), want zero info and nil error", info, err)
+	}
+	if _, err := s.PrepareKeyRotationAt(0, "server", "account"); !errors.Is(err, ErrOwnerRevision) {
+		t.Fatalf("zero-value rotation preparation error = %v, want ErrOwnerRevision", err)
+	}
+	if _, _, err := s.RotationMaterialAt(0, 0); !errors.Is(err, ErrOwnerRevision) {
+		t.Fatalf("zero-value rotation material error = %v, want ErrOwnerRevision", err)
+	}
+	if s.state != nil || s.revision != 0 || s.saved != 0 || s.closed || s.closing {
+		t.Fatal("zero-value rotation calls mutated session state")
+	}
+
+	for _, field := range []string{"closed", "closing"} {
+		t.Run(field, func(t *testing.T) {
+			closed := &Session{}
+			if field == "closed" {
+				closed.closed = true
+			} else {
+				closed.closing = true
+			}
+			if _, err := closed.RotationSnapshot(); err == nil {
+				t.Fatalf("%s session snapshot succeeded", field)
+			}
+		})
 	}
 }
 

@@ -8,15 +8,19 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownerrpc"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
 // Peer is private server-side state for one authenticated packet connection.
 // Creating it is not authentication; only ServePeer may expose its dispatcher.
 type Peer struct {
-	dispatcher *Dispatcher
-	deadline   time.Time
-	closed     atomic.Bool
-	seenPlan   uint64
+	dispatcher           *Dispatcher
+	deadline             time.Time
+	closed               atomic.Bool
+	seenPlan             uint64
+	seenRotation         string
+	seenRotationPlan     uint64
+	seenRotationRevision uint64
 }
 
 func (d *Dispatcher) NewPeer(deadline time.Time) (*Peer, error) {
@@ -90,9 +94,29 @@ func (p *Peer) Dispatch(ctx context.Context, command *ownerpacket.Command) owner
 		return ownerrpc.SnapshotReply(ownerdb.Snapshot{}, err)
 	}
 	d.observe(before)
+	d.observeRotation(before)
 	if command.Operation == "snapshot" {
 		p.seenPlan = before.Import.PlanID
+		if before.Rotation != nil {
+			p.seenRotation, p.seenRotationPlan, p.seenRotationRevision = before.Rotation.ID, before.Rotation.PlanID, before.Status.Database.Revision
+		} else {
+			p.seenRotation, p.seenRotationPlan, p.seenRotationRevision = "", 0, 0
+		}
 		return ownerrpc.SnapshotReply(before, nil)
+	}
+	rotationOrphan := activeRotation(before.Rotation) && (d.rotationOwner == nil || d.rotationOwner.closed.Load())
+	if command.Operation == "rotation" {
+		if active(before.Import) {
+			return ownerrpc.SnapshotReply(before, ownerdb.ErrPending)
+		}
+		if bounded.Err() != nil {
+			return ownerrpc.SnapshotReply(before, bounded.Err())
+		}
+		err = d.routeRotation(bounded, p, *command.Revision, command.Rotation, before, rotationOrphan)
+		return d.rotationReply(err)
+	}
+	if activeRotation(before.Rotation) && !rotationSaveAllowed(command) {
+		return ownerrpc.SnapshotReply(before, ownerdb.ErrPending)
 	}
 	orphan := active(before.Import) && (d.owner == nil || d.owner.closed.Load())
 	if command.Operation != "flush" {
@@ -124,6 +148,21 @@ func (p *Peer) Dispatch(ctx context.Context, command *ownerpacket.Command) owner
 	return ownerrpc.SnapshotReply(after, err)
 }
 
+func (d *Dispatcher) rotationReply(err error) ownerpacket.Reply {
+	snapshot, snapshotErr := d.manager.Snapshot()
+	if snapshotErr != nil {
+		if err == nil {
+			err = ownerpacket.ErrUncertain
+		}
+		return ownerrpc.SnapshotReply(ownerdb.Snapshot{}, err)
+	}
+	d.observeRotation(snapshot)
+	if d.rotationOwner != nil && d.rotationOwner.closed.Load() && snapshot.Rotation != nil && snapshot.Rotation.ID == d.rotationID && snapshot.Rotation.Phase == vault.RotationPrepared {
+		d.orphanPrepared = true
+	}
+	return ownerrpc.SnapshotReply(snapshot, err)
+}
+
 // EndLease never drops partial-effect plans or closes the coordinator.
 func (p *Peer) EndLease(ctx context.Context) error {
 	if p == nil || p.dispatcher == nil {
@@ -140,6 +179,13 @@ func (p *Peer) EndLease(ctx context.Context) error {
 		return err
 	}
 	d.observe(snapshot)
+	d.observeRotation(snapshot)
+	if d.rotationOwner == p {
+		d.rotationOwner = nil
+		if snapshot.Rotation != nil && snapshot.Rotation.ID == d.rotationID && snapshot.Rotation.Phase == vault.RotationPrepared {
+			d.orphanPrepared = true
+		}
+	}
 	if d.owner != p {
 		return nil
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpublication"
 )
 
 func verifiedEncoded(path string, password []byte) ([]byte, error) {
@@ -53,8 +54,8 @@ func Verify(path string, password []byte) error {
 
 func RecoveryPath(path, label string) (string, error) {
 	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return "", err
+	if _, err := rand.Read(random[:]); err != nil || random == ([16]byte{}) {
+		return "", errors.New("cannot create recovery snapshot identity")
 	}
 	return fmt.Sprintf("%s.%s-%s-%s.ssjack.ktav", path, label, time.Now().UTC().Format("20060102T150405Z"), hex.EncodeToString(random[:])), nil
 }
@@ -120,6 +121,78 @@ func PrepareRestore(destination, source string, sourcePassword, currentPassword 
 
 func restoreVerified(ctx context.Context, destination string, replacement, previous []byte) (string, error) {
 	return replaceVerified(ctx, destination, replacement, previous, "before-restore")
+}
+
+func (s *Session) ArchiveRotationAt(ctx context.Context, path string, expected, planID uint64, id string) (RotationInfo, error) {
+	if ctx == nil {
+		return RotationInfo{}, errors.New("rotation archive requires a bounded context")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return RotationInfo{}, errors.New("rotation archive requires a bounded context")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return RotationInfo{}, err
+	}
+	if s.closed || s.closing || s.state == nil || s.revision != expected || s.saved != expected || s.saveErr != nil || s.savedCipher == ([sha256.Size]byte{}) || (s.state.OwnerStore != nil && s.state.OwnerStore.Pending != nil) {
+		return RotationInfo{}, ErrOwnerRevision
+	}
+	j := s.state.Rotation
+	if j == nil || j.ID != id || j.PlanID != planID || j.Phase != RotationComplete || !validOwnerHash(j.CommitDigest) || j.RecoveryPath != "" || j.RecoveryDigest != "" || s.state.validateRotation() != nil {
+		return RotationInfo{}, ErrOwnerRevision
+	}
+	encoded, err := readEncoded(path)
+	if err != nil {
+		return RotationInfo{}, err
+	}
+	defer clear(encoded)
+	digest := sha256.Sum256(encoded)
+	if digest != s.savedCipher {
+		return RotationInfo{}, errors.New("completed rotation ciphertext changed; archive refused")
+	}
+	archive, err := RecoveryPath(path, "rotation-"+id)
+	if err != nil {
+		return RotationInfo{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return RotationInfo{}, err
+	}
+	if err := commit(archive, encoded, nil); err != nil {
+		return RotationInfo{}, err
+	}
+	verify, err := readEncoded(archive)
+	if err != nil || sha256.Sum256(verify) != digest {
+		clear(verify)
+		return RotationInfo{}, errors.New("rotation archive ciphertext proof failed; both files were preserved")
+	}
+	clear(verify)
+	if err := ownerpublication.Sync(archive); err != nil {
+		return RotationInfo{}, errors.New("rotation archive durability is uncertain; both files were preserved")
+	}
+	verify, err = readEncoded(archive)
+	if err != nil || sha256.Sum256(verify) != digest {
+		clear(verify)
+		return RotationInfo{}, errors.New("rotation archive changed after sync; both files were preserved")
+	}
+	clear(verify)
+	if err := ctx.Err(); err != nil {
+		return RotationInfo{}, err
+	}
+	encodedDigest, commitDigest := hex.EncodeToString(digest[:]), j.CommitDigest
+	if err := s.applyWithRotationLocked(&expected, func(v *Vault) error {
+		journal := v.Rotation
+		if journal == nil || journal.ID != id || journal.PlanID != planID || journal.Phase != RotationComplete || journal.CommitDigest != commitDigest {
+			return ErrOwnerRevision
+		}
+		journal.Phase, journal.RecoveryPath, journal.RecoveryDigest = RotationArchived, archive, encodedDigest
+		journal.clear()
+		journal.Original, journal.NewPrivate, journal.NewPublic, journal.OldPublic = Target{}, nil, nil, nil
+		return nil
+	}, true); err != nil {
+		return RotationInfo{}, err
+	}
+	return rotationInfo(s.state.Rotation), nil
 }
 
 func replaceVerified(ctx context.Context, destination string, replacement, previous []byte, label string) (backup string, result error) {

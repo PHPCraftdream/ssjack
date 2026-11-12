@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,14 +71,14 @@ func (c *testConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			body, _ := json.Marshal(mcp.InitializeResult{ProtocolVersion: c.version, Capabilities: &mcp.ServerCapabilities{}, ServerInfo: &mcp.Implementation{Name: "fixture", Version: "1"}})
 			return &jsonrpc.Response{ID: id, Result: body}, nil
 		case <-c.closed:
-			return nil, errors.New("closed")
+			return nil, io.EOF
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
 	select {
 	case <-c.closed:
-		return nil, errors.New("closed")
+		return nil, io.EOF
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -173,6 +174,7 @@ func TestLateHandshakeResponseCannotInstallSessionAfterClose(t *testing.T) {
 	awaitSignal(t, conn.request, "initialize request was not written")
 	startCloseNow()
 	awaitSignal(t, r.ctx.Done(), "Close did not cancel the pending handshake")
+	awaitSignal(t, r.slots[0].closeStarted, "binding cleanup did not start after cancellation")
 	responseNow()
 	if err := awaitSignal(t, closed, "Close did not join handshake"); err != nil {
 		t.Fatal(err)

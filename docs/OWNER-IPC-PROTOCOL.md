@@ -314,7 +314,77 @@ encrypted archive reading/import into a fresh database and preservation of the
 keeper after helper detach. This archive fixture is separate from MCP runtime
 bridge acceptance and creates neither grants nor sessions.
 
+## Keeper-backed key rotation
+
+The dedicated owner CLI route uses a narrow authenticated rotation capability;
+the keeper retains the pending private key and SSH authority. The packet
+rotation union is closed to `prepare`, `install`, `verify`, `commit`, `cancel`,
+`recover` and `archive`. Decisions bind the expected database revision, operation
+ID and PlanID. Snapshots expose rotation state as metadata, not a private-key
+getter. The encrypted journal persists each phase before possible remote effects
+and retains old/new recovery material until explicit archival.
+
+The terminal displays the exact selected server/account/profile/endpoint/user/usage,
+stored host-key fingerprints, old/new client-key fingerprints, revision, PlanID
+and operation ID. The route supports direct public-key accounts and refuses
+password or proxied accounts. Each CLI invocation requires a fresh hidden
+database-password prompt and a trusted terminal. Before remote addition, the owner must enter the
+exact selection/revision/operation-bound ROTATE confirmation. New-key SSH login
+is verified through stored host pins before the selected account is committed in
+the encrypted database. The old remote authorization is not retired. Completion
+does not establish adoption by every consumer; active jobs and human sessions are
+neither restarted nor terminated.
+
+Unknown add outcomes require a separate `--recover` invocation with exact
+VERIFY-ONLY confirmation. Recovery can verify the pending new key and complete
+the commit, but never replays an uncertain add. The `recover` packet action only
+inspects/claims state. A prepared no-effect orphan can be cancelled in one
+separate `--recover --cancel-prepared` invocation after exact CANCEL-PREPARED
+confirmation; it needs no earlier claim invocation.
+
+A completed journal blocks another rotation until an owner explicitly runs
+`rotate-key --archive-completed` for the exact selected server/account. The
+separate invocation displays the completed operation and current revision and
+requires exact ARCHIVE terminal confirmation. The keeper checks the exact
+currently saved ciphertext, then copies those encrypted bytes to a randomly
+named, no-overwrite file, verifies the copy and durability, and records an
+archived tombstone receipt with recovery path and ciphertext SHA-256. If archive
+persistence fails, the recovery copy and current database are preserved for
+review; there is no automatic archive, cleanup or remote retirement. The recovery
+file is the same encrypted database snapshot, retaining both old and replacement
+private-key recovery material under the unchanged database encryption; no
+plaintext export or new KDF is used.
+
+The archived tombstone retains operation ID, PlanID and commit evidence, clears
+old/new key material and SSH endpoint/user/host-key fields from live journal
+metadata, and advances the database revision. `RecoveryPath` and `RecoveryDigest`
+are protocol/schema metadata, not authorization or a secret getter. A fresh
+invocation may then prepare another plan; plan identity remains monotonic and is
+not reused. Archive creates no automatic restoration or verification action.
+Rotation admission refuses an active import or other busy/pending owner work;
+active rotation phases in turn block competing directory/secret mutations and
+import-plan operations. Archiving a completed rotation also refuses while an
+import is active.
+
+The default model-output known-literal guard covers current database credentials
+and retained old/new journal keys within collector bounds. A copy that exists only
+in the encrypted recovery file is not automatically unlocked for masking. Admitted
+guard history remains in keeper memory and is lost on restart. Human SSH terminal
+sessions remain unfiltered; the mandatory token callback is unchanged.
+
+The exact-source public CI selector is `TestVaultOwnerRotationRecoveryFullProfile`;
+its `ownerrotationtest` subtests are `composed-success`, `pre-effect-persistence`,
+`lost-add-ack-restart`, `new-login-refusal`, `post-add-persistence-restart`,
+`archive-next` and `owner-crash-inflight` (the owner child is killed while the
+keeper holds the remote Add after its effect; an independently authenticated
+owner then recovers verify-only with no second Add). Keeper restarts are
+graceful and joined; production stale-endpoint refusal is not weakened. This is
+an acceptance gate, not a pass claim here. The SSH fixture
+emulates the add-key protocol in memory; it does not execute a POSIX `authorized_keys` filesystem
+operation.
+
 ## Ordinary full-mode SSH job refresh
+
 
 A directory edit does not mutate a previously captured operation. Separately, an
 ordinary full-mode version-2 startup with a non-proxied agent SSH account can
@@ -341,8 +411,9 @@ identity, and its SSH handshake verifies authentication for that connection only
 that does not establish who issued or installed the credential, install it, or
 revoke any identity. ssjack does not automatically revoke the previous identity.
 The existing legacy key-rotation command still claims the writer role and refuses
-before network access when a keeper owns the database. This feature adds no
-coordinated install/revoke rotation protocol.
+before network access when a keeper owns the database. This ordinary
+credential-refresh prerequisite adds no coordinated install/revoke rotation
+protocol; the separate keeper-backed owner key-rotation route is described above.
 
 Human SSH, startup stream captures, application fixed-text grants and version-1 or
 proxied startup paths keep their existing frozen behavior. This is demand-time

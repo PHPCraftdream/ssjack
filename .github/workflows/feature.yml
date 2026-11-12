@@ -81,6 +81,22 @@ jobs:
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-interactive-helper ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh ' "$RUNNER_TEMP/native-owner-cli.log"
           grep -q -- '--- PASS: TestVaultOwnerControlFullProfile/actual-keeper-process/edit/native-human-ssh/legacy-writer-refusal ' "$RUNNER_TEMP/native-owner-cli.log"
+      - name: Owner key rotation recovery with production KDF
+        if: steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerRotationRecoveryFullProfile$' -count=1 -timeout 1200s ./cmd/ssjack | tee "$RUNNER_TEMP/owner-rotation.log"
+          grep -q '^--- PASS: TestVaultOwnerRotationRecoveryFullProfile ' "$RUNNER_TEMP/owner-rotation.log"
+          for name in composed-success pre-effect-persistence lost-add-ack-restart new-login-refusal post-add-persistence-restart archive-next owner-crash-inflight; do
+            grep -q -- "--- PASS: TestVaultOwnerRotationRecoveryFullProfile/$name " "$RUNNER_TEMP/owner-rotation.log" || { echo "Owner rotation acceptance did not report PASS: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultOwnerRotationRecoveryFullProfile' "$RUNNER_TEMP/owner-rotation.log"; then
+            echo 'Owner rotation acceptance reported a skip'
+            exit 1
+          fi
       - name: Native output-filter bypass with production KDF
         if: steps.scope.outputs.appstorecli == 'true'
         shell: bash

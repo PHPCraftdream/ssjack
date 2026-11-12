@@ -68,9 +68,13 @@ type Command struct {
 	Link      *Link            `json:"link,omitempty"`
 	Inspect   *Inspect         `json:"inspect,omitempty"`
 	Recovery  string           `json:"recovery,omitempty"`
+	Rotation  *Rotation        `json:"rotation,omitempty"`
 }
 
 func (c *Command) Clear() {
+	if c == nil {
+		return
+	}
 	if c.Directory != nil {
 		for _, field := range c.Directory.Fields {
 			clear(field)
@@ -134,15 +138,19 @@ type ImportStatus struct {
 
 // Reply contains metadata and persistence evidence only, never stored values.
 type Reply struct {
-	ErrorCode string       `json:"error"`
-	Metadata  Metadata     `json:"metadata"`
-	Status    Status       `json:"status"`
-	Import    ImportStatus `json:"import"`
+	ErrorCode string            `json:"error"`
+	Metadata  Metadata          `json:"metadata"`
+	Status    Status            `json:"status"`
+	Import    ImportStatus      `json:"import"`
+	Rotation  *RotationMetadata `json:"rotation,omitempty"`
 }
 
 func (c Command) valid() bool {
 	importDecision := c.Operation == "confirm-import" || (c.Operation == "recovery" && (c.Recovery == "resume-import" || c.Recovery == "abort-import"))
-	if importDecision != (c.Plan != 0) {
+	if c.Operation == "rotation" {
+		return c.Revision != nil && c.Plan == 0 && !importDecision && c.Directory == nil && c.Secret == nil && c.Export == nil && c.Link == nil && c.Inspect == nil && c.Recovery == "" && validRotationCommand(c.Rotation)
+	}
+	if c.Rotation != nil || importDecision != (c.Plan != 0) {
 		return false
 	}
 	bodies := 0
@@ -236,16 +244,8 @@ func (c Command) valid() bool {
 	return false
 }
 
-func validCode(code string) bool {
-	switch code {
-	case "", "invalid", "busy", "stale", "unsupported", "authentication", "archive", "uncertain", "operation", "pending":
-		return true
-	}
-	return false
-}
-
 func (r Reply) valid() bool {
-	if !validCode(r.ErrorCode) || !validCode(r.Import.ErrorCode) || len(r.Metadata.Servers) > 64 || len(r.Metadata.Secrets) > 128 || len(r.Import.Preview.Servers) > 64 || len(r.Import.Preview.Secrets) > 128 || len(r.Import.Conflicts) > 512 || len(r.Import.Preview.Conflicts) > 512 {
+	if !validCode(r.ErrorCode) || !validCode(r.Import.ErrorCode) || !validRotationMetadata(r.Rotation) || len(r.Metadata.Servers) > 64 || len(r.Metadata.Secrets) > 128 || len(r.Import.Preview.Servers) > 64 || len(r.Import.Preview.Secrets) > 128 || len(r.Import.Conflicts) > 512 || len(r.Import.Preview.Conflicts) > 512 {
 		return false
 	}
 	switch r.Import.Phase {
@@ -280,12 +280,15 @@ func (r Reply) valid() bool {
 			}
 		}
 	}
+	if r.Status.SavedRevision > r.Status.Revision {
+		return false
+	}
 	if status := r.Status.SSH; status != nil {
 		if len(status.Profile) > 64 || (status.AdoptedKnown && (!status.DeliveredKnown || status.AdoptedRevision > status.DeliveredRevision)) || (status.DeliveredKnown && (!status.DesiredKnown || status.DeliveredRevision > status.DesiredRevision)) {
 			return false
 		}
 	}
-	return r.Status.SavedRevision <= r.Status.Revision
+	return true
 }
 
 func (c Command) Valid() bool { return c.valid() }

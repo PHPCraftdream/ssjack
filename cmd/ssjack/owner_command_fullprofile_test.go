@@ -12,8 +12,17 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
+	"github.com/PHPCraftdream/ssjack/internal/ownerrotationtest"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
+
+func TestVaultOwnerRotationRecoveryFullProfile(t *testing.T) {
+	ownerrotationtest.Accept(t)
+}
+
+func TestRotationComposedProcessChild(t *testing.T) {
+	ownerrotationtest.Child(t, run)
+}
 
 func TestOwnerCommandPTYChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_COMMAND_CHILD") != "1" {

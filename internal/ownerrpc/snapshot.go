@@ -8,6 +8,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
+	"github.com/PHPCraftdream/ssjack/internal/ownerrotation"
 	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -34,6 +35,8 @@ func errorCode(err error) string {
 		return "pending"
 	case errors.Is(err, ownerpacket.ErrUncertain):
 		return "uncertain"
+	case errors.Is(err, ownerrotation.ErrUncertain):
+		return "rotation-uncertain"
 	case errors.Is(err, ownerpacket.ErrAuthentication), errors.Is(err, ownerpacket.ErrExpired):
 		return "authentication"
 	case errors.Is(err, ownerpacket.ErrProtocol):
@@ -53,6 +56,8 @@ func codeError(code string) error {
 		return ownerdb.ErrPending
 	case "uncertain":
 		return ownerpacket.ErrUncertain
+	case "rotation-uncertain":
+		return ownerrotation.ErrUncertain
 	case "authentication":
 		return ownerpacket.ErrAuthentication
 	case "invalid":
@@ -98,6 +103,30 @@ func cloneSSH(status *sshstatus.Status) *sshstatus.Status {
 	return &cloned
 }
 
+func encodeRotation(info vault.RotationInfo) *ownerpacket.RotationMetadata {
+	return &ownerpacket.RotationMetadata{
+		ID: info.ID, Phase: info.Phase, ServerID: info.ServerID, Account: info.Account,
+		Profile: info.Profile, PlanID: info.PlanID, BaseRevision: info.BaseRevision,
+		CommitRevision: info.CommitRevision, Address: info.Address, User: info.User,
+		Usage: info.Usage, CommitDigest: info.CommitDigest,
+		RecoveryPath: info.RecoveryPath, RecoveryDigest: info.RecoveryDigest,
+		OldPublic: append([]byte(nil), info.OldPublic...), NewPublic: append([]byte(nil), info.NewPublic...),
+		HostKeys: cloneStrings(info.HostKeys),
+	}
+}
+
+func decodeRotation(info ownerpacket.RotationMetadata) vault.RotationInfo {
+	return vault.RotationInfo{
+		ID: info.ID, Phase: info.Phase, ServerID: info.ServerID, Account: info.Account,
+		Profile: info.Profile, PlanID: info.PlanID, BaseRevision: info.BaseRevision,
+		CommitRevision: info.CommitRevision, Address: info.Address, User: info.User,
+		Usage: info.Usage, CommitDigest: info.CommitDigest,
+		RecoveryPath: info.RecoveryPath, RecoveryDigest: info.RecoveryDigest,
+		OldPublic: append([]byte(nil), info.OldPublic...), NewPublic: append([]byte(nil), info.NewPublic...),
+		HostKeys: cloneStrings(info.HostKeys),
+	}
+}
+
 // SnapshotReply copies caller-owned metadata into a closed reply, never a getter.
 func SnapshotReply(s ownerdb.Snapshot, err error) ownerpacket.Reply { return encodeSnapshot(s, err) }
 
@@ -134,6 +163,9 @@ func encodeSnapshot(s ownerdb.Snapshot, err error) ownerpacket.Reply {
 		r.Metadata.Servers = append(r.Metadata.Servers, out)
 	}
 	r.Import = encodeImport(s.Import)
+	if s.Rotation != nil {
+		r.Rotation = encodeRotation(*s.Rotation)
+	}
 	return r
 }
 
@@ -171,6 +203,10 @@ func decodeSnapshot(r ownerpacket.Reply) (ownerdb.Snapshot, error) {
 		s.Directory.Servers = append(s.Directory.Servers, out)
 	}
 	s.Import = decodeImport(r.Import)
+	if r.Rotation != nil {
+		rotation := decodeRotation(*r.Rotation)
+		s.Rotation = &rotation
+	}
 	return s, codeError(r.ErrorCode)
 }
 

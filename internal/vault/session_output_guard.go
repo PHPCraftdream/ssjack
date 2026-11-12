@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
@@ -53,6 +54,33 @@ func credentialGuard(v *Vault) (*outputguard.Snapshot, error) {
 	for _, target := range v.Targets {
 		if !add(target.Password) || !add(target.PrivateKey) || (target.Proxy != nil && !add(target.Proxy.Password)) {
 			return nil, outputguard.ErrGuard
+		}
+	}
+	if journal := v.Rotation; journal != nil && journal.Phase != RotationCancelled && journal.Phase != RotationArchived {
+		var seen [][]byte
+		for _, target := range v.Targets {
+			if len(target.PrivateKey) != 0 {
+				seen = append(seen, target.PrivateKey)
+			}
+		}
+		for _, secret := range [][]byte{journal.Original.PrivateKey, journal.NewPrivate} {
+			if len(secret) == 0 {
+				continue
+			}
+			duplicate := false
+			for _, existing := range seen {
+				if bytes.Equal(existing, secret) {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			if !add(secret) {
+				return nil, outputguard.ErrGuard
+			}
+			seen = append(seen, secret)
 		}
 	}
 	if v.OwnerStore != nil && !add(v.OwnerStore.Master) {

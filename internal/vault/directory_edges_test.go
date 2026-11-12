@@ -2,7 +2,12 @@ package vault
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ktav-lang/golang/pure"
 )
@@ -147,4 +152,67 @@ func TestDirectoryAuthenticationExclusivity(t *testing.T) {
 	if _, err := marshal(v); err == nil {
 		t.Fatal("legacy database silently adopted password authentication")
 	}
+}
+
+func TestRotationCodecRejectsMalformedPrivateKeyTypeWithoutPanic(t *testing.T) {
+	state, server := directoryFixture(t)
+	original := ownTarget(state.Targets["production"])
+	defer clear(original.PrivateKey)
+	public, private := rotationTestIdentity(t)
+	defer clear(public)
+	defer clear(private)
+	record := rotationRecord(&RotationJournal{
+		ID: "0102030405060708090a0b0c0d0e0f10", PlanID: 1, BaseRevision: 0,
+		Phase: RotationPrepared, ServerID: server, Account: "main", Profile: "production",
+		Original: original, NewPrivate: private, NewPublic: public,
+		OldPublic: testPublic(t, original.PrivateKey),
+	})
+	target := record["original"].(map[string]any)
+	hostKeys := make([]any, len(target["host_keys"].([]string)))
+	for index, key := range target["host_keys"].([]string) {
+		hostKeys[index] = key
+	}
+	target["host_keys"] = hostKeys
+	if err := validateRotationRecord(record); err != nil {
+		t.Fatalf("valid prepared rotation record rejected: %v", err)
+	}
+	malformed := make(map[string]any, len(record))
+	for field, value := range record {
+		malformed[field] = value
+	}
+	malformedTarget := make(map[string]any, len(target))
+	for field, value := range target {
+		malformedTarget[field] = value
+	}
+	malformedTarget["private_key"] = int64(7)
+	malformed["original"] = malformedTarget
+	if err := validateRotationRecord(malformed); err == nil || err.Error() != "invalid key rotation target key" {
+		t.Fatalf("malformed private key error = %v, want invalid key rotation target key", err)
+	}
+}
+
+func rotationTestIdentity(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(private, "rotation-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := ssh.NewPublicKey(private.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ssh.MarshalAuthorizedKey(public), pem.EncodeToMemory(block)
+}
+
+func testPublic(t *testing.T, private []byte) []byte {
+	t.Helper()
+	key, err := ssh.ParsePrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ssh.MarshalAuthorizedKey(key.PublicKey())
 }

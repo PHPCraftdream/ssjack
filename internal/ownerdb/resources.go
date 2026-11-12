@@ -107,7 +107,7 @@ func (m *Manager) confirmImport(expected, plan *uint64) error {
 	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
 		return ErrPending
 	}
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportStaged || m.imp.staged == nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportStaged || m.imp.staged == nil || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	conflicts, err := m.importConflicts()
@@ -137,7 +137,7 @@ func (m *Manager) resumeImport(expected, plan *uint64) error {
 	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
 		return ErrPending
 	}
-	if m.closed || m.closing || m.busy || m.pending != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportPartial || m.imp.staged == nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.db == nil || m.jobs == nil || m.imp.phase != ImportPartial || m.imp.staged == nil || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	return m.admit(expected, func() error {
@@ -157,7 +157,7 @@ func (m *Manager) AbortImportAt(expected uint64) error { return m.abortImport(&e
 func (m *Manager) abortImport(expected, plan *uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if plan != nil && (*plan == 0 || *plan != m.imp.planID) {
+	if plan != nil && (*plan == 0 || *plan != m.imp.planID) || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	if expected != nil {
@@ -287,7 +287,7 @@ func (m *Manager) OutputGuard(ctx context.Context) (*outputguard.Snapshot, error
 func (m *Manager) RememberRemoteMCPAt(ctx context.Context, expected uint64, digest [32]byte, profile string, selected []mcpdirectory.Binding) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if ctx == nil || ctx.Err() != nil || m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.imp.owns() {
+	if ctx == nil || ctx.Err() != nil || m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.imp.owns() || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	actual, err := cipherDigest(m.path)

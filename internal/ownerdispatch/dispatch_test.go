@@ -196,6 +196,8 @@ func TestPartialPlanNeedsFreshSnapshotAndExplicitRecoveryAfterDisconnect(t *test
 	}
 }
 
+func revisionPtr(value uint64) *uint64 { return &value }
+
 func TestInvalidExpiredOrUnboundedPeerCannotReachManager(t *testing.T) {
 	_, r, p, ctx := fixture(t)
 	if reply := p.Dispatch(ctx, &ownerpacket.Command{Operation: "get-secret"}); reply.ErrorCode != "invalid" || r.reads != 0 {

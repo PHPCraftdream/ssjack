@@ -42,7 +42,7 @@ func (m *Manager) export(expected *uint64, request ExportRequest) error {
 	owned.Selection.RemoteMCP = append([]mcpdirectory.Binding(nil), request.Selection.RemoteMCP...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.rotationBlocksMutation() {
 		return ErrPending
 	}
 	if len(owned.Selection.RemoteMCP) != 0 {
@@ -246,7 +246,7 @@ func (m *Manager) inspectImportRequest(expected *uint64, path string, password [
 		clear(owned)
 		return ErrPending
 	}
-	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.importSequence == ^uint64(0) {
+	if m.closed || m.closing || m.busy || m.pending != nil || m.err != nil || m.db == nil || m.jobs == nil || m.rotationBlocksMutation() || m.importSequence == ^uint64(0) {
 		clear(owned)
 		return ErrPending
 	}

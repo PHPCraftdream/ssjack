@@ -37,6 +37,7 @@ type Vault struct {
 	Secrets     map[string]SecretBinding `json:"secrets,omitempty"`
 	OwnerStore  *OwnerStore              `json:"owner_store,omitempty"`
 	RemoteMCP   *mcpdirectory.Directory  `json:"remote_mcp,omitempty"`
+	Rotation    *RotationJournal         `json:"rotation,omitempty"`
 	revision    [sha256.Size]byte
 	payloadHash [sha256.Size]byte
 	format      int
@@ -65,6 +66,10 @@ func (v *Vault) Close() {
 	v.OwnerStore = nil
 	v.RemoteMCP.Clear()
 	v.RemoteMCP = nil
+	if v.Rotation != nil {
+		v.Rotation.clear()
+	}
+	v.Rotation = nil
 	clear(v.payloadHash[:])
 	v.writer.close()
 }
@@ -240,7 +245,7 @@ func (v *Vault) validate() error {
 	if (v.Version != 1 && v.Version != 2) || v.Targets == nil || len(v.Targets) > 64 {
 		return errors.New("unsupported vault version or target count")
 	}
-	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil) {
+	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil || v.Rotation != nil) {
 		return errors.New("version 1 cannot contain directory metadata")
 	}
 	if v.Version == 2 {
@@ -251,6 +256,9 @@ func (v *Vault) validate() error {
 			return err
 		}
 		if err := v.validateRemoteMCP(); err != nil {
+			return err
+		}
+		if err := v.validateRotation(); err != nil {
 			return err
 		}
 	}

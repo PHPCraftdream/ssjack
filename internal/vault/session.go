@@ -139,10 +139,22 @@ func (s *Session) ApplyAt(expected uint64, edit func(*Vault) error) error {
 	return s.apply(&expected, edit)
 }
 func (s *Session) apply(expected *uint64, edit func(*Vault) error) error {
+	return s.applyWithRotation(expected, edit, false)
+}
+func (s *Session) applyRotationAt(expected uint64, edit func(*Vault) error) error {
+	return s.applyWithRotation(&expected, edit, true)
+}
+func (s *Session) applyWithRotation(expected *uint64, edit func(*Vault) error, rotation bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applyWithRotationLocked(expected, edit, rotation)
+}
+func (s *Session) applyWithRotationLocked(expected *uint64, edit func(*Vault) error, rotation bool) error {
 	if s.closed || s.closing || edit == nil || s.revision == math.MaxUint64 {
 		return errors.New("database session does not accept edits")
+	}
+	if !rotation && RotationActive(s.state.Rotation) {
+		return errors.New("resolve the pending key rotation before editing the database")
 	}
 	if expected != nil && *expected != s.revision {
 		return ErrOwnerRevision
