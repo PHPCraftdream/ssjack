@@ -80,8 +80,7 @@ class FullTriggerTests(unittest.TestCase):
     def test_go_vet_runs_unconditionally_on_every_platform(self):
         command = "run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/..."
         for block in (job(self.full, "test"), job(self.feature, "impacted")):
-            step = block.split("      - name: Vet
-", 1)[1].split("      - ", 1)[0]
+            step = block.split("      - name: Vet" + chr(10), 1)[1].split("      - ", 1)[0]
             self.assertEqual(step.strip(), command)
             self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", block)
 
