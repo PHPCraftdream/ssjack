@@ -39,6 +39,8 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/ci/plan.py plan --base "$BASE" --output "$RUNNER_TEMP/ci-plan.json"
+      - name: Vet
+        run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/...
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"

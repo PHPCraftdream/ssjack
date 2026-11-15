@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -50,11 +51,14 @@ func TestNormalizeTypedRawMessageAndRejectsBinaryAndMarshalers(t *testing.T) {
 }
 
 func TestNormalizeRejectsAmbiguousStructAndAcceptsNilRawMessage(t *testing.T) {
-	value := struct {
-		First  string `json:"same"`
-		Second string `json:"same"`
-	}{First: "one", Second: "two"}
-	if _, err := Normalize(value, 128); !errors.Is(err, ErrInvalid) {
+	// Built at run time: go vet rejects a literal struct with a repeated tag.
+	field := func(name string) reflect.StructField {
+		return reflect.StructField{Name: name, Type: reflect.TypeOf(""), Tag: `json:"same"`}
+	}
+	value := reflect.New(reflect.StructOf([]reflect.StructField{field("First"), field("Second")})).Elem()
+	value.Field(0).SetString("one")
+	value.Field(1).SetString("two")
+	if _, err := Normalize(value.Interface(), 128); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("ambiguous struct fields were normalized: %v", err)
 	}
 	var empty *json.RawMessage

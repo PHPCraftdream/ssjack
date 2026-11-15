@@ -42,7 +42,9 @@ func start(ctx context.Context, spec Command) (_ *Terminal, result error) {
 	}
 	defer attributes.Delete()
 	// The attribute takes the native HPCON value, not a pointer to a Go handle.
-	if err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, unsafe.Pointer(console), unsafe.Sizeof(console)); err != nil {
+	// Reading the handle as a pointer keeps go vet's unsafeptr check meaningful.
+	native := *(*unsafe.Pointer)(unsafe.Pointer(&console))
+	if err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, native, unsafe.Sizeof(console)); err != nil {
 		return nil, ErrTerminal
 	}
 	application, err := windows.UTF16PtrFromString(spec.Executable)

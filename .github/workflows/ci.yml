@@ -45,6 +45,8 @@ jobs:
             printf '%s\n' "$files"
             exit 1
           fi
+      - name: Vet
+        run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/...
       - name: Build CLI and check help
         shell: bash
         run: |

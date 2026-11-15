@@ -77,6 +77,14 @@ class FullTriggerTests(unittest.TestCase):
         self.assertFalse(mandatory & owned)
         self.assertNotIn("remote_mcp_connected.py", profile)
 
+    def test_go_vet_runs_unconditionally_on_every_platform(self):
+        command = "run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/..."
+        for block in (job(self.full, "test"), job(self.feature, "impacted")):
+            step = block.split("      - name: Vet
+", 1)[1].split("      - ", 1)[0]
+            self.assertEqual(step.strip(), command)
+            self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", block)
+
     def test_agent_instructions_cover_both_explicit_routes(self):
         instructions = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertIn("[ci:full]", instructions)
