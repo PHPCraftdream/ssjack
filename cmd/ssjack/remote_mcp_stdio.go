@@ -19,14 +19,13 @@ const (
 )
 
 var (
-	errMCPStdioReaderClosed       = errors.New("MCP stdio reader is closed")
-	errMCPStdioConcurrentRead     = errors.New("concurrent MCP stdio read refused")
-	errMCPStdioMessageLimit       = errors.New("MCP stdio message exceeds limit")
-	errMCPStdioMessageCountLimit  = errors.New("MCP stdio message limit exceeded")
-	errMCPStdioInvalidMessage     = errors.New("invalid MCP stdio message")
-	errMCPStdioUnsupportedVersion = errors.New("unsupported MCP protocol version")
-	errMCPStdioUnsupportedMethod  = errors.New("unsupported MCP method")
-	errMCPStdioWriterClosed       = errors.New("MCP stdio writer is closed")
+	errMCPStdioReaderClosed      = errors.New("MCP stdio reader is closed")
+	errMCPStdioConcurrentRead    = errors.New("concurrent MCP stdio read refused")
+	errMCPStdioMessageLimit      = errors.New("MCP stdio message exceeds limit")
+	errMCPStdioMessageCountLimit = errors.New("MCP stdio message limit exceeded")
+	errMCPStdioInvalidMessage    = errors.New("invalid MCP stdio message")
+	errMCPStdioUnsupportedMethod = errors.New("unsupported MCP method")
+	errMCPStdioWriterClosed      = errors.New("MCP stdio writer is closed")
 )
 
 type boundedMCPStdioReader struct {
@@ -164,26 +163,24 @@ func validateMCPStdioMessage(frame []byte) error {
 	if version, present := object["jsonrpc"]; present && version != "2.0" {
 		return errMCPStdioInvalidMessage
 	}
-	var message struct {
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
-	}
-	if json.Unmarshal(frame, &message) != nil {
-		return errMCPStdioInvalidMessage
-	}
-	switch message.Method {
-	case "initialize":
-		var params struct {
-			ProtocolVersion string `json:"protocolVersion"`
+	if method, present := object["method"]; present {
+		if _, ok := method.(string); !ok {
+			return errMCPStdioInvalidMessage
 		}
-		if json.Unmarshal(message.Params, &params) != nil || !supportedMCPProtocol(params.ProtocolVersion) {
-			return errMCPStdioUnsupportedVersion
-		}
-	case "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping":
-	default:
-		return errMCPStdioUnsupportedMethod
 	}
+	// The method surface is enforced by the connection, which can answer a
+	// refused call instead of ending the session; an unknown initialize
+	// version is negotiated down by the SDK.
 	return nil
+}
+
+// supportedMCPMethod is the whole surface the bridge hands to the SDK.
+func supportedMCPMethod(method string) bool {
+	switch method {
+	case "initialize", "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping":
+		return true
+	}
+	return false
 }
 
 func supportedMCPProtocol(version string) bool {

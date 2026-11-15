@@ -78,7 +78,7 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
 	life.Event("serving")
 	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
-	life.Event("stdio-end", "cause", lifelog.Cause(runErr))
+	life.Event("stdio-end", "cause", stdioCause(runErr))
 	cancel()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), remoteMCPRegistrationBudget)
 	cleanupErr := registration.Close(cleanupCtx)
@@ -90,4 +90,20 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 		return 1, "stdio", errors.New("MCP bridge session failed")
 	}
 	return 0, "stdio-closed", nil
+}
+
+// stdioCause names the bridge's own stdio refusals, which the generic classes
+// would all record as other.
+func stdioCause(err error) string {
+	switch {
+	case errors.Is(err, errMCPStdioMessageLimit), errors.Is(err, errMCPStdioMessageCountLimit):
+		return "stdio-limit"
+	case errors.Is(err, errMCPStdioInvalidMessage):
+		return "invalid-message"
+	case errors.Is(err, errMCPStdioUnsupportedMethod):
+		return "unsupported-message"
+	case errors.Is(err, errMCPStdioConcurrentRead):
+		return "concurrent-read"
+	}
+	return lifelog.Cause(err)
 }

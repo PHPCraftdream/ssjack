@@ -31,6 +31,16 @@ design, not a fault to retry around. The only recovery is to leave the harness
 and start it again through `ssjack run`, which creates a new channel. A
 re-attach path would widen the trust boundary and is not implemented.
 
+So the bridge must never end its stdio over a message it merely does not
+support. It hands the SDK only `initialize`, `notifications/initialized`,
+`notifications/cancelled`, `tools/list`, `tools/call` and `ping`; any other
+call is answered with JSON-RPC `-32601 method not found` and any other
+notification is dropped. Claude Code probes stdio servers with
+`server/discover` before `initialize` and respawns a server that closes on it,
+which used to spend the token at startup. An `initialize` offering a protocol
+version newer than the bridge supports (`2024-11-05`, `2025-03-26`,
+`2025-06-18`) is negotiated down to `2025-06-18` instead of refused.
+
 To find out why a bridge dropped, the keeper and the bridge append fixed
 lifecycle events to `.claude/ssjack/lifecycle.log` in the project (owner-only
 mode, rotated once to `lifecycle.log.1` above 1 MiB). The keeper hands the path
@@ -63,7 +73,9 @@ The log never holds a token, the session identifier, an endpoint, a password,
 request or reply data, a path or error text. Every value is reduced to
 `[A-Za-z0-9_.:-]` and at most 64 bytes, and an error is recorded only as one of
 a fixed set of classes (`eof`, `timeout`, `reset`, `closed`, `cancelled`,
-`other` and similar). Operation names (`op`) are recorded; their arguments are
+`other` and similar; `stdio-end` also names the bridge's own refusals:
+`invalid-message`, `unsupported-message`, `stdio-limit`, `concurrent-read`).
+Operation names (`op`) are recorded; their arguments are
 not. The file is diagnostic only: nothing reads it back to make a decision, so
 editing it grants nothing. Failing to write it never fails a launch. The
 ssjack-ui Claude Code plugin reads only the tail of this log to display a

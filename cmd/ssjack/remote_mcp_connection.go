@@ -50,32 +50,35 @@ func newMCPStdioTransport(reader io.ReadCloser, writer io.WriteCloser) *mcpStdio
 
 func (c *mcpStdioConnection) Connect(context.Context) (mcp.Connection, error) { return c, nil }
 
-func (c *mcpStdioConnection) Read(context.Context) (jsonrpc.Message, error) {
-	if len(c.queue) > 0 {
-		next := c.queue[0]
-		c.queue = c.queue[1:]
-		return next, nil
-	}
-	frame := make([]byte, maxMCPStdioMessage+1)
-	n, err := c.reader.Read(frame)
-	if err != nil {
-		return nil, err
-	}
-	messages, batch, err := decodeMCPFrame(frame[:n])
-	if err != nil {
-		return nil, err
-	}
-	if batch && c.protocolVersion >= mcpProtocol20250618 {
-		return nil, fmt.Errorf("JSON-RPC batching is not supported in %s and later", mcpProtocol20250618)
-	}
-	if batch {
-		if err := c.trackBatch(messages); err != nil {
+// Read yields only supported messages; a frame whose messages were all
+// refused yields nothing, so the next frame is read.
+func (c *mcpStdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	for len(c.queue) == 0 {
+		frame := make([]byte, maxMCPStdioMessage+1)
+		n, err := c.reader.Read(frame)
+		if err != nil {
+			return nil, err
+		}
+		messages, batch, err := decodeMCPFrame(frame[:n])
+		if err != nil {
+			return nil, err
+		}
+		if batch && c.protocolVersion >= mcpProtocol20250618 {
+			return nil, fmt.Errorf("JSON-RPC batching is not supported in %s and later", mcpProtocol20250618)
+		}
+		if batch {
+			if err := c.trackBatch(messages); err != nil {
+				return nil, err
+			}
+		}
+		c.trackNegotiatedVersion(messages)
+		if c.queue, err = c.refuseUnsupported(ctx, messages); err != nil {
 			return nil, err
 		}
 	}
-	c.trackNegotiatedVersion(messages)
-	c.queue = messages[1:]
-	return messages[0], nil
+	next := c.queue[0]
+	c.queue = c.queue[1:]
+	return next, nil
 }
 
 // Write admits every path through admitWrite before touching any state: a

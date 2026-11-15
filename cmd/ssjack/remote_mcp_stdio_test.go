@@ -48,22 +48,15 @@ func TestBoundedMCPStdioReaderPreservesFragmentsAndDoesNotFilter(t *testing.T) {
 	}
 }
 
-func TestMCPProtocolVersionsAndUnknownVersionAdmission(t *testing.T) {
-	for _, version := range []string{mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618} {
-		frame := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + version + `"}}` + "\n"
-		if _, err := readBoundedMCP(t, &fragmentedMCPInput{data: []byte(frame), n: len(frame)}); err != nil {
-			t.Fatalf("supported initialization version %q refused", version)
+// Unknown versions pass the reader unchanged: the SDK negotiates them down,
+// and a refusal here would end the single-use session.
+func TestMCPProtocolVersionsReachNegotiationUnchanged(t *testing.T) {
+	for _, version := range []string{mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618, "2025-11-25", "2099-01-01"} {
+		frame := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + version + `"}}` + "\n")
+		got, err := readBoundedMCP(t, &fragmentedMCPInput{data: append([]byte(nil), frame...), n: len(frame)})
+		if err != nil || !bytes.Equal(got, frame) {
+			t.Fatalf("initialize with version %q did not pass the reader unchanged: %v", version, err)
 		}
-	}
-	first := []byte("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2099-01-01\"}}\n")
-	input := &fragmentedMCPInput{data: append(append([]byte(nil), first...), []byte(`{"jsonrpc":"2.0","method":"ping"}`+"\n")...), n: len(first)}
-	reader := newBoundedMCPStdioReader(input)
-	buf := make([]byte, 1)
-	if n, err := reader.Read(buf); n != 0 || err == nil {
-		t.Fatal("unsupported initialize was not rejected before yielding frame bytes")
-	}
-	if len(input.data) == 0 || string(input.data[:1]) != "{" {
-		t.Fatal("reader consumed bytes from the following frame before rejecting the version")
 	}
 }
 
@@ -108,10 +101,16 @@ func TestBoundedMCPStdioMessageCountAndMethods(t *testing.T) {
 	if _, err := readBoundedMCP(t, &fragmentedMCPInput{data: []byte(batch), n: 2047}); err == nil {
 		t.Fatal("oversized JSON-RPC batch was admitted")
 	}
-	for _, method := range []string{"$/arbitrary", "resources/read", "prompts/list"} {
+	// The reader frames; the connection enforces the method surface.
+	for _, method := range []string{"$/arbitrary", "resources/read", "prompts/list", "server/discover"} {
 		unknown := []byte(`{"jsonrpc":"2.0","method":"` + method + `"}` + "\n")
-		if _, err := readBoundedMCP(t, &fragmentedMCPInput{data: unknown, n: len(unknown)}); err == nil {
-			t.Fatalf("unsupported upstream method %q was admitted", method)
+		if got, err := readBoundedMCP(t, &fragmentedMCPInput{data: unknown, n: len(unknown)}); err != nil || !bytes.Equal(got, unknown) {
+			t.Fatalf("framing of method %q was not passed through unchanged: %v", method, err)
+		}
+	}
+	for _, frame := range []string{`{"jsonrpc":"2.0","id":1,"method":7}`, `{"jsonrpc":"1.0","id":1,"method":"ping"}`, `[1]`} {
+		if _, err := readBoundedMCP(t, &fragmentedMCPInput{data: []byte(frame + "\n"), n: len(frame) + 1}); err == nil {
+			t.Fatalf("malformed message was admitted: %s", frame)
 		}
 	}
 }
