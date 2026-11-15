@@ -22,6 +22,8 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/launch"
 	"github.com/PHPCraftdream/ssjack/internal/mcpstart"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/transfer"
+	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -87,6 +89,10 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
 	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
 	clawwrightUser := flags.String("clawwright-user", "", "Fixed guest user for the Clawwright Incus route")
+	var transferRootSpecs transferRootFlags
+	flags.Var(&transferRootSpecs, "transfer-root", "Register a transfer root as [NAME=]DIR (repeatable, full mode)")
+	transferMaxBytes := flags.Int64("transfer-max-bytes", transfercore.DefaultLimits().MaxBytes, "Maximum total bytes per transfer (full mode)")
+	transferMaxEntries := flags.Int("transfer-max-entries", transfercore.DefaultLimits().MaxEntries, "Maximum entries per transfer (full mode)")
 	generatePath := flags.String("generate-key", "", "Create a derived Ed25519 key in a new encrypted container")
 	protectPath := flags.String("protect-key", "", "Protect an existing SSH key in a new container")
 	keyOutput := flags.String("key-output", "", "Output for --protect-key")
@@ -129,6 +135,15 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		if err := requireOutputFilterTerminal(); err != nil {
 			return 1, err
 		}
+	}
+	transferFlagsSupplied := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "transfer-root" || f.Name == "transfer-max-bytes" || f.Name == "transfer-max-entries" {
+			transferFlagsSupplied = true
+		}
+	})
+	if transferFlagsSupplied && *modeFlag != string(broker.ModeFull) {
+		return 1, errors.New("--transfer-root, --transfer-max-bytes and --transfer-max-entries are only available in full mode")
 	}
 	selector, named, selectionErr := startupSelection(flags, profile, *server, *account)
 	if selectionErr != nil {
@@ -308,8 +323,13 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var targets []string
 	var remoteMCPDescriptor string
 	var bootstrapOutput launch.OutputSetup
+	var transfers *transferOptions
 	if *modeFlag == string(broker.ModeFull) {
 		applicationOptions, err = registeredClawwright(*clawwrightDirectory, *clawwrightEntry, *clawwrightContainer, *clawwrightUser, profile, nil)
+		if err != nil {
+			return 1, err
+		}
+		transfers, err = prepareTransfer(*vaultPath, transferRootSpecs, *transferMaxBytes, *transferMaxEntries)
 		if err != nil {
 			return 1, err
 		}
@@ -342,6 +362,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var handler broker.Handler
 	var manager *remote.Manager
 	var applicationManager *application.Manager
+	var transferManager *transfer.Manager
 	if *modeFlag == string(broker.ModeFull) {
 		manager = sshSetup.manager(ctx, targets, guard, *noOutputFilter)
 		defer manager.Close()
@@ -353,8 +374,16 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 			return 1, err
 		}
 		defer applicationManager.Close()
+		transferManager, err = newTransferManager(transfers, targets, streamRunner)
+		if err != nil {
+			return 1, err
+		}
+		defer transferManager.Close()
 		handler = func(ctx context.Context, request wire.Request) wire.Reply {
 			if reply, handled := applicationManager.Handle(ctx, request); handled {
+				return reply
+			}
+			if reply, handled := transferManager.Handle(ctx, request); handled {
 				return reply
 			}
 			return manager.Handle(ctx, request)

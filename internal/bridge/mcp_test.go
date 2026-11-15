@@ -12,6 +12,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/transfer"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -43,6 +44,16 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 			return broker.Result(remote.StartOutput{JobID: "app-job"}, nil)
 		case "app_read":
 			return broker.Result(remote.ReadOutput{JobID: "app-job", Stdout: []byte("Clawwright result"), Done: true, ExitCode: 0}, nil)
+		case "transfer_upload", "transfer_download":
+			var input transfer.StartInput
+			if wire.Decode(req.Data, &input) != nil || input.Target != "allowed" || input.Local != "a.txt" || input.Remote != "/srv/a.txt" {
+				return wire.Reply{Error: "invalid transfer"}
+			}
+			return broker.Result(transfer.StartOutput{JobID: "transfer-job"}, nil)
+		case "transfer_status":
+			return broker.Result(transfer.StatusOutput{JobID: "transfer-job", State: "done", Direction: "upload", Kind: "file", Files: 1, Bytes: 3, SHA256: "aa"}, nil)
+		case "transfer_cancel":
+			return broker.Result(transfer.CancelOutput{Cancelled: true}, nil)
 		default:
 			return wire.Reply{Error: "denied"}
 		}
@@ -69,7 +80,7 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 8 {
+	if err != nil || len(tools.Tools) != 12 {
 		t.Fatalf("unexpected tool list: %+v, %v", tools, err)
 	}
 	for _, call := range []struct {
@@ -85,6 +96,10 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 		{"app_exec", map[string]any{"application": "clawwright", "arguments": []string{"status"}}, "app-job"},
 		{"app_read", map[string]any{"job_id": "app-job"}, "Clawwright result"},
 		{"app_cancel", map[string]any{"job_id": "app-job"}, "true"},
+		{"remote_upload", map[string]any{"target": "allowed", "local": "a.txt", "remote": "/srv/a.txt"}, "transfer-job"},
+		{"remote_download", map[string]any{"target": "allowed", "local": "a.txt", "remote": "/srv/a.txt"}, "transfer-job"},
+		{"transfer_status", map[string]any{"job_id": "transfer-job"}, "done"},
+		{"transfer_cancel", map[string]any{"job_id": "transfer-job"}, "true"},
 	} {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.name, Arguments: call.args})
 		if err != nil || result.IsError {

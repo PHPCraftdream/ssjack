@@ -133,6 +133,22 @@ Limits:
 
 Disconnecting the bridge cancels active operations and closes their SSH connections. Detached processes and system services may continue on the server. A shell command has the SSH user's permissions, so guest OS/Incus isolation remains necessary. Remote output can contain secrets and is delivered to the harness.
 
+## File transfer
+
+Owner startup flags (full mode only): repeatable `--transfer-root [NAME=]DIR` registers local roots; `--transfer-max-bytes` and `--transfer-max-entries` bound each transfer (defaults 2 GiB and 100000). Roots are parsed and verified before the vault prompt: absolute, real, symlink-free, not a filesystem root, and never containing the vault. With no root registered the transfer tools refuse every call.
+
+Tools:
+
+- `remote_upload` and `remote_download` start a copy job on an approved target and return `job_id`;
+- `transfer_status` reports bounded progress;
+- `transfer_cancel` cancels a job and closes its SSH session.
+
+Guaranteed: copy only, the source is never modified; SHA-256 verification of every transfer; staged writes with rename-only publication, so a failed transfer publishes nothing; at most two concurrent transfers and one job per destination; `overwrite=true` requires `confirm=true`; results are content-free — never file content, absolute local paths, remote stderr or raw lower-layer error text, only state, phase, direction, kind, counts, bytes, the SHA-256, an error class and a fixed message; finished records are retained in a bounded set; closing the keeper cancels all transfers; records are RAM-only.
+
+Not guaranteed: no sandbox — remote writes carry the profile's full SSH principal authority; no move, sync, delta or resume; detached remote processes may outlive a cancellation; single-file transfers are verified today, directory transfers are being completed in the engine (the status schema already carries `kind` and reserves `manifest_sha256`).
+
+See [the transfer specification](docs/FILE-TRANSFER.md).
+
 The old OpenSSH wrappers are retired and unused by the native client and MCP paths. Use `ssjack [-p NAME] ssh` for manual sessions; see [SSH compatibility and host trust](SSH.md).
 
 ## Updating an installed executable

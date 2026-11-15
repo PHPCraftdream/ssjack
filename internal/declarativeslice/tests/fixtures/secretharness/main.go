@@ -79,7 +79,7 @@ func main() {
 	stale := plan(ctx, peer, ref, randomID())
 	must(first.Effects != nil && len(first.Effects) == 1 && first.Effects[0].Class == "confidential_delivery" && first.Precondition != nil)
 	must(stale.PlanID != first.PlanID)
-	for _, op := range []string{"targets", "start", "read", "cancel", "app_list", "app_start", "app_read", "app_cancel", "remote_exec", "remote_read", "remote_cancel"} {
+	for _, op := range []string{"targets", "start", "read", "cancel", "app_list", "app_start", "app_read", "app_cancel", "remote_exec", "remote_read", "remote_cancel", "transfer_upload", "transfer_download", "transfer_status", "transfer_cancel"} {
 		err = client.Call(ctx, op, map[string]any{}, nil)
 		must(err != nil)
 	}

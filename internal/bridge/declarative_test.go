@@ -100,7 +100,7 @@ func TestAuthenticatedDiscoverySelectsRegistry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := 8
+			want := 12
 			if mode == broker.ModeDeclarative {
 				want = 0
 			}

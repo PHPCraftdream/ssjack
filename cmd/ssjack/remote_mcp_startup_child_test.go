@@ -143,7 +143,7 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 	for _, tool := range listing.Tools {
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"} {
+	for _, want := range []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"} {
 		if !names[want] {
 			t.Fatalf("harness MCP probe lost base tool %s", want)
 		}

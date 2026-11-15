@@ -54,7 +54,7 @@ var policyRevisionPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 var policyDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func ValidateDescriptor(d Descriptor) error {
-	fullTools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}
+	fullTools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"}
 	policyFieldsEmpty := d.PolicyRevision == "" && d.PolicyDigest == ""
 	if d.Mode == ModeDeclarative && (d.Protocol == SyntheticProtocol || d.Protocol == DeliveryProtocol) && !d.Complete && equalTools(d.Tools, []string{"resource_plan", "plan_apply"}) && d.EnrollmentID == "" && d.DriverID == "" && d.DriverProtocol == 0 && policyFieldsEmpty && d.SnapshotDigest == "" {
 		return nil
@@ -159,7 +159,7 @@ func Dispatch(mode Mode, full Handler) Handler {
 	return func(ctx context.Context, request wire.Request) wire.Reply {
 		if request.Operation == "session.describe" {
 			protocol := FullProtocol
-			tools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}
+			tools := []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"}
 			complete := true
 			if mode == ModeDeclarative {
 				protocol, tools, complete = PartialProtocol, []string{}, false

@@ -126,7 +126,7 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		t.Fatal("cancelled selection unexpectedly launched the harness")
 	}
 	if scenario == "connected-empty" {
-		if len(listing) != 8 {
+		if len(listing) != 12 {
 			t.Fatal("empty confirmed choice exposed non-base tools")
 		}
 	} else {

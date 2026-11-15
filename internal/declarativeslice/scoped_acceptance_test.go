@@ -63,7 +63,7 @@ func TestScopedSyntheticBrokerAcceptance(t *testing.T) {
 	if staleResult.State != "FAILED" || stateDigest(t) != after {
 		t.Fatal("stale plan changed state")
 	}
-	for _, op := range []string{"targets", "start", "read", "cancel", "app_start", "app_list", "app_read", "app_cancel", "remote_exec", "remote_read", "remote_cancel"} {
+	for _, op := range []string{"targets", "start", "read", "cancel", "app_start", "app_list", "app_read", "app_cancel", "remote_exec", "remote_read", "remote_cancel", "transfer_upload", "transfer_download", "transfer_status", "transfer_cancel"} {
 		var out map[string]any
 		if c.Call(ctx, op, map[string]any{}, &out) == nil {
 			t.Fatalf("full op accepted: %s", op)

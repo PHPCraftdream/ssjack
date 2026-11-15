@@ -43,7 +43,7 @@ func TestFullCompatibilityAndInvalidDescriptor(t *testing.T) {
 	}
 	defer client.Close()
 	d, err := Describe(ctx, client)
-	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
+	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 12 {
 		t.Fatalf("full descriptor: %+v %v", d, err)
 	}
 	var response map[string]string
@@ -55,7 +55,7 @@ func TestFullCompatibilityAndInvalidDescriptor(t *testing.T) {
 		t.Fatal("accepted mode switch attempt")
 	}
 	d, err = Describe(ctx, client)
-	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 8 {
+	if err != nil || d.Mode != ModeFull || !d.Complete || len(d.Tools) != 12 {
 		t.Fatalf("mode changed after rejected attempt: %+v %v", d, err)
 	}
 	if called {

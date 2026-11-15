@@ -14,6 +14,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/transfer"
 )
 
 type ReadOutput struct {
@@ -142,6 +143,30 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.JobInput) (*mcp.CallToolResult, remote.CancelOutput, error) {
 			var out remote.CancelOutput
 			err := client.Call(ctx, "app_cancel", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_upload", Description: "Copy a file from an owner-registered local transfer root to an absolute POSIX path on an approved target, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is relative to the registered root (omit root when exactly one is registered); target must be one of the remote_targets. The remote path is written with the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; poll transfer_status and cancel with transfer_cancel."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StartInput) (*mcp.CallToolResult, transfer.StartOutput, error) {
+			var out transfer.StartOutput
+			err := client.Call(ctx, "transfer_upload", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_download", Description: "Copy a file from an approved target into an owner-registered local transfer root, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is the root-relative destination (omit root when exactly one is registered); target must be one of the remote_targets. The remote read uses the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; poll transfer_status and cancel with transfer_cancel."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StartInput) (*mcp.CallToolResult, transfer.StartOutput, error) {
+			var out transfer.StartOutput
+			err := client.Call(ctx, "transfer_download", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "transfer_status", Description: "Report a bounded, content-free transfer status: state (running, done, failed, cancelled), phase, direction, kind, file/dir counts, bytes, sha256 when available, and error_class with a fixed message. Never contains file content or local paths."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StatusInput) (*mcp.CallToolResult, transfer.StatusOutput, error) {
+			var out transfer.StatusOutput
+			err := client.Call(ctx, "transfer_status", input, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "transfer_cancel", Description: "Cancel a running transfer job and close its SSH session. Cancelling an already finished job reports cancelled=false."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.CancelInput) (*mcp.CallToolResult, transfer.CancelOutput, error) {
+			var out transfer.CancelOutput
+			err := client.Call(ctx, "transfer_cancel", input, &out)
 			return nil, out, err
 		})
 	return server

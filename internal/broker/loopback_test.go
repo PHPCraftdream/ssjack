@@ -113,7 +113,7 @@ func TestDispatchIdentityBindingAndDeny(t *testing.T) {
 
 func TestOldDescriptorsRejectSnapshotDigest(t *testing.T) {
 	cases := []Descriptor{
-		{Protocol: FullProtocol, Mode: ModeFull, Complete: true, Tools: []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}, SnapshotDigest: strings.Repeat("a", 64)},
+		{Protocol: FullProtocol, Mode: ModeFull, Complete: true, Tools: []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"}, SnapshotDigest: strings.Repeat("a", 64)},
 		{Protocol: PartialProtocol, Mode: ModeDeclarative, Tools: []string{}, SnapshotDigest: strings.Repeat("a", 64)},
 		{Protocol: EnrollmentProtocol, Mode: ModeDeclarative, Tools: []string{}, EnrollmentID: "AAAAAAAAAAAAAAAAAAAAAA", DriverID: "driver-a", DriverProtocol: 1, SnapshotDigest: strings.Repeat("a", 64)},
 		{Protocol: PolicyProtocol, Mode: ModeDeclarative, Tools: []string{}, EnrollmentID: "AAAAAAAAAAAAAAAAAAAAAA", DriverID: "driver-a", DriverProtocol: 1, PolicyRevision: "r1", PolicyDigest: strings.Repeat("a", 64), SnapshotDigest: strings.Repeat("a", 64)},

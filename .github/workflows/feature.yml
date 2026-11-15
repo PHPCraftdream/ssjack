@@ -97,6 +97,36 @@ jobs:
             echo 'Owner rotation acceptance reported a skip'
             exit 1
           fi
+      - name: File transfer acceptance on the real stack (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -run '^TestTransferAcceptance$' -count=1 -timeout 600s ./internal/transferacceptance | tee "$RUNNER_TEMP/transfer-acceptance.log"
+          grep -q '^--- PASS: TestTransferAcceptance ' "$RUNNER_TEMP/transfer-acceptance.log"
+          for name in roundtrip-file-both-directions roundtrip-directory-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii secrets-never-reach-results overwrite-replaces-file-and-directory overwrite-failure-leaves-old-destination refuse-path-traversal refuse-absolute-and-drive-paths refuse-symlink-in-source-tree refuse-symlink-destination refuse-download-forbidden-control-directory refuse-destination-exists refuse-overwrite-without-confirm refuse-unknown-root refuse-no-registered-roots refuse-over-limit-size-and-entries refuse-unapproved-target failure-connection-killed-mid-stream failure-hash-mismatch-corruption failure-cancel-mid-transfer failure-unsupported-remote manager-concurrency-and-duplicate-destination; do
+            grep -q -- "--- PASS: TestTransferAcceptance/$name " "$RUNNER_TEMP/transfer-acceptance.log" || { echo "File transfer acceptance did not report PASS: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestTransferAcceptance(/| )' "$RUNNER_TEMP/transfer-acceptance.log"; then
+            echo 'File transfer acceptance reported a skipped scenario'
+            exit 1
+          fi
+      - name: File transfer full-profile keeper with production KDF
+        if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestVaultTransferFullProfile$' -count=1 -timeout 1200s ./cmd/ssjack | tee "$RUNNER_TEMP/transfer-fullprofile.log"
+          grep -q '^--- PASS: TestVaultTransferFullProfile ' "$RUNNER_TEMP/transfer-fullprofile.log"
+          for marker in "TRANSFER-FULLPROFILE-OBSERVED:upload" "TRANSFER-FULLPROFILE-OBSERVED:download" "TRANSFER-FULLPROFILE-OBSERVED:refused-path" "TRANSFER-FULLPROFILE-OBSERVED:unregistered-root" "TRANSFER-FULLPROFILE-OBSERVED:keeper-mcp-roundtrip"; do
+            grep -q -- "$marker" "$RUNNER_TEMP/transfer-fullprofile.log" || { echo "File transfer full-profile acceptance did not report observed evidence: $marker"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultTransferFullProfile' "$RUNNER_TEMP/transfer-fullprofile.log"; then
+            echo 'File transfer full-profile acceptance reported a skip'
+            exit 1
+          fi
       - name: Native output-filter bypass with production KDF
         if: steps.scope.outputs.appstorecli == 'true'
         shell: bash

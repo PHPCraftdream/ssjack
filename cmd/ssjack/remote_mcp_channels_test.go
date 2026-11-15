@@ -123,7 +123,7 @@ func TestRunMCPCanonicalFixedConfigReachesSyntheticKeeper(t *testing.T) {
 		if request.Operation != "session.describe" {
 			return wire.Reply{Error: "unexpected operation"}
 		}
-		return broker.Result(broker.Descriptor{Protocol: broker.FullProtocol, Mode: broker.ModeFull, Complete: true, Tools: []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel"}}, nil)
+		return broker.Result(broker.Descriptor{Protocol: broker.FullProtocol, Mode: broker.ModeFull, Complete: true, Tools: []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"}}, nil)
 	})
 	if err != nil {
 		t.Fatal("local synthetic keeper unavailable")
