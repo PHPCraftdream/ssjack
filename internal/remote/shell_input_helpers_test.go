@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 var errInputCanceled = errors.New("input canceled")
@@ -88,12 +91,16 @@ func (c *cancelableInput) Cancel() bool {
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
+	var attempts atomic.Int32
+	// Failure-only evidence (what/timeout/elapsed/attempts/last state/goroutine
+	// dump) is registered by flakediag when the deadline passes.
+	done, _, _ := flakediag.WaitForDesc(t, what, 10*time.Second, func() (string, bool, error) {
+		n := attempts.Add(1)
+		ok := cond()
+		return fmt.Sprintf("attempt %d: condition met=%v", n, ok), ok, nil
+	})
+	if !done {
+		t.Fatalf("timed out waiting for %s", what)
 	}
 }
 
@@ -118,6 +125,9 @@ func await(t *testing.T, ch <-chan shellResult) shellResult {
 	case r := <-ch:
 		return r
 	case <-time.After(15 * time.Second):
+		flakediag.OnFailure(t, func() string {
+			return fmt.Sprintf("await: waited 15s for Shell to return; goroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
+		})
 		t.Fatal("Shell did not return")
 		return shellResult{}
 	}

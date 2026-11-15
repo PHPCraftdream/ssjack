@@ -3,11 +3,13 @@ package remote
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -20,6 +22,10 @@ func awaitJob(t *testing.T, m *Manager, id string) {
 	select {
 	case <-j.done:
 	case <-time.After(5 * time.Second):
+		flakediag.OnFailure(t, func() string {
+			return fmt.Sprintf("awaitJob: waited 5s for job %s to finish; goroutine dump:\n%s",
+				flakediag.Short([]byte(id)), flakediag.GoroutineDump(64*1024))
+		})
 		t.Fatal("operation did not finish")
 	}
 }
@@ -52,6 +58,11 @@ func newAdmissionTestHarness(t *testing.T, provider func(*admissionTestHarness) 
 		startResult: make(chan admissionStartResult, 1), startedDone: make(chan struct{}),
 	}
 	h.manager = NewAdmittedManager(ctx, []string{"test"}, provider(h))
+	// Failure-only evidence for the harness's barrier/timeout waits.
+	flakediag.OnFailure(t, func() string {
+		return fmt.Sprintf("admission harness: ctxErr=%v startLaunched=%v goroutine dump:\n%s",
+			h.ctx.Err(), h.startLaunched, flakediag.GoroutineDump(64*1024))
+	})
 	// Cleanup is installed before any provider barrier can block the test.
 	t.Cleanup(func() {
 		h.openGate()

@@ -82,6 +82,10 @@ func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string,
 			if err != nil {
 				t.Fatal(err)
 			}
+			started := time.Now()
+			tail := newOwnerChildTail()
+			terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+			ownerChildTerminal(t, "interactive helper "+mode, executable, terminal, tail, started)
 			capture := ownerterminal.CaptureOutput(terminal.Output)
 			defer func() {
 				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
@@ -96,9 +100,7 @@ func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string,
 				capture.Clear()
 			}()
 			expect := func(text string) {
-				if capture.Wait(lifetime, text) != nil {
-					t.Fatal("actual interactive navigation did not reach:", text)
-				}
+				captureWaitDiag(t, lifetime, capture, text, "actual interactive navigation did not reach: "+text)
 			}
 			send := func(data []byte) {
 				if _, err := terminal.Input.Write(data); err != nil {

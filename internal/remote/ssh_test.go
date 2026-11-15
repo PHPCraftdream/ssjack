@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/ktav-lang/golang/pure"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 func testSigner(t *testing.T) (ed25519.PrivateKey, ssh.Signer) {
@@ -129,6 +132,10 @@ func TestSSHChecksHostAndCapturesExit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
+	// The 100ms cancellation bound is tight; dump goroutines if it trips.
+	flakediag.OnFailure(t, func() string {
+		return fmt.Sprintf("cancel probe: 100ms timeout; goroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
+	})
 	if _, err := runner(ctx, "test", "wait", io.Discard, io.Discard); err == nil {
 		t.Fatal("SSH was not interrupted on cancellation")
 	}

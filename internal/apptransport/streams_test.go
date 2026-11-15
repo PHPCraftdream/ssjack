@@ -8,7 +8,18 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
+
+// registerStallDiag adds failure-only goroutine dump evidence for tests whose
+// channel waits can stall under CI timing pressure.
+func registerStallDiag(t *testing.T) {
+	t.Helper()
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
+}
 
 func sendInput(ctx context.Context, s *streams, id string, data []byte) error {
 	for len(data) > 0 {
@@ -102,6 +113,7 @@ func TestStreamsBinaryRoundTrip(t *testing.T) {
 }
 
 func TestStreamsBackpressureCancellation(t *testing.T) {
+	registerStallDiag(t)
 	full := make(chan struct{})
 	finished := make(chan struct{})
 	s := newStreams(context.Background(), "selected", func(ctx context.Context, _, _ string, _ io.Reader, stdout, _ io.Writer) (int, error) {

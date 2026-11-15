@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/driverprotocol"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/immutableexec"
 )
 
@@ -122,6 +123,10 @@ func TestObservePositiveControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Failure-only evidence: parked parent goroutines when the child stalls.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	if err := os.Rename(path, path+".bound"); err != nil {
 		runner.Close()
 		t.Fatal(err)

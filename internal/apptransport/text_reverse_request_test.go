@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorecrypto"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type reverseContextFake struct {
@@ -57,6 +58,9 @@ func (f *reverseContextFake) count(id string) int {
 }
 
 func TestReverseRequestCancellationIsPerRequest(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	parent, cancelParent := context.WithTimeout(context.Background(), 15*time.Second)
 	fake := &reverseContextFake{
 		calls:   make(map[string]int),
@@ -174,6 +178,9 @@ func assertReceivedReverseText(t *testing.T, body []byte, wantText string) {
 }
 
 func TestReverseRequestContextCancelAndDeadline(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	t.Run("SDK cancellation", func(t *testing.T) {
 		sdkCtx, cancelSDK := context.WithCancel(context.Background())
 		requestCtx, cancelRequest := context.WithCancel(context.Background())

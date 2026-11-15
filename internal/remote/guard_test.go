@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 )
 
@@ -76,6 +78,10 @@ func TestGuardedJobWithholdsPotentialPrefixUntilContinuation(t *testing.T) {
 	select {
 	case <-ready:
 	case <-time.After(5 * time.Second):
+		flakediag.OnFailure(t, func() string {
+			return fmt.Sprintf("prefix barrier: waited 5s for runner ready; goroutine dump:\n%s",
+				flakediag.GoroutineDump(64*1024))
+		})
 		t.Fatal("runner did not reach controlled prefix barrier")
 	}
 	out, err := m.Read(ReadInput{JobID: started.JobID})

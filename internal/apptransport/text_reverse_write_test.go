@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type pipeResponseWriter struct {
@@ -47,6 +49,9 @@ func newPipeResponseWriter(conn net.Conn) *pipeResponseWriter {
 }
 
 func TestServeBoundedReverseResponseCanceledBlockedWrite(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	server, peer := net.Pipe()
 	defer peer.Close()
 	writer := newPipeResponseWriter(server)
@@ -86,6 +91,9 @@ func TestServeBoundedReverseResponseCanceledBlockedWrite(t *testing.T) {
 }
 
 func TestServeBoundedReverseResponseDeadlineBlockedWrite(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	server, peer := net.Pipe()
 	defer peer.Close()
 	writer := newPipeResponseWriter(server)
@@ -121,6 +129,9 @@ func TestServeBoundedReverseResponseDeadlineBlockedWrite(t *testing.T) {
 }
 
 func TestServeBoundedReverseResponseCanceledBlockedFlush(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	server, peer := net.Pipe()
 	writer := &flushPipeResponseWriter{pipeResponseWriter: newPipeResponseWriter(server)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,6 +191,9 @@ func (w *flushPipeResponseWriter) FlushError() error {
 }
 
 func TestServeBoundedReverseResponseHealthyPipeWrite(t *testing.T) {
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	server, peer := net.Pipe()
 	defer server.Close()
 	defer peer.Close()

@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 )
 
@@ -159,10 +162,36 @@ func TestInteractiveShellCancellation(t *testing.T) {
 	address, host, events := shellServer(t, signer.PublicKey(), false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	start := time.Now()
+	var mu sync.Mutex
+	var transitions []string
+	record := func(kind string) {
+		mu.Lock()
+		transitions = append(transitions, fmt.Sprintf("+%s %s", time.Since(start).Truncate(time.Millisecond), kind))
+		mu.Unlock()
+	}
+	cancellation := "not yet issued"
+	// Failure-only evidence: observed transitions, how cancellation was issued,
+	// child process state (none: Shell is an in-process SSH client), and the
+	// captured output tail.
+	flakediag.OnFailure(t, func() string {
+		mu.Lock()
+		seen := append([]string(nil), transitions...)
+		mu.Unlock()
+		return flakediag.Join(
+			fmt.Sprintf("cancellation: %s", cancellation),
+			"child process: none (Shell runs an in-process SSH client, no os/exec)",
+			"captured output: none (stdout/stderr use io.Discard)",
+			fmt.Sprintf("transitions (%d):\n  %s", len(seen), strings.Join(seen, "\n  ")),
+			fmt.Sprintf("goroutine dump:\n%s", flakediag.GoroutineDump(64*1024)),
+		)
+	})
 	finished := make(chan error, 1)
 	go func() {
+		record("client goroutine started")
 		_, err := Shell(ctx, ShellOptions{Address: address, Config: shellClientConfig(signer, host),
 			Term: "xterm", Size: WindowSize{80, 24}, Stdin: bytes.NewReader(nil), Stdout: io.Discard, Stderr: io.Discard})
+		record("client returned")
 		finished <- err
 	}()
 	timer := time.NewTimer(15 * time.Second)
@@ -170,8 +199,11 @@ func TestInteractiveShellCancellation(t *testing.T) {
 	for {
 		select {
 		case event := <-events:
+			record("server event " + event.kind)
 			if event.kind == "shell" {
+				cancellation = "ctx cancel (context.WithCancel) after server shell event"
 				cancel()
+				record("cancel issued")
 				select {
 				case err := <-finished:
 					if !errors.Is(err, context.Canceled) {

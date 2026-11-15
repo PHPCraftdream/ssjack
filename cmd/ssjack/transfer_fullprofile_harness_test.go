@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -102,23 +103,29 @@ func transferHarnessRun(t *testing.T, ctx context.Context, session *mcp.ClientSe
 	if job.JobID == "" {
 		t.Fatalf("%s returned no job id", tool)
 	}
-	deadline := time.Now().Add(2 * time.Minute)
-	for {
+	budget := 2 * time.Minute
+	var lastStatus transferStatus
+	statusDone, _, statusErr := flakediag.WaitForDesc(t, "transfer job "+job.JobID+" completion", budget, func() (string, bool, error) {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "transfer_status", Arguments: map[string]any{"job_id": job.JobID}})
 		if err != nil || result == nil {
-			t.Fatalf("transfer_status failed: %v", err)
+			return "transfer_status call failed", false, err
 		}
 		*results = append(*results, transferHarnessEncoded(t, result))
 		var status transferStatus
 		transferHarnessStructured(t, result, &status)
+		lastStatus = status
 		if status.State != "running" {
-			return status
+			return "", true, nil
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job %s never finished: %+v", job.JobID, status)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return "state=running", false, nil
+	})
+	if statusErr != nil {
+		t.Fatalf("transfer_status failed: %v", statusErr)
 	}
+	if !statusDone {
+		t.Fatalf("job %s never finished: %+v", job.JobID, lastStatus)
+	}
+	return lastStatus
 }
 
 // transferHarnessFinished cancels a finished job and requires cancelled=false.

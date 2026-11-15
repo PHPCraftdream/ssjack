@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type heldBody struct {
@@ -38,7 +40,8 @@ func wait(t *testing.T, event <-chan struct{}) {
 	select {
 	case <-event:
 	case <-ctx.Done():
-		t.Fatal("controlled I/O event did not arrive")
+		// Failure-only evidence: which goroutine missed the controlled event.
+		t.Fatalf("controlled I/O event did not arrive\ngoroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
 	}
 }
 

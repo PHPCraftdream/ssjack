@@ -31,6 +31,7 @@ type rig struct {
 	oldPEM     []byte
 	oldSSH     ssh.PublicKey
 	fixture    *rotationSSHFixture
+	diag       *rotationDiag
 
 	keeper        *ownerterminal.Terminal
 	keeperCapture *ownerterminal.Capture
@@ -46,7 +47,7 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal("could not create synthetic old SSH identity")
 	}
-	r := &rig{t: t, ctx: ctx, oldPrivate: private, password: []byte(rotationVaultPassword)}
+	r := &rig{t: t, ctx: ctx, oldPrivate: private, password: []byte(rotationVaultPassword), diag: newRotationDiag(t)}
 	if r.oldSSH, err = ssh.NewPublicKey(public); err != nil {
 		t.Fatal("could not encode synthetic old SSH identity")
 	}
@@ -70,6 +71,7 @@ func newRig(t *testing.T) *rig {
 	if err := vault.CreateWithRecords(ctx, r.path, directory, r.password); err != nil {
 		t.Fatal("could not create synthetic encrypted rotation vault")
 	}
+	r.diag.mark("rig-created")
 	return r
 }
 
@@ -142,6 +144,9 @@ func (r *rig) spawn(ctx context.Context, args []string, environment ...string) *
 		r.t.Fatal("actual owner process did not start")
 	}
 	r.t.Cleanup(func() { closeRotationTerminal(terminal) })
+	tail := newRotationTail()
+	terminal.Output = rotationTeeOutput(terminal.Output, tail)
+	r.diag.child(rotationChildName(executable), terminal, tail)
 	return terminal
 }
 
@@ -171,6 +176,7 @@ func (r *rig) startIn(ctx context.Context, role string, refusal bool, extra ...s
 	capture := captureRotationPTY(terminal.Output)
 	r.watch(capture)
 	r.unlock(terminal, capture, "Owner database password:")
+	r.diag.mark("started-" + role)
 	return terminal, capture
 }
 
@@ -184,6 +190,7 @@ func (r *rig) startHuman() (*ownerterminal.Terminal, *rotationPTYCapture) {
 	if capture.Wait(r.ctx, "SYNTHETIC-ROTATION-HUMAN-READY") != nil {
 		r.t.Fatal("human SSH CLI did not retain its pinned fixture shell")
 	}
+	r.diag.mark("human-ready")
 	return terminal, capture
 }
 
@@ -202,6 +209,7 @@ func (r *rig) startKeeper() {
 	if r.keeperCapture.Wait(r.ctx, "ACTUAL-ROTATION-MCP-OLD-JOB-READY") != nil {
 		r.t.Fatal("actual keeper did not launch its authenticated MCP SSH fixture")
 	}
+	r.diag.mark("keeper-ready")
 }
 
 // command sends one MCP fixture command and waits for its acknowledgement.
@@ -239,6 +247,7 @@ func (r *rig) stopKeeper() {
 		r.t.Fatal("joined keeper terminal could not close cleanly")
 	}
 	r.keeper, r.keeperCapture = nil, nil
+	r.diag.mark("keeper-stopped")
 }
 
 // restartKeeper stops the keeper gracefully and starts a fresh one.

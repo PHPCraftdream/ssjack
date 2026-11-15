@@ -15,6 +15,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/apptransport"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -95,7 +96,8 @@ func readApplication(t *testing.T, ctx context.Context, manager *Manager, id str
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("application did not finish")
+			// Failure-only evidence: where the application helper is stuck.
+			t.Fatalf("application did not finish\ngoroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
 		case <-ticker.C:
 		}
 	}
@@ -178,7 +180,8 @@ func TestApplicationCancellationAndDisconnect(t *testing.T) {
 				}
 				select {
 				case <-ctx.Done():
-					t.Fatal("helper did not become ready")
+					// Failure-only evidence: helper startup stall diagnostics.
+					t.Fatalf("helper did not become ready\ngoroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
 				case <-ticker.C:
 				}
 			}

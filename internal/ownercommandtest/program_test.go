@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
@@ -44,7 +45,10 @@ func waitFrame(t *testing.T, out *terminalmodel.Output, text string) {
 	deadline := time.Now().Add(8 * time.Second)
 	for !strings.Contains(out.String(), text) {
 		if time.Now().After(deadline) {
-			t.Fatal("expected command frame did not appear")
+			// Secret-free evidence: rendered output length/digest plus stalls.
+			rendered := out.String()
+			t.Fatalf("expected command frame did not appear (want %q bytes=%d sha256=%s)\ngoroutine dump:\n%s",
+				text, len(rendered), flakediag.Short([]byte(rendered)), flakediag.GoroutineDump(64*1024))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

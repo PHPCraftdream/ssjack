@@ -76,6 +76,10 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			if err != nil {
 				t.Fatal(err)
 			}
+			started := time.Now()
+			tail := newOwnerChildTail()
+			terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+			ownerChildTerminal(t, "keeper cycle "+cycle, executable, terminal, tail, started)
 			capture := ownerterminal.CaptureOutput(terminal.Output)
 			defer func() {
 				cleanup, stop := nativePhaseCleanup(t)
@@ -91,9 +95,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				}
 				capture.Clear()
 			}()
-			if capture.Wait(startup, "Vault secret:") != nil {
-				t.Fatal("actual keeper did not request its vault unlock")
-			}
+			captureWaitDiag(t, startup, capture, "Vault secret:", "actual keeper did not request its vault unlock")
 			ending := byte('\n')
 			if runtime.GOOS == "windows" {
 				ending = '\r'
@@ -101,11 +103,12 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			input := append(append([]byte(nil), password...), ending)
 			_, err = terminal.Input.Write(input)
 			clear(input)
-			if err != nil || capture.Wait(startup, "ACTUAL-KEEPER-HARNESS-READY") != nil {
-				t.Fatal("actual keeper did not start its owned harness")
+			if err != nil {
+				t.Fatal("actual keeper unlock input failed")
 			}
-			if cycle == "bypass" && capture.Wait(startup, "WARNING: MCP known-literal output filtering is DISABLED") != nil {
-				t.Fatal("trusted bypass launch omitted its terminal warning")
+			captureWaitDiag(t, startup, capture, "ACTUAL-KEEPER-HARNESS-READY", "actual keeper did not start its owned harness")
+			if cycle == "bypass" {
+				captureWaitDiag(t, startup, capture, "WARNING: MCP known-literal output filtering is DISABLED", "trusted bypass launch omitted its terminal warning")
 			}
 			stopStartup()
 			probePhase, stopProbe := nativeOperationPhase(t, service, 30*time.Second)
@@ -147,9 +150,10 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				stopHuman()
 				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
 				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, func() {
-					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(scopePhase, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
-						t.Fatal("actual keeper did not refuse the changed human SSH scope")
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil {
+						t.Fatal("actual keeper scope-refusal input failed")
 					}
+					captureWaitDiag(t, scopePhase, capture, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED", "actual keeper did not refuse the changed human SSH scope")
 				})
 				stopScope()
 			} else if cycle == "restart" {
@@ -176,9 +180,10 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				stopHuman()
 				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
 				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, func() {
-					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil || capture.Wait(scopePhase, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED") != nil {
-						t.Fatal("actual keeper did not refuse the changed human SSH scope")
+					if _, err := terminal.Input.Write([]byte{'r', ending}); err != nil {
+						t.Fatal("actual keeper scope-refusal input failed")
 					}
+					captureWaitDiag(t, scopePhase, capture, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED", "actual keeper did not refuse the changed human SSH scope")
 				})
 				stopScope()
 			}
@@ -190,12 +195,11 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			stopObserverClose()
 			guardPhase, stopGuard := nativeOperationPhase(t, service, 30*time.Second)
 			if !t.Run("native-mcp-guard", func(t *testing.T) {
-				if capture.Wait(guardPhase, "ACTUAL-KEEPER-MCP-GUARD-READY") != nil {
-					t.Fatal("actual keeper did not guard its initial MCP job")
+				captureWaitDiag(t, guardPhase, capture, "ACTUAL-KEEPER-MCP-GUARD-READY", "actual keeper did not guard its initial MCP job")
+				if _, err := terminal.Input.Write([]byte{'g', ending}); err != nil {
+					t.Fatal("actual keeper guard refresh input failed")
 				}
-				if _, err := terminal.Input.Write([]byte{'g', ending}); err != nil || capture.Wait(guardPhase, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED") != nil {
-					t.Fatal("actual keeper did not refresh known literals after helper edits")
-				}
+				captureWaitDiag(t, guardPhase, capture, "ACTUAL-KEEPER-MCP-GUARD-REFRESHED", "actual keeper did not refresh known literals after helper edits")
 			}) {
 				stopGuard()
 				return
@@ -211,12 +215,13 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				t.Fatal(err)
 			}
 			shutdown, stopShutdown := nativeOperationPhase(t, service, 30*time.Second)
-			if _, err := terminal.Input.Write([]byte{'q', ending}); err != nil || terminal.Wait(shutdown) != nil {
+			if _, err := terminal.Input.Write([]byte{'q', ending}); err != nil {
+				t.Fatal("actual keeper shutdown input failed")
+			}
+			if err := terminal.Wait(shutdown); err != nil {
 				t.Fatal("actual keeper did not join graceful harness and owner shutdown")
 			}
-			if capture.Wait(shutdown, "ACTUAL-KEEPER-HARNESS-STOPPED") != nil {
-				t.Fatal("harness shutdown acknowledgement was lost")
-			}
+			captureWaitDiag(t, shutdown, capture, "ACTUAL-KEEPER-HARNESS-STOPPED", "harness shutdown acknowledgement was lost")
 			stopShutdown()
 			stopService()
 			reopenCtx, reopenCancel := nativeOperationPhase(t, ctx, time.Minute)

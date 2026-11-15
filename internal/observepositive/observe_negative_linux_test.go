@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/driverprotocol"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/immutableexec"
 )
 
@@ -95,6 +96,10 @@ func responseELFMode(payload []byte, exitStatus byte, pauseAfterWrite bool) []by
 
 func bindOverflowResponse(t *testing.T, payload []byte) *immutableexec.Runner {
 	t.Helper()
+	// Failure-only evidence: parked parent goroutines when the child stalls.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	data := overflowResponseELF(payload)
 	path := filepath.Join(t.TempDir(), "observe-overflow-child")
 	if err := os.WriteFile(path, data, 0700); err != nil {
@@ -114,6 +119,10 @@ func bindOverflowResponse(t *testing.T, payload []byte) *immutableexec.Runner {
 
 func bindResponse(t *testing.T, payload []byte, exitStatus byte) *immutableexec.Runner {
 	t.Helper()
+	// Failure-only evidence: parked parent goroutines when the child stalls.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	if runtime.GOARCH != "amd64" {
 		t.Skip("synthetic ELF is amd64")
 	}

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 // heldCloseBody parks mcpflow's rejection cleanup inside Close so the test can
@@ -55,6 +57,10 @@ func (b *stagedBody) Close() error { return nil }
 // the next POST to next; each overlap test asserts three POSTs total (no replay).
 func overlapFixture(t *testing.T, next roundTripFunc) (*connection, func() int32) {
 	t.Helper()
+	// Failure-only evidence: goroutine stall diagnostics for join/stop waits.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	peer := &countingPeer{next: next}
 	transport, _ := testTransport(t, peer.serve)
 	conn := negotiatedConnection(t, transport)

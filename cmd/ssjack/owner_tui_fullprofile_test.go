@@ -70,7 +70,9 @@ func ownerTerminalAcceptance(t *testing.T, ctx context.Context, path string, pas
 	command.Stdin = bytes.NewReader(input)
 	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
 	command.WaitDelay = 5 * time.Second
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	ownerChildExecFail(t, "owner terminal driver", command, output, err)
+	if err != nil {
 		t.Fatalf("synthetic owner terminal interaction: %v: %s", err, output)
 	}
 	loaded, err := vault.Load(path, password)

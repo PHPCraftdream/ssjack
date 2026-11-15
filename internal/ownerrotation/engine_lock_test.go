@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -23,6 +24,10 @@ func (g *gatedRemote) Add(ctx context.Context, target vault.Target, oldPublic, n
 }
 
 func TestWaitingOperationHonorsItsContextWhileAddIsInFlight(t *testing.T) {
+	// Failure-only evidence: where the Install/Inspect goroutines are parked.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	engine, keeper, remote := testEngine(t, nil)
 	gate := &gatedRemote{memoryRemote: remote, entered: make(chan struct{}), release: make(chan struct{})}
 	engine.remote = gate

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 )
 
@@ -190,6 +191,10 @@ func (c *blockedConnection) Close() error {
 }
 
 func TestClientCloseUnblocksAndJoinsTheActiveExchange(t *testing.T) {
+	// Failure-only evidence: which side of the exchange is stuck.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	connection := &blockedConnection{entered: make(chan struct{}), stopped: make(chan struct{})}

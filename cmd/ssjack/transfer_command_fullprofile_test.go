@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/transferacceptance"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -48,6 +49,12 @@ func TestVaultTransferKeeperChild(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	started := time.Now()
+	flakediag.OnFailure(t, func() string {
+		return "transfer keeper child: args=" + fmt.Sprint(len(args)) +
+			" elapsed=" + time.Since(started).Round(time.Millisecond).String() +
+			"\ngoroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	code, err := run(ctx, args)
 	if err != nil || code != 0 {
 		t.Fatalf("transfer keeper did not finish cleanly: code=%d err=%v", code, err)
@@ -70,6 +77,9 @@ func TestVaultTransferBridgeChild(t *testing.T) {
 	command := exec.Command(executable, "-test.run=^TestVaultTransferMCPBridgeChild$")
 	command.Env = append(os.Environ(), transferBridgeGate+"=1")
 	command.Stderr = os.Stderr
+	// Failure-only evidence for the real stdio bridge child; its output
+	// already flows to the harness stderr.
+	childProcessOnFailure(t, "transfer bridge child", command, nil, time.Now())
 	client := mcp.NewClient(&mcp.Implementation{Name: "transfer-full-profile-harness", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 	if err != nil {
@@ -148,11 +158,14 @@ func TestVaultTransferFullProfile(t *testing.T) {
 	keeper.Env = transferKeeperEnvironment(password, root, sandbox)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	keeper.Stdout, keeper.Stderr = stdout, stderr
+	keeperStarted := time.Now()
 	if err := keeper.Start(); err != nil {
 		t.Fatal(err)
 	}
+	childProcessOnFailure(t, "transfer keeper process", keeper, nil, keeperStarted)
 	if err := keeper.Wait(); err != nil {
-		t.Fatalf("keeper or harness did not finish: %v\n%s\n%s", err, stdout.String(), stderr.String())
+		t.Fatalf("keeper or harness did not finish: %v\nstdout tail:%s\nstderr tail:%s",
+			err, flakediag.Tail(stdout.String(), 16*1024), flakediag.Tail(stderr.String(), 16*1024))
 	}
 	transferVerifyOutput(t, stdout, stderr, password)
 	t.Logf("keeper output: %q / %q", stdout.String(), stderr.String())
@@ -160,7 +173,8 @@ func TestVaultTransferFullProfile(t *testing.T) {
 	for _, marker := range []string{"upload", "download", "refused-path", "unregistered-root", "keeper-mcp-roundtrip"} {
 		line := transferObserved + marker
 		if !bytes.Contains(stdout.Bytes(), []byte(line)) && !bytes.Contains(stderr.Bytes(), []byte(line)) {
-			t.Fatalf("transfer harness did not report %s\n%s\n%s", line, stdout.String(), stderr.String())
+			t.Fatalf("transfer harness did not report %s\nstdout tail:%s\nstderr tail:%s", line,
+				flakediag.Tail(stdout.String(), 16*1024), flakediag.Tail(stderr.String(), 16*1024))
 		}
 		t.Log(line)
 	}

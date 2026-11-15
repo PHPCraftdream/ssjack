@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -102,7 +102,13 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		t.Fatal("test executable unavailable")
 	}
 	command := exec.Command(executable, "-test.run=^TestNativeRemoteMCPConnectedBridge$")
-	command.Stderr = io.Discard
+	// Failure-only evidence: keep the bridge child's stderr in a bounded
+	// tail instead of discarding it, so a failed attach reports what the
+	// real bridge process emitted.
+	bridgeStarted := time.Now()
+	bridgeTail := newChildTail()
+	command.Stderr = bridgeTail
+	childProcessOnFailure(t, "connected bridge child", command, bridgeTail, bridgeStarted)
 	command.Env = append(nativeStartupEnvironment(), remoteMCPConnectedBridgeChildEnv+"=1")
 	if encodedChannels != "" {
 		command.Env = append(command.Env, mcpchannel.Env+"="+encodedChannels)
@@ -183,12 +189,11 @@ func remoteMCPConnectedList(ctx context.Context, t *testing.T, session *mcp.Clie
 	t.Helper()
 	deadline, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
+	var tools []*mcp.Tool
+	done, _, listErr := flakediag.WaitForDesc(t, "connected harness tool registration state", childDeadlineOf(deadline), func() (string, bool, error) {
 		listing, err := session.ListTools(deadline, nil)
 		if err != nil {
-			t.Fatal("connected harness tool listing failed")
+			return "tools/list failed", false, err
 		}
 		if listing != nil && len(listing.Tools) <= 72 {
 			remote := 0
@@ -198,15 +203,20 @@ func remoteMCPConnectedList(ctx context.Context, t *testing.T, session *mcp.Clie
 				}
 			}
 			if wantRemote && remote == 3 || !wantRemote && remote == 0 {
-				return listing.Tools
+				tools = listing.Tools
+				return "", true, nil
 			}
+			return fmt.Sprintf("remote tools=%d total=%d", remote, len(listing.Tools)), false, nil
 		}
-		select {
-		case <-deadline.Done():
-			t.Fatal("bounded tool listing did not reach the expected registration state")
-		case <-ticker.C:
-		}
+		return fmt.Sprintf("total tools=%d", len(listing.Tools)), false, nil
+	})
+	if listErr != nil {
+		t.Fatal("connected harness tool listing failed")
 	}
+	if !done {
+		t.Fatal("bounded tool listing did not reach the expected registration state")
+	}
+	return tools
 }
 
 func remoteMCPConnectedTool(names []string, suffix string) string {

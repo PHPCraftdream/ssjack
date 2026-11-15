@@ -222,6 +222,10 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 	if err != nil {
 		t.Fatal(err)
 	}
+	started := time.Now()
+	tail := newOwnerChildTail()
+	terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+	ownerChildTerminal(t, "legacy writer refusal", executable, terminal, tail, started)
 	capture := ownerterminal.CaptureOutput(terminal.Output)
 	defer func() {
 		cleanup, cancel := nativePhaseCleanup(t)
@@ -234,9 +238,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 		}
 		capture.Clear()
 	}()
-	if capture.Wait(ctx, "Vault secret:") != nil {
-		t.Fatal("actual legacy writer did not request its unlock")
-	}
+	captureWaitDiag(t, ctx, capture, "Vault secret:", "actual legacy writer did not request its unlock")
 	ending := byte('\n')
 	if runtime.GOOS == "windows" {
 		ending = '\r'
@@ -250,9 +252,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 	if err := terminal.Wait(ctx); err != nil {
 		t.Fatal("actual legacy writer did not complete its process")
 	}
-	if capture.Wait(ctx, "ACTUAL-LEGACY-WRITER-REFUSED") != nil {
-		t.Fatal("actual legacy writer did not report its refusal")
-	}
+	captureWaitDiag(t, ctx, capture, "ACTUAL-LEGACY-WRITER-REFUSED", "actual legacy writer did not report its refusal")
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(before, after) || server.acceptedConnections() != connections {
 		t.Fatal("refused legacy writer changed ciphertext or reached the SSH server")

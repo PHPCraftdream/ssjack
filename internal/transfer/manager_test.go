@@ -2,10 +2,13 @@ package transfer
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/transferengine"
@@ -95,23 +98,30 @@ func startJob(t *testing.T, m *Manager, download bool, local, remote string) Sta
 }
 
 // waitForState polls status until the state equals want, or any terminal
-// state when want is empty.
+// state when want is empty. On timeout it fails with failure-only evidence
+// (what, timeout, elapsed, attempts, last state, goroutine dump).
 func waitForState(t *testing.T, m *Manager, id, want string) StatusOutput {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		out, err := m.status(id)
-		if err != nil {
-			t.Fatalf("status(%s) failed: %v", id, err)
-		}
-		if out.State == want || (want == "" && out.State != string(stateRunning)) {
-			return out
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job %s stuck in state %q, want %q", id, out.State, want)
-		}
-		time.Sleep(5 * time.Millisecond)
+	var out StatusOutput
+	done, lastDesc, lastErr := flakediag.WaitForDesc(t,
+		fmt.Sprintf("job %s to reach state %q (any terminal state when %q)", id, want, ""),
+		2*time.Second,
+		func() (string, bool, error) {
+			o, err := m.status(id)
+			out = o
+			desc := "unavailable"
+			if err == nil {
+				desc = fmt.Sprintf("state=%q phase=%q", o.State, o.Phase)
+			}
+			return desc, err == nil && (o.State == want || (want == "" && o.State != string(stateRunning))), err
+		})
+	if lastErr != nil {
+		t.Fatalf("status(%s) failed: %v", id, lastErr)
 	}
+	if !done {
+		t.Fatalf("job %s stuck in state %q, want %q", id, lastDesc, want)
+	}
+	return out
 }
 
 func mustEncode(t *testing.T, value any) string {
@@ -124,9 +134,12 @@ func mustEncode(t *testing.T, value any) string {
 }
 
 // closeWithin runs Manager.Close on another goroutine and requires it to
-// return quickly.
+// return quickly. On failure prints a goroutine dump for hang diagnosis.
 func closeWithin(t *testing.T, m *Manager) {
 	t.Helper()
+	flakediag.OnFailure(t, func() string {
+		return "Close did not return within 5s; goroutine dump:\n" + flakediag.GoroutineDump(0)
+	})
 	closed := make(chan struct{})
 	go func() { m.Close(); close(closed) }()
 	select {

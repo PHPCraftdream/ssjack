@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
 	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
@@ -162,20 +163,17 @@ func TestFullStartupRoutesModelOutputThroughRequiredGuard(t *testing.T) {
 				}
 				var started remote.StartOutput
 				guardedHandlerCall(t, ctx, options.Handler, "start", remote.StartInput{Target: "test", Command: "synthetic"}, &started)
-				ticker := time.NewTicker(time.Millisecond)
-				defer ticker.Stop()
 				var out remote.ReadOutput
-				for {
+				flakediag.WaitFor(t, "guarded keeper job completion", childDeadlineOf(ctx), func() (string, bool) {
 					guardedHandlerCall(t, ctx, options.Handler, "read", remote.ReadInput{JobID: started.JobID}, &out)
 					if out.Done {
-						break
+						return "", true
 					}
-					select {
-					case <-ctx.Done():
+					if err := ctx.Err(); err != nil {
 						t.Fatal("guarded keeper job did not finish")
-					case <-ticker.C:
 					}
-				}
+					return "job still running", false
+				})
 				if missing {
 					if calls.Load() != 0 || out.Error != outputguard.ErrGuard.Error() || len(out.Stdout)+len(out.Stderr) != 0 {
 						t.Fatal("missing startup guard executed a model job")

@@ -12,6 +12,7 @@ import (
 
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"golang.org/x/term"
 )
@@ -90,6 +91,8 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 		t.Fatal("test executable unavailable for MCP child")
 	}
 	command := exec.Command(executable, "-test.run=^TestNativeRemoteMCPStartupMCPChild$")
+	probeStarted := time.Now()
+	childProcessOnFailure(t, "harness MCP probe child", command, nil, probeStarted)
 	stderr := &remoteMCPStderr{}
 	command.Stderr = stderr
 	command.Env = append(nativeStartupEnvironment(), "SSJACK_REMOTE_MCP_STARTUP_MCP_CHILD=1")
@@ -115,23 +118,26 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 		t.Fatal("harness MCP probe tools/list failed")
 	}
 	if len(os.Getenv(mcpchannel.Env)) != 0 {
-		for {
+		done, _, lastErr := flakediag.WaitForDesc(t, "harness MCP probe remote registration", childDeadlineOf(ctx), func() (string, bool, error) {
 			remote := false
 			for _, tool := range listing.Tools {
 				remote = remote || strings.HasPrefix(tool.Name, "mcp")
 			}
 			if remote || strings.Contains(stderr.String(), "Some remote MCP connections are unavailable for this session.") {
-				break
+				return "", true, nil
 			}
-			select {
-			case <-ctx.Done():
-				t.Fatal("harness MCP probe did not observe remote registration completion")
-			case <-time.After(20 * time.Millisecond):
-			}
-			listing, listErr = session.ListTools(ctx, nil)
+			next, listErr := session.ListTools(ctx, nil)
 			if listErr != nil {
-				t.Fatal("harness MCP probe tools/list failed")
+				return "tools/list failed", false, listErr
 			}
+			listing = next
+			return "remote tools not registered yet", false, nil
+		})
+		if lastErr != nil {
+			t.Fatal("harness MCP probe tools/list failed")
+		}
+		if !done {
+			t.Fatal("harness MCP probe did not observe remote registration completion")
 		}
 	}
 	closeErr := session.Close()

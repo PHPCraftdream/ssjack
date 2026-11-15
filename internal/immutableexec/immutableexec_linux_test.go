@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 func (r *Runner) fd() uintptr {
@@ -171,7 +174,11 @@ func TestObserveOverflowReapsExactPID(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	pidCh, done := make(chan int, 1), make(chan error, 1)
 	var result error
-	doneReceived := false
+	doneReceived, pid := false, 0
+	// Failure-only evidence: child pid, join state, context, parked goroutines.
+	flakediag.OnFailure(t, func() string {
+		return fmt.Sprintf("child pid reported: %d\nobserve joined: %v\ncontext err: %v\ngoroutine dump:\n%s", pid, doneReceived, ctx.Err(), flakediag.GoroutineDump(64*1024))
+	})
 	defer func() {
 		cancel()
 		if !doneReceived {
@@ -193,8 +200,7 @@ func TestObserveOverflowReapsExactPID(t *testing.T) {
 			t.Error("runner close timed out")
 		}
 	}()
-	go func() { _, err := r.observe(ctx, []string{}, "", request, func(pid int) { pidCh <- pid }); done <- err }()
-	var pid int
+	go func() { _, err := r.observe(ctx, []string{}, "", request, func(p int) { pidCh <- p }); done <- err }()
 	select {
 	case pid = <-pidCh:
 	case <-time.After(5 * time.Second):

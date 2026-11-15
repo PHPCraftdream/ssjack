@@ -15,9 +15,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type deliveryFixture struct {
@@ -130,8 +132,14 @@ func (f *deliveryFixture) tryDeliveryCLIAsWithText(t *testing.T, uid int, answer
 		readFD = nil
 	}
 	cmd.Stdin = bytes.NewReader(payload)
+	deliveryStarted := time.Now()
 	out, err := cmd.Output()
 	if err != nil {
+		// Failure-only evidence: name, pid, exit status/signal, timing and a
+		// digest. The raw output is never rendered: it may carry secrets.
+		childExecDiag(t, "delivery PTY helper", cmd, nil, err)
+		t.Logf("delivery helper evidence: started=%s elapsed=%s output-digest=%s",
+			deliveryStarted.Format(time.RFC3339), time.Since(deliveryStarted).Round(time.Millisecond), flakediag.Short(out))
 		clear(out)
 		var exit *exec.ExitError
 		if len(args) >= 2 && errors.As(err, &exit) {

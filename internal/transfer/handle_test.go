@@ -3,9 +3,12 @@ package transfer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -49,19 +52,20 @@ func TestStatusOfRunningJobShowsPhase(t *testing.T) {
 	fake := &fakeEngine{block: make(chan struct{}), phase: "transfer"}
 	m := newTestManager(t, fake)
 	start := startJob(t, m, false, "a", "/a")
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	flakediag.WaitFor(t, "running job to report phase=transfer bytes=7 state=running", 2*time.Second, func() (string, bool) {
 		out, err := m.status(start.JobID)
 		if err != nil {
-			t.Fatalf("status failed: %v", err)
+			return "unavailable", false
 		}
-		if out.Phase == "transfer" && out.Bytes == 7 && out.State == string(stateRunning) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("running status = %+v", out)
-		}
-		time.Sleep(5 * time.Millisecond)
+		return fmt.Sprintf("state=%q phase=%q bytes=%d", out.State, out.Phase, out.Bytes),
+			out.Phase == "transfer" && out.Bytes == 7 && out.State == string(stateRunning)
+	})
+	out, err := m.status(start.JobID)
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	if out.Phase != "transfer" || out.Bytes != 7 || out.State != string(stateRunning) {
+		t.Fatalf("running status = %+v", out)
 	}
 	fake.unblock()
 	waitForState(t, m, start.JobID, "")

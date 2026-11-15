@@ -87,6 +87,10 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			if err != nil {
 				t.Fatal(err)
 			}
+			started := time.Now()
+			tail := newOwnerChildTail()
+			terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+			ownerChildTerminal(t, "native owner command "+mode, executable, terminal, tail, started)
 			capture := ownerterminal.CaptureOutput(terminal.Output)
 			defer func() {
 				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
@@ -100,9 +104,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 				}
 				capture.Clear()
 			}()
-			if capture.Wait(lifetime, "Vault secret:") != nil {
-				t.Fatal("native owner did not request its single vault unlock")
-			}
+			captureWaitDiag(t, lifetime, capture, "Vault secret:", "native owner did not request its single vault unlock")
 			ending := byte('\n')
 			if runtime.GOOS == "windows" {
 				ending = '\r'
@@ -110,9 +112,10 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			input := append(append([]byte(nil), password...), ending)
 			_, err = terminal.Input.Write(input)
 			clear(input)
-			if err != nil || capture.Wait(lifetime, "Credential:") != nil {
-				t.Fatal("native owner did not display its real parameterized form")
+			if err != nil {
+				t.Fatal("native owner unlock input failed")
 			}
+			captureWaitDiag(t, lifetime, capture, "Credential:", "native owner did not display its real parameterized form")
 			input = append([]byte(nil), credential...)
 			if mode == "cancel" {
 				input = append(input, '\x1b')
@@ -124,8 +127,8 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			if err != nil || terminal.Wait(lifetime) != nil {
 				t.Fatal("native owner command did not finish its explicit decision")
 			}
-			if mode == "apply" && capture.Wait(lifetime, "Owner command completed; encrypted persistence confirmed.") != nil {
-				t.Fatal("native owner command lacked a persistence receipt")
+			if mode == "apply" {
+				captureWaitDiag(t, lifetime, capture, "Owner command completed; encrypted persistence confirmed.", "native owner command lacked a persistence receipt")
 			}
 		}()
 		after, err := os.ReadFile(path)

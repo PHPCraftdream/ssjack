@@ -40,6 +40,10 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 	args := append([]string{"-test.run=^TestOwnerNativeCommandChild$", "--", "--vault", database, "owner"}, arguments...)
 	terminal, err := ownerterminal.Start(lifetime, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment, Args: args})
 	nativeArchiveMust(t, err)
+	started := time.Now()
+	tail := newOwnerChildTail()
+	terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+	ownerChildTerminal(t, "native archive terminal", executable, terminal, tail, started)
 	capture := ownerterminal.CaptureOutput(terminal.Output)
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
@@ -63,9 +67,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 	defer clear(unlock)
 	steps = append([]nativeArchiveInput{{"Vault secret:", unlock}}, steps...)
 	for _, step := range steps {
-		if capture.Wait(lifetime, step.marker) != nil {
-			t.Fatalf("native archive command missed terminal barrier %q", step.marker)
-		}
+		captureWaitDiag(t, lifetime, capture, step.marker, "native archive command missed terminal barrier \""+step.marker+"\"")
 		if len(step.value) != 0 {
 			_, err := terminal.Input.Write(step.value)
 			nativeArchiveMust(t, err)
@@ -74,8 +76,8 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 	if terminal.Wait(lifetime) != nil {
 		t.Fatal("native archive command did not complete its explicit decision")
 	}
-	if !cancelled && capture.Wait(lifetime, "Owner command completed; encrypted persistence confirmed.") != nil {
-		t.Fatal("native archive command omitted its persistence receipt")
+	if !cancelled {
+		captureWaitDiag(t, lifetime, capture, "Owner command completed; encrypted persistence confirmed.", "native archive command omitted its persistence receipt")
 	}
 }
 

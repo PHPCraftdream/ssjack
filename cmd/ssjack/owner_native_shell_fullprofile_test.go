@@ -86,6 +86,10 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 	if err != nil {
 		t.Fatal(err)
 	}
+	started := time.Now()
+	tail := newOwnerChildTail()
+	terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
+	ownerChildTerminal(t, "human SSH handoff", executable, terminal, tail, started)
 	capture := ownerterminal.CaptureOutput(terminal.Output)
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -97,9 +101,7 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 		capture.Clear()
 	}()
 	expect := func(text string) {
-		if capture.Wait(ctx, text) != nil {
-			t.Fatal("native human SSH flow did not reach:", text)
-		}
+		captureWaitDiag(t, ctx, capture, text, "native human SSH flow did not reach: "+text)
 	}
 	send := func(data []byte) {
 		if _, err := terminal.Input.Write(data); err != nil {

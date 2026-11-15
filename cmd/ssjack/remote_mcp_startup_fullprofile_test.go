@@ -46,7 +46,7 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 	remoteMCPStartupDrive(t, ctx, scenario, fixture, terminal, capture)
 	switch scenario {
 	case "connected-empty":
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "connected-empty child exit", ctx, terminal) != nil {
 			t.Fatal("confirmed empty connected run did not exit")
 		}
 		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
@@ -56,7 +56,7 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 			t.Fatal("confirmed empty choice contacted or called an upstream")
 		}
 	case "connected-cancel":
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "connected-cancel child exit", ctx, terminal) != nil {
 			t.Fatal("cancelled connected run did not exit")
 		}
 		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte("REMOTE-MCP-CONNECTED-CANCEL-VERIFIED")) {
@@ -66,7 +66,7 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 			t.Fatal("cancelled selection contacted or called an upstream")
 		}
 	default:
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "connected child exit", ctx, terminal) != nil {
 			t.Fatal("connected startup child did not exit")
 		}
 		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
@@ -168,7 +168,7 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 	remoteMCPStartupDrive(t, ctx, scenario, fixture, terminal, capture)
 	shouldLaunch := scenario == "continue" || scenario == "receipt-remembered" || scenario == "empty" || scenario == "no-record" || scenario == "absent-directory"
 	if scenario == "mcp-nonterminal-refusal" {
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "mcp-nonterminal-refusal child exit", ctx, terminal) != nil {
 			t.Fatal("MCP nonterminal-refusal child did not exit successfully")
 		}
 		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPRefusalMarker(scenario))) {
@@ -178,7 +178,7 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 			t.Fatal("MCP nonterminal refusal reached the harness")
 		}
 	} else if scenario == "prepared-launch-no-output-filter" {
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "prepared-launch child exit", ctx, terminal) != nil {
 			t.Fatal("prepared-launch direct-loader child did not exit successfully")
 		}
 		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPPreparedMarker)) {
@@ -191,7 +191,7 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 			t.Fatal("prepared-launch warning did not accurately describe the available capability")
 		}
 	} else if shouldLaunch {
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "confirmed startup child exit", ctx, terminal) != nil {
 			t.Fatal("confirmed startup child did not exit successfully")
 		}
 		if err := capture.Join(ctx); err != nil {
@@ -201,7 +201,7 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 			t.Fatal("confirmed startup omitted harness marker")
 		}
 	} else {
-		if terminal.Wait(ctx) != nil {
+		if childTerminalWait(t, "refusal child exit", ctx, terminal) != nil {
 			t.Fatal("verified refusal child did not exit successfully")
 		}
 		if err := capture.Join(ctx); err != nil {

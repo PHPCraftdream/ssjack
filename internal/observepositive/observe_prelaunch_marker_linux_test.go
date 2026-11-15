@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/driverprotocol"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/immutableexec"
 )
 
@@ -45,6 +46,10 @@ func markerELF(path string) []byte {
 
 func bindMarker(t *testing.T, marker string) *immutableexec.Runner {
 	t.Helper()
+	// Failure-only evidence: parked parent goroutines when the child stalls.
+	flakediag.OnFailure(t, func() string {
+		return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+	})
 	data := markerELF(marker)
 	path := filepath.Join(t.TempDir(), "marker-child")
 	if err := os.WriteFile(path, data, 0700); err != nil {

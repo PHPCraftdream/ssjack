@@ -13,6 +13,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/driverframe"
 	"github.com/PHPCraftdream/ssjack/internal/driverprotocol"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 func TestOverflowKillsAndReapsOwnedChild(t *testing.T) {
@@ -194,7 +195,7 @@ func joinReadyExecution(t *testing.T, cancel context.CancelFunc, done <-chan err
 	case <-done:
 		*joined = true
 	case <-time.After(4 * time.Second):
-		t.Error("execute lifecycle did not join after cancellation; child state unavailable")
+		t.Errorf("execute lifecycle did not join after cancellation; child state unavailable\ngoroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
 	}
 }
 
