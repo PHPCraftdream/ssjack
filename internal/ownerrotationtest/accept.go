@@ -30,6 +30,7 @@ func Accept(t *testing.T) {
 		{"post-add-persistence-restart", func(r *rig) { r.effectFailure("post-add-persistence-restart") }},
 		{"archive-next", (*rig).archiveAndNextRotation},
 		{"owner-crash-inflight", (*rig).ownerCrashInFlight},
+		{"abandon-stuck", (*rig).abandonStuckRotation},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			r := newRig(t)
@@ -167,6 +168,29 @@ func (r *rig) effectFailure(kind string) {
 		r.recovery(false, commitLine)
 		r.expectEffects(1, vault.RotationComplete)
 	}
+	r.stopKeeper()
+	r.expectInventory("rotation.ktav")
+}
+
+// abandonStuckRotation abandons a journal whose new login is refused for good:
+// the abandon is local, so no remote call is made, the old key stays the active
+// credential, and the encrypted journal ends in the cancelled terminal phase.
+func (r *rig) abandonStuckRotation() {
+	r.fixture.configure(func(f *rotationSSHFixture) { f.rejectNew = true })
+	owner, capture := r.start("cli", true)
+	phrase := r.consent(capture, "ROTATE")
+	r.details(capture)
+	r.approve(owner, capture, phrase)
+	r.retainCandidate()
+	r.expectEffects(1, vault.RotationAdded)
+	r.expectJournal(vault.RotationAdded)
+	r.restartKeeper()
+	terminal, abandonCapture := r.start("cli", false, "--recover", "--abandon")
+	r.approve(terminal, abandonCapture, r.consent(abandonCapture, "ABANDON"), "Rotation abandoned locally; the current key remains in use.")
+	r.scan(r.ctx, abandonCapture)
+	r.expectClean(r.keeperCapture)
+	r.expectEffects(1, vault.RotationCancelled)
+	r.expectJournal(vault.RotationCancelled)
 	r.stopKeeper()
 	r.expectInventory("rotation.ktav")
 }

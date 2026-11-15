@@ -62,7 +62,7 @@ func (c *Control) DecideRotation(ctx context.Context, revision, planID uint64, i
 		return ownerrotation.Plan{}, ErrControl
 	}
 	switch action {
-	case "install", "verify", "commit", "cancel", "recover", "archive":
+	case "install", "verify", "commit", "cancel", "abandon", "recover", "archive":
 	default:
 		return ownerrotation.Plan{}, errors.New("unsupported rotation action")
 	}
@@ -151,10 +151,10 @@ func (c *Control) remoteRotation(ctx context.Context, revision uint64, rotation 
 	if snapshot.Rotation == nil || snapshot.Rotation.ID == "" || snapshot.Rotation.PlanID == 0 || snapshot.Rotation.Phase == "" || snapshot.Status.Database.SavedRevision != snapshot.Status.Database.Revision || snapshot.CipherDigest == ([32]byte{}) {
 		return ownerrotation.Plan{}, errors.New("keeper rotation receipt lacks healthy durable metadata")
 	}
-	if rotation.ID != "" && rotation.Action != "cancel" && (snapshot.Rotation.ID != rotation.ID || snapshot.Rotation.PlanID != rotation.PlanID || snapshot.Rotation.ServerID == "" || snapshot.Rotation.Account == "" || snapshot.Rotation.Profile == "") {
+	if rotation.ID != "" && !closesJournal(rotation.Action) && (snapshot.Rotation.ID != rotation.ID || snapshot.Rotation.PlanID != rotation.PlanID || snapshot.Rotation.ServerID == "" || snapshot.Rotation.Account == "" || snapshot.Rotation.Profile == "") {
 		return ownerrotation.Plan{}, errors.New("keeper rotation receipt did not match the requested journal identity and selected account")
 	}
-	if rotation.ID != "" && rotation.Action != "cancel" && (rotation.ServerID != "" && snapshot.Rotation.ServerID != rotation.ServerID || rotation.Account != "" && snapshot.Rotation.Account != rotation.Account) {
+	if rotation.ID != "" && !closesJournal(rotation.Action) && (rotation.ServerID != "" && snapshot.Rotation.ServerID != rotation.ServerID || rotation.Account != "" && snapshot.Rotation.Account != rotation.Account) {
 		return ownerrotation.Plan{}, errors.New("keeper rotation receipt did not match the requested selected account")
 	}
 	if rotation.ID == "" {
@@ -163,7 +163,7 @@ func (c *Control) remoteRotation(ctx context.Context, revision uint64, rotation 
 		}
 	}
 	info := *snapshot.Rotation
-	if rotation.Action == "cancel" {
+	if closesJournal(rotation.Action) {
 		if info.Phase != "cancelled" || info.ID != rotation.ID || info.PlanID != rotation.PlanID {
 			return ownerrotation.Plan{}, errors.New("keeper cancellation receipt did not match the retained journal")
 		}
@@ -176,3 +176,7 @@ func (c *Control) remoteRotation(ctx context.Context, revision uint64, rotation 
 	}
 	return ownerrotation.Plan{Info: info, Revision: snapshot.Status.Database.Revision, Digest: snapshot.CipherDigest}, nil
 }
+
+// closesJournal reports actions that end in the cancelled terminal phase; its
+// receipt carries no operation scope.
+func closesJournal(action string) bool { return action == "cancel" || action == "abandon" }

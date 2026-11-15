@@ -69,7 +69,7 @@ There is no global fallback or ambiguous account inference in owner commands.
 | `import` | Whole archive | `--file` |
 | `link` | Database | `--directory` |
 | `pending` | Database | `--action retry-db\|reconcile\|resume-draft\|cancel-draft\|resume-import\|abort-import` |
-| `rotate-key` | Existing `--server NAME --account NAME` | `--recover`; `--recover --cancel-prepared`; `--archive-completed` (separate exact-confirmed preservation) |
+| `rotate-key` | Existing `--server NAME --account NAME` | `--recover`; `--recover --cancel-prepared`; `--recover --abandon` (local close of a journal stuck after an attempted add); `--archive-completed` (separate exact-confirmed preservation) |
 
 Server/account export scopes require `--server`; account scope also requires
 `--account`. They include the selected server's local values but not global
@@ -111,6 +111,14 @@ successful; it never replays an uncertain add. The packet `recover` action only
 inspects/claims state. A prepared no-effect orphan may be cancelled by one
 separate `--recover --cancel-prepared` invocation after its exact
 CANCEL-PREPARED confirmation; no earlier claim command is required.
+
+A journal stuck after an attempted add (attempting, unknown or added) that can
+never be verified can be closed by one separate `--recover --abandon`
+invocation. It displays the old and new client-key fingerprints and requires the
+exact ABANDON confirmation. Abandon is local: no remote call is made, the unused
+new private key is destroyed, and the current key stays in use. The journal ends
+in the cancelled phase. The remote add is not undone, so the new public key may
+remain in `authorized_keys` until you remove it through a trusted session.
 
 A completed journal blocks another rotation until the owner explicitly archives
 it. For the exact selected server/account, run a separate command:

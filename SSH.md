@@ -65,6 +65,12 @@ one separate `--recover --cancel-prepared` invocation after its exact
 CANCEL-PREPARED confirmation; the packet recovery action alone only
 inspects/claims the journal.
 
+A journal stuck after an attempted add that can never be verified is closed
+locally by one separate `--recover --abandon` invocation after its exact ABANDON
+confirmation. The unused new private key is destroyed and the current key stays
+in use; the remote add is not undone, so the new public key may remain
+authorized until you remove it.
+
 After completion, another rotation requires explicit preservation. Run
 `owner rotate-key --server NAME --account NAME --archive-completed` as a separate
 invocation. It displays the retained operation and current revision and requires

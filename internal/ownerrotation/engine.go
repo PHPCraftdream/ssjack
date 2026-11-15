@@ -27,6 +27,7 @@ type Keeper interface {
 	CommitRotationAt(uint64, uint64) error
 	CompleteRotationAt(uint64, uint64, [32]byte) error
 	CancelRotationAt(uint64, uint64) error
+	AbandonRotationAt(uint64, uint64) error
 }
 
 type Evidence struct {

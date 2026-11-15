@@ -176,7 +176,7 @@ Automatic rotation is intentionally narrow: a POSIX account using an existing re
 6. Verify new SSH authentication and session opening without an exec/PTY request.
 7. Only then switch the encrypted record using the original revision and atomic writer.
 
-If addition, verification, cancellation, or local commit fails, old access is retained and recovery files remain. A new public key may already be installed even if the local switch fails; the diagnostic states that recovery path. Concurrent local edits cause a conflict rather than a lost update. Recovery filenames are printed, and the new-key container uses the separately entered recovery secret.
+If addition, verification, cancellation, or local commit fails, old access is retained and recovery files remain. A journal that can never be verified is closed locally with `rotate-key --recover --abandon` (exact ABANDON confirmation); the new public key may stay authorized on the server until you remove it. A new public key may already be installed even if the local switch fails; the diagnostic states that recovery path. Concurrent local edits cause a conflict rather than a lost update. Recovery filenames are printed, and the new-key container uses the separately entered recovery secret.
 
 Even after success, **old remote keys are not retired automatically**. Verify every intended client and remove obsolete authorized keys explicitly through a trusted session. Rotation does not grant privileges or bypass forced-command restrictions.
 

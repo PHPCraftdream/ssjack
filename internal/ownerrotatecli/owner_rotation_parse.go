@@ -17,6 +17,7 @@ type rotationCommand struct {
 	Recover bool
 	Cancel  bool
 	Archive bool
+	Abandon bool
 }
 
 // parseRotationCommand accepts selectors only; approvals and secret material are never arguments.
@@ -29,7 +30,7 @@ func parseRotationCommand(args []string, globalServer, globalAccount string) (ro
 	seen := map[string]bool{"server": globalServer != "", "account": globalAccount != ""}
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--recover" || arg == "--cancel-prepared" || arg == "--archive-completed" {
+		if arg == "--recover" || arg == "--cancel-prepared" || arg == "--archive-completed" || arg == "--abandon" {
 			switch arg {
 			case "--recover":
 				if command.Recover {
@@ -46,6 +47,11 @@ func parseRotationCommand(args []string, globalServer, globalAccount string) (ro
 					return rotationCommand{}, errRotationArguments
 				}
 				command.Archive = true
+			case "--abandon":
+				if command.Abandon {
+					return rotationCommand{}, errRotationArguments
+				}
+				command.Abandon = true
 			}
 			continue
 		}
@@ -73,7 +79,7 @@ func parseRotationCommand(args []string, globalServer, globalAccount string) (ro
 			command.Account = value
 		}
 	}
-	if command.Server == "" || command.Account == "" || command.Cancel && !command.Recover || command.Archive && (command.Recover || command.Cancel) {
+	if command.Server == "" || command.Account == "" || command.Cancel && !command.Recover || command.Archive && (command.Recover || command.Cancel) || command.Abandon && (!command.Recover || command.Cancel) {
 		return rotationCommand{}, errRotationArguments
 	}
 	return command, nil
@@ -89,6 +95,10 @@ func recoveryConfirmation(info rotationDisplay) string {
 
 func cancellationConfirmation(info rotationDisplay) string {
 	return "CANCEL-PREPARED " + info.ServerID + " " + info.Account + " revision=" + strconv.FormatUint(info.Revision, 10) + " operation=" + info.OperationID
+}
+
+func abandonConfirmation(info rotationDisplay) string {
+	return "ABANDON " + info.ServerID + " " + info.Account + " revision=" + strconv.FormatUint(info.Revision, 10) + " operation=" + info.OperationID
 }
 
 func archiveConfirmation(info rotationDisplay) string {

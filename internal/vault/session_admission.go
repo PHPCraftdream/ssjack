@@ -314,9 +314,28 @@ func (s *Session) CancelRotationAt(expected, planID uint64) error {
 		if j == nil || j.PlanID != planID || j.Phase != RotationPrepared {
 			return errors.New("effectful rotation cannot be cancelled")
 		}
-		j.clear()
-		j.Original, j.NewPrivate, j.NewPublic, j.OldPublic = Target{}, nil, nil, nil
-		j.Phase = RotationCancelled
+		discardRotationJournal(j)
 		return nil
 	})
+}
+
+// AbandonRotationAt discards an uncommitted rotation whose remote addition was
+// attempted. The unused new private key is destroyed and the current key stays
+// in use. The new public key may remain authorized remotely; the journal is
+// recorded as cancelled, the same terminal state as a prepared cancellation.
+func (s *Session) AbandonRotationAt(expected, planID uint64) error {
+	return s.applyRotationAt(expected, func(v *Vault) error {
+		j := v.Rotation
+		if j == nil || j.PlanID != planID || !RotationAwaitsVerification(j.Phase) {
+			return errors.New("only an uncommitted rotation after a remote addition attempt can be abandoned")
+		}
+		discardRotationJournal(j)
+		return nil
+	})
+}
+
+func discardRotationJournal(j *RotationJournal) {
+	j.clear()
+	j.Original, j.NewPrivate, j.NewPublic, j.OldPublic = Target{}, nil, nil, nil
+	j.Phase = RotationCancelled
 }

@@ -29,6 +29,10 @@ func TestParseRotationCommandSelectorsAndRecovery(t *testing.T) {
 	if err != nil || !parsed.Recover || !parsed.Cancel {
 		t.Fatalf("cancel: %#v, %v", parsed, err)
 	}
+	parsed, err = parseRotationCommand([]string{"rotate-key", "--recover", "--abandon"}, "prod", "deploy")
+	if err != nil || !parsed.Recover || !parsed.Abandon || parsed.Cancel || parsed.Archive {
+		t.Fatalf("abandon: %#v, %v", parsed, err)
+	}
 }
 
 func TestParseRotationCommandRejectsDuplicateConflictingAndIntentFlags(t *testing.T) {
@@ -43,6 +47,11 @@ func TestParseRotationCommandRejectsDuplicateConflictingAndIntentFlags(t *testin
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--archive-completed", "--recover"},
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--archive-completed", "--cancel-prepared"},
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--archive-completed", "--archive-completed"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--abandon"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--recover", "--abandon", "--abandon"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--recover", "--abandon", "--cancel-prepared"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--abandon", "--archive-completed"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--recover", "--abandon", "--archive-completed"},
 	}
 	for _, args := range invalid {
 		if _, err := parseRotationCommand(args, "", ""); err == nil {
@@ -67,6 +76,7 @@ func TestRotationConfirmationBindsDisplayedIdentity(t *testing.T) {
 		recoveryConfirmation(info):     "VERIFY-ONLY server-opaque operator revision=42 operation=operation-opaque",
 		cancellationConfirmation(info): "CANCEL-PREPARED server-opaque operator revision=42 operation=operation-opaque",
 		archiveConfirmation(info):      "ARCHIVE server-opaque operator revision=42 operation=operation-opaque",
+		abandonConfirmation(info):      "ABANDON server-opaque operator revision=42 operation=operation-opaque",
 	}
 	for got, want := range checks {
 		if got != want {

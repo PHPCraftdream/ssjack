@@ -103,6 +103,16 @@ func (k *memoryKeeper) CancelRotationAt(revision, planID uint64) error {
 	return nil
 }
 
+func (k *memoryKeeper) AbandonRotationAt(revision, planID uint64) error {
+	k.record("abandon")
+	if _, err := k.RotationAt(revision, planID); err != nil || !vault.RotationAwaitsVerification(k.info.Phase) {
+		return errors.New("not abandonable")
+	}
+	k.info.Phase = vault.RotationCancelled
+	k.revision++
+	return nil
+}
+
 type memoryRemote struct {
 	calls                     []string
 	addErr, verifyErr         error

@@ -40,3 +40,25 @@ func TestWithRotationMaterialAtRequiresCallback(t *testing.T) {
 		t.Fatal("nil callback accepted")
 	}
 }
+
+func TestDiscardRotationJournalDestroysMaterialAndCancels(t *testing.T) {
+	original, replacement := []byte("old-private"), []byte("new-private")
+	j := &RotationJournal{
+		Phase:      RotationUnknown,
+		Original:   Target{PrivateKey: original},
+		NewPrivate: replacement,
+		NewPublic:  []byte("new-public"),
+		OldPublic:  []byte("old-public"),
+	}
+	discardRotationJournal(j)
+	if j.Phase != RotationCancelled || !rotationTargetEmpty(j.Original) || len(j.NewPrivate)+len(j.NewPublic)+len(j.OldPublic) != 0 {
+		t.Fatalf("journal retains material or phase: %+v", j)
+	}
+	for name, buffer := range map[string][]byte{"original": original, "replacement": replacement} {
+		for _, b := range buffer {
+			if b != 0 {
+				t.Fatalf("%s private key not wiped: %v", name, buffer)
+			}
+		}
+	}
+}

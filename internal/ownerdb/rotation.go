@@ -51,7 +51,7 @@ func (m *Manager) DecideRotation(ctx context.Context, revision, planID uint64, i
 		return ownerrotation.Plan{}, errors.New("invalid rotation identity")
 	}
 	switch action {
-	case "recover", "install", "verify", "commit", "cancel", "archive":
+	case "recover", "install", "verify", "commit", "cancel", "abandon", "archive":
 	default:
 		return ownerrotation.Plan{}, errors.New("unsupported rotation action")
 	}
@@ -112,6 +112,11 @@ func (m *Manager) DecideRotation(ctx context.Context, revision, planID uint64, i
 		return engine.Inspect(ctx, plan.Revision, planID)
 	case "cancel":
 		if err := engine.Cancel(ctx, revision, planID); err != nil {
+			return ownerrotation.Plan{}, err
+		}
+		return engine.Inspect(ctx, m.db.Status().Revision, planID)
+	case "abandon":
+		if err := engine.Abandon(ctx, revision, planID); err != nil {
 			return ownerrotation.Plan{}, err
 		}
 		return engine.Inspect(ctx, m.db.Status().Revision, planID)

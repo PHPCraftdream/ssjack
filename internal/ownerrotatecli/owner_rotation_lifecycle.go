@@ -45,6 +45,9 @@ func runRotationRecovery(ctx context.Context, control *ownercontrol.Control, com
 	if err != nil {
 		return 1, err
 	}
+	if command.Abandon {
+		return abandonRetainedRotation(ctx, control, plan, display, readSecret)
+	}
 	if info.Phase == vault.RotationPrepared && !command.Cancel {
 		confirmation := recoveryConfirmation(display)
 		printRotationMetadata(os.Stdout, display, confirmation)

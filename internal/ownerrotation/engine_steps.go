@@ -211,6 +211,42 @@ func (e *Engine) Cancel(ctx context.Context, expected, planID uint64) error {
 	return err
 }
 
+// Abandon is the only exit from a journal stuck after a remote addition attempt
+// that can never be verified. It is local: no remote call is made, the unused
+// new private key is destroyed, and the new public key may stay authorized.
+func (e *Engine) Abandon(ctx context.Context, expected, planID uint64) error {
+	if err := e.available(); err != nil {
+		return err
+	}
+	ctx, cancel, err := operation(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	if err := e.lock(ctx); err != nil {
+		return err
+	}
+	defer e.unlock()
+	info, err := e.keeper.RotationAt(expected, planID)
+	if err != nil {
+		return err
+	}
+	if !vault.RotationAwaitsVerification(info.Phase) {
+		return errors.New("only an uncommitted rotation after a remote addition attempt can be abandoned")
+	}
+	if _, err := e.require(ctx, expected, planID, info.Phase); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := e.keeper.AbandonRotationAt(expected, planID); err != nil {
+		return err
+	}
+	_, err = e.durable(ctx)
+	return err
+}
+
 // Fingerprint formats public-only confirmation metadata.
 func Fingerprint(encoded []byte) (string, error) {
 	key, _, options, rest, err := ssh.ParseAuthorizedKey(encoded)

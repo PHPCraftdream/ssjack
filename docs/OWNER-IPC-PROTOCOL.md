@@ -342,6 +342,14 @@ inspects/claims state. A prepared no-effect orphan can be cancelled in one
 separate `--recover --cancel-prepared` invocation after exact CANCEL-PREPARED
 confirmation; it needs no earlier claim invocation.
 
+A journal stuck after an attempted add (attempting, unknown or added) whose new
+login can never be verified can be closed by one separate
+`--recover --abandon` invocation after exact ABANDON confirmation. The
+`abandon` packet action is local: it makes no remote call, destroys the unused
+new private key, keeps the current key in use, and leaves the journal in the
+cancelled phase. It does not undo the remote add, so the new public key may stay
+authorized until the owner removes it through a trusted session.
+
 A completed journal blocks another rotation until an owner explicitly runs
 `rotate-key --archive-completed` for the exact selected server/account. The
 separate invocation displays the completed operation and current revision and

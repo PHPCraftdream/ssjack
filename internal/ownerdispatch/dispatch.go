@@ -174,7 +174,7 @@ func (d *Dispatcher) routeRotation(ctx context.Context, p *Peer, revision uint64
 	if request.Action == "install" && (orphan || d.orphanPrepared || d.rotationOwner != p || before.Rotation.Phase != vault.RotationPrepared) {
 		return ownerdb.ErrPending
 	}
-	if request.Action == "verify" && !vault.RotationAwaitsVerification(before.Rotation.Phase) {
+	if (request.Action == "verify" || request.Action == "abandon") && !vault.RotationAwaitsVerification(before.Rotation.Phase) {
 		return ownerdb.ErrPending
 	}
 	if request.Action == "commit" && before.Rotation.Phase != vault.RotationVerified && before.Rotation.Phase != vault.RotationCommitted {
@@ -196,7 +196,7 @@ func (d *Dispatcher) routeRotation(ctx context.Context, p *Peer, revision uint64
 	if request.Action == "recover" {
 		d.rotationOwner, d.rotationID, d.rotationPlan, d.orphanPrepared = p, request.ID, request.PlanID, orphan && before.Rotation.Phase == vault.RotationPrepared
 	}
-	if request.Action == "cancel" {
+	if request.Action == "cancel" || request.Action == "abandon" {
 		d.rotationOwner, d.rotationID, d.rotationPlan, d.orphanPrepared = nil, "", 0, false
 	}
 	return nil

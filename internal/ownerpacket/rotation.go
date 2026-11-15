@@ -53,7 +53,7 @@ func validRotationCommand(rotation *Rotation) bool {
 	case "prepare":
 		id, err := hex.DecodeString(rotation.ServerID)
 		return err == nil && rotation.ID == "" && rotation.PlanID == 0 && len(id) == 16 && hex.EncodeToString(id) == rotation.ServerID && !bytes.Equal(id, make([]byte, 16)) && rotation.Account != "" && len(rotation.Account) <= 64
-	case "install", "verify", "commit", "cancel", "recover", "archive":
+	case "install", "verify", "commit", "cancel", "abandon", "recover", "archive":
 		if rotation.ServerID != "" || rotation.Account != "" || len(rotation.ID) != 32 || rotation.PlanID == 0 {
 			return false
 		}
