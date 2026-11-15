@@ -32,7 +32,7 @@ type rotationPTYCapture struct {
 }
 
 var rotationANSI = regexp.MustCompile("\\x1b\\[[0-?]*[ -/]*[@-~]")
-var rotationConsentPattern = regexp.MustCompile(`(?:ROTATE|VERIFY-ONLY|CANCEL-PREPARED|ARCHIVE) [^[:space:]]+ [^[:space:]]+ revision=[0-9]+ operation=[[:xdigit:]]{32}`)
+var rotationConsentPattern = regexp.MustCompile(`(?:ROTATE|VERIFY-ONLY|CANCEL-PREPARED|ABANDON|RETIRE-OLD-KEY|ARCHIVE) [^[:space:]]+ [^[:space:]]+ revision=[0-9]+ operation=[[:xdigit:]]{32}`)
 
 func captureRotationPTY(output io.Reader) *rotationPTYCapture {
 	c := &rotationPTYCapture{changed: make(chan struct{}, 1), done: make(chan struct{})}
