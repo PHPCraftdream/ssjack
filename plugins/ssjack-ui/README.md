@@ -6,34 +6,12 @@ Display-only Claude Code plugin for separate ssjack SSH command and result cards
 
 The plugin unfolds `ToolGroup` rows containing ssjack calls, renders `ToolUse` as bordered command/result/cancellation cards, and suppresses duplicate `ToolResult` blocks because the complete result is already drawn in `ToolUse`.
 
-It does not intercept tool execution or change tool inputs, stored output, permissions, the model's context, or SSH authentication. It uses no Node APIs, network requests, credential access, or background timers. MCP output is decoded from structured objects, text content blocks, JSON strings, and result wrappers. Control characters are escaped before display.
+It does not intercept tool execution or change tool inputs, stored output, permissions, the model's context, or SSH authentication. It uses no network requests, credential access, or background timers. Its only file access is a read of the single lifecycle log file described below, through the plugin file API. MCP output is decoded from structured objects, text content blocks, JSON strings, and result wrappers. Control characters are escaped before display.
 
-The Go launcher installs content-addressed copies under the project's ignored `.claude/ssjack-ui` directory. Managed source assets are verified before reuse; engine-generated type metadata may coexist with them. Old runtime copies are not deleted automatically.
+## Bridge drop frame
 
-## Compatibility
+The plugin reads `.claude/ssjack/lifecycle.log` in the session's working directory (files above 2 MiB are ignored; only the last 64 KiB is examined) and, in the band above the prompt, shows a red frame only after an attached connection has ended: a keeper `connection-end` with `attached=true`, a keeper `shutdown`, or a bridge `exit`. The frame stays until a new launch writes lines for a new session id.
 
-Requires Claude Code's function-hook plugin API with `ui.render`, `ToolGroup`, `ToolUse`, `ToolResult`, and `CLAUDE_CODE_PLUGIN_DIRS`. The authoring environment uses build 2.1.304. Other MCP clients do not automatically gain this interface.
+The frame is display-only: nothing reads or acts on the log beyond this read, and editing it grants nothing. The plugin reads nothing else: no environment variables, tokens, session ids, or other paths.
 
-Plugin manifests and registration metadata remain JSON because they are Claude Code interfaces, not ssjack-owned configuration formats.
-
-## Development checks
-
-Static validation:
-
-```text
-claude plugin validate ./plugins/ssjack-ui
-```
-
-Plugin tests, when explicitly authorized:
-
-```text
-claude plugin test ./plugins/ssjack-ui
-```
-
-Go installer, launcher, and legacy-hook cleanup tests, when explicitly authorized:
-
-```text
-go test ./internal/uiplugin ./internal/hooks ./internal/launch
-```
-
-The plugin tests exercise terminal and desktop rendering without opening real SSH connections. Runtime asset installation is tested separately from UI painting. Source changes reach embedded runtime copies only after rebuilding the Go executable.
+Status: the parsing and frame text are covered by unit tests; the band wiring (`AbovePrompt`, `$.fs` read) follows the Claude Code plugin API but is not exercised by CI, which does not run the plugin's own tests.

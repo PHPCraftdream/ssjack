@@ -21,6 +21,7 @@ var assetNames = []string{
 	".claude-plugin/plugin.json",
 	"hooks/hooks.json",
 	"hooks/register.tsx",
+	"hooks/lifecycle.ts",
 	"hooks/format.ts",
 }
 

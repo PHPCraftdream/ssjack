@@ -65,7 +65,11 @@ request or reply data, a path or error text. Every value is reduced to
 a fixed set of classes (`eof`, `timeout`, `reset`, `closed`, `cancelled`,
 `other` and similar). Operation names (`op`) are recorded; their arguments are
 not. The file is diagnostic only: nothing reads it back to make a decision, so
-editing it grants nothing. Failing to write it never fails a launch.
+editing it grants nothing. Failing to write it never fails a launch. The
+ssjack-ui Claude Code plugin reads only the tail of this log to display a
+recovery frame when the attached connection has ended; it is display-only, and
+the log remains write-diagnostic: nothing acts on it, and editing grants
+nothing.
 
 ## Single-channel threat model
 

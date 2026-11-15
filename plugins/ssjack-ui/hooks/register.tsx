@@ -1,5 +1,6 @@
 import type { Register } from 'claude-code'
 import { failed, isSsjack, printable, record, resultBody, shortJob, text, unpack } from './format'
+import { dropFromLog, frameLines, logPath, maxLogBytes } from './lifecycle'
 
 export const register: Register = on => {
   on('ui.render', { component: 'ToolGroup' }, ($, e, next) => {
@@ -64,5 +65,26 @@ export const register: Register = on => {
     if (!isSsjack(e.props.tool)) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
+  })
+
+  // Display-only band above the prompt once the attached MCP connection has ended.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    let drop
+    try {
+      const stat = await $.fs.stat(logPath)
+      if (stat.kind === 'file' && stat.size > 0 && stat.size <= maxLogBytes) drop = dropFromLog(await $.fs.read(logPath))
+    } catch {
+      drop = undefined
+    }
+    if (!drop) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="red" paddingX={1}>
+        {frameLines(drop).map((line, index) => (
+          <Text key={index} bold={index === 0} color={index === 0 ? 'red' : undefined}>{line}</Text>
+        ))}
+      </Box>
+    )
   })
 }
