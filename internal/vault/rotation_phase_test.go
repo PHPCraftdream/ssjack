@@ -1,0 +1,42 @@
+package vault
+
+import "testing"
+
+func TestRotationPhasePredicates(t *testing.T) {
+	active := map[string]bool{
+		RotationPrepared: true, RotationAttempting: true, RotationUnknown: true,
+		RotationAdded: true, RotationVerified: true, RotationCommitted: true,
+	}
+	verification := map[string]bool{RotationAttempting: true, RotationUnknown: true, RotationAdded: true}
+	phases := []string{
+		RotationPrepared, RotationAttempting, RotationUnknown, RotationAdded, RotationVerified,
+		RotationCommitted, RotationComplete, RotationCancelled, RotationArchived, "", "bogus",
+	}
+	for _, phase := range phases {
+		if got := RotationActive(phase); got != active[phase] {
+			t.Errorf("RotationActive(%q) = %v, want %v", phase, got, active[phase])
+		}
+		if got := RotationAwaitsVerification(phase); got != verification[phase] {
+			t.Errorf("RotationAwaitsVerification(%q) = %v, want %v", phase, got, verification[phase])
+		}
+	}
+}
+
+func TestClearRotationTargetWipesSecretBuffers(t *testing.T) {
+	key, password := []byte("private-key"), []byte("password")
+	target := Target{PrivateKey: key, Password: password}
+	clearRotationTarget(&target)
+	for name, buffer := range map[string][]byte{"private key": key, "password": password} {
+		for _, b := range buffer {
+			if b != 0 {
+				t.Fatalf("%s buffer not wiped: %v", name, buffer)
+			}
+		}
+	}
+}
+
+func TestWithRotationMaterialAtRequiresCallback(t *testing.T) {
+	if err := (&Session{}).WithRotationMaterialAt(0, 0, nil); err == nil {
+		t.Fatal("nil callback accepted")
+	}
+}

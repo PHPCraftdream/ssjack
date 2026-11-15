@@ -70,8 +70,9 @@ func TestZeroValueSessionRotationSnapshotIsMetadataOnly(t *testing.T) {
 	if _, err := s.PrepareKeyRotationAt(0, "server", "account"); !errors.Is(err, ErrOwnerRevision) {
 		t.Fatalf("zero-value rotation preparation error = %v, want ErrOwnerRevision", err)
 	}
-	if _, _, err := s.RotationMaterialAt(0, 0); !errors.Is(err, ErrOwnerRevision) {
-		t.Fatalf("zero-value rotation material error = %v, want ErrOwnerRevision", err)
+	lent := false
+	if err := s.WithRotationMaterialAt(0, 0, func(Target, Target) error { lent = true; return nil }); !errors.Is(err, ErrOwnerRevision) || lent {
+		t.Fatalf("zero-value rotation material = (%v, lent=%v), want ErrOwnerRevision and no callback", err, lent)
 	}
 	if s.state != nil || s.revision != 0 || s.saved != 0 || s.closed || s.closing {
 		t.Fatal("zero-value rotation calls mutated session state")

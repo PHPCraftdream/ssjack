@@ -22,8 +22,10 @@ func (e *Engine) Install(ctx context.Context, expected, planID uint64, confirmed
 		return err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return err
+	}
+	defer e.unlock()
 	if !confirmed {
 		return errors.New("key addition requires explicit owner confirmation")
 	}
@@ -31,12 +33,13 @@ func (e *Engine) Install(ctx context.Context, expected, planID uint64, confirmed
 	if err != nil {
 		return err
 	}
-	original, replacement, err := e.keeper.RotationMaterialAt(expected, planID)
-	if err != nil {
-		return err
-	}
-	defer clearTarget(&original)
-	defer clearTarget(&replacement)
+	return e.keeper.WithRotationMaterialAt(expected, planID, func(original, replacement vault.Target) error {
+		return e.install(ctx, expected, planID, info, original, replacement)
+	})
+}
+
+// install runs with lent key material, which the keeper clears on return.
+func (e *Engine) install(ctx context.Context, expected, planID uint64, info vault.RotationInfo, original, replacement vault.Target) error {
 	if err := e.preflightAdd(ctx, original, replacement, info); err != nil {
 		return err
 	}
@@ -51,7 +54,7 @@ func (e *Engine) Install(ctx context.Context, expected, planID uint64, confirmed
 		return err
 	}
 	addCtx, stop := context.WithTimeout(ctx, 30*time.Second)
-	err = e.remote.Add(addCtx, original, info.OldPublic, info.NewPublic)
+	err := e.remote.Add(addCtx, original, info.OldPublic, info.NewPublic)
 	stop()
 	if err != nil {
 		if phaseErr := e.keeper.SetRotationPhaseAt(attemptRevision, planID, vault.RotationUnknown); phaseErr == nil {
@@ -89,31 +92,32 @@ func (e *Engine) Verify(ctx context.Context, expected, planID uint64) error {
 		return err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return err
+	}
+	defer e.unlock()
 	info, err := e.keeper.RotationAt(expected, planID)
 	if err != nil {
 		return err
 	}
-	switch info.Phase {
-	case vault.RotationAttempting, vault.RotationUnknown, vault.RotationAdded:
-	default:
+	if !vault.RotationAwaitsVerification(info.Phase) {
 		return errors.New("key rotation is not awaiting new-key-only verification")
 	}
 	if _, err := e.require(ctx, expected, planID, info.Phase); err != nil {
 		return err
 	}
-	original, replacement, err := e.keeper.RotationMaterialAt(expected, planID)
-	if err != nil {
-		return err
-	}
-	defer clearTarget(&original)
-	defer clearTarget(&replacement)
+	return e.keeper.WithRotationMaterialAt(expected, planID, func(_, replacement vault.Target) error {
+		return e.verifyReplacement(ctx, expected, planID, replacement)
+	})
+}
+
+// verifyReplacement logs in with the lent replacement key only.
+func (e *Engine) verifyReplacement(ctx context.Context, expected, planID uint64, replacement vault.Target) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	verifyCtx, stop := context.WithTimeout(ctx, 30*time.Second)
-	err = e.remote.Verify(verifyCtx, replacement)
+	err := e.remote.Verify(verifyCtx, replacement)
 	stop()
 	if err != nil {
 		return err
@@ -139,8 +143,10 @@ func (e *Engine) Commit(ctx context.Context, expected, planID uint64) (Plan, err
 		return Plan{}, err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return Plan{}, err
+	}
+	defer e.unlock()
 	info, err := e.keeper.RotationAt(expected, planID)
 	if err != nil {
 		return Plan{}, err
@@ -188,8 +194,10 @@ func (e *Engine) Cancel(ctx context.Context, expected, planID uint64) error {
 		return err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return err
+	}
+	defer e.unlock()
 	if _, err := e.require(ctx, expected, planID, vault.RotationPrepared); err != nil {
 		return err
 	}
@@ -201,15 +209,6 @@ func (e *Engine) Cancel(ctx context.Context, expected, planID uint64) error {
 	}
 	_, err = e.durable(ctx)
 	return err
-}
-
-func clearTarget(target *vault.Target) {
-	if target == nil {
-		return
-	}
-	clear(target.PrivateKey)
-	clear(target.Password)
-	target.Proxy.Clear()
 }
 
 // Fingerprint formats public-only confirmation metadata.

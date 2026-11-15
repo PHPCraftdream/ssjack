@@ -35,6 +35,25 @@ const (
 	RotationArchived   = "archived"
 )
 
+// RotationActive reports phases of a journal that still needs owner action.
+func RotationActive(phase string) bool {
+	switch phase {
+	case RotationPrepared, RotationAttempting, RotationUnknown, RotationAdded, RotationVerified, RotationCommitted:
+		return true
+	}
+	return false
+}
+
+// RotationAwaitsVerification reports phases that admit only new-key-only
+// verification; the remote addition is never replayed from them.
+func RotationAwaitsVerification(phase string) bool {
+	switch phase {
+	case RotationAttempting, RotationUnknown, RotationAdded:
+		return true
+	}
+	return false
+}
+
 // RotationInfo exposes metadata and public keys only. Returned slices are owned.
 type RotationInfo struct {
 	ID, Phase, ServerID, Account, Profile string
@@ -184,8 +203,29 @@ func (s *Session) RotationSnapshot() (RotationInfo, error) {
 	return rotationInfo(s.state.Rotation), nil
 }
 
-// RotationMaterialAt is keeper-only. The caller owns and clears the targets.
-func (s *Session) RotationMaterialAt(expected, planID uint64) (Target, Target, error) {
+// WithRotationMaterialAt is keeper-only. It lends the targets to use and clears
+// them on return, so callers cannot leak key material or forget to wipe it. use
+// must not retain the targets or their buffers.
+func (s *Session) WithRotationMaterialAt(expected, planID uint64, use func(original, replacement Target) error) error {
+	if use == nil {
+		return errors.New("rotation material requires a callback")
+	}
+	original, replacement, err := s.rotationMaterialAt(expected, planID)
+	if err != nil {
+		return err
+	}
+	defer clearRotationTarget(&original)
+	defer clearRotationTarget(&replacement)
+	return use(original, replacement)
+}
+
+func clearRotationTarget(target *Target) {
+	clear(target.PrivateKey)
+	clear(target.Password)
+	target.Proxy.Clear()
+}
+
+func (s *Session) rotationMaterialAt(expected, planID uint64) (Target, Target, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.state == nil || s.revision != expected || s.state.Rotation == nil {

@@ -40,11 +40,11 @@ func (k *memoryKeeper) RotationAt(revision, planID uint64) (vault.RotationInfo, 
 	return k.info, nil
 }
 
-func (k *memoryKeeper) RotationMaterialAt(revision, planID uint64) (vault.Target, vault.Target, error) {
+func (k *memoryKeeper) WithRotationMaterialAt(revision, planID uint64, use func(vault.Target, vault.Target) error) error {
 	if _, err := k.RotationAt(revision, planID); err != nil {
-		return vault.Target{}, vault.Target{}, err
+		return err
 	}
-	return vault.Target{Address: "test:22"}, vault.Target{Address: "test:22"}, nil
+	return use(vault.Target{Address: "test:22"}, vault.Target{Address: "test:22"})
 }
 
 func (k *memoryKeeper) SetRotationPhaseAt(revision, planID uint64, phase string) error {

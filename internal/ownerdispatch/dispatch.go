@@ -103,15 +103,7 @@ func (d *Dispatcher) route(ctx context.Context, c *ownerpacket.Command) error {
 }
 
 func activeRotation(info *vault.RotationInfo) bool {
-	if info == nil {
-		return false
-	}
-	switch info.Phase {
-	case vault.RotationPrepared, vault.RotationAttempting, vault.RotationUnknown, vault.RotationAdded, vault.RotationVerified, vault.RotationCommitted:
-		return true
-	default:
-		return false
-	}
+	return info != nil && vault.RotationActive(info.Phase)
 }
 
 func (d *Dispatcher) observeRotation(s ownerdb.Snapshot) {
@@ -182,7 +174,7 @@ func (d *Dispatcher) routeRotation(ctx context.Context, p *Peer, revision uint64
 	if request.Action == "install" && (orphan || d.orphanPrepared || d.rotationOwner != p || before.Rotation.Phase != vault.RotationPrepared) {
 		return ownerdb.ErrPending
 	}
-	if request.Action == "verify" && before.Rotation.Phase != vault.RotationAttempting && before.Rotation.Phase != vault.RotationUnknown && before.Rotation.Phase != vault.RotationAdded {
+	if request.Action == "verify" && !vault.RotationAwaitsVerification(before.Rotation.Phase) {
 		return ownerdb.ErrPending
 	}
 	if request.Action == "commit" && before.Rotation.Phase != vault.RotationVerified && before.Rotation.Phase != vault.RotationCommitted {

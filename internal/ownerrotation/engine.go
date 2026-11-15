@@ -4,7 +4,6 @@ package ownerrotation
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/remote"
@@ -23,7 +22,7 @@ type Keeper interface {
 	Status() vault.SessionStatus
 	PrepareKeyRotationAt(uint64, string, string) (vault.RotationInfo, error)
 	RotationAt(uint64, uint64) (vault.RotationInfo, error)
-	RotationMaterialAt(uint64, uint64) (vault.Target, vault.Target, error)
+	WithRotationMaterialAt(uint64, uint64, func(original, replacement vault.Target) error) error
 	SetRotationPhaseAt(uint64, uint64, string) error
 	CommitRotationAt(uint64, uint64) error
 	CompleteRotationAt(uint64, uint64, [32]byte) error
@@ -48,7 +47,9 @@ type Plan struct {
 	Digest   [32]byte
 }
 type Engine struct {
-	mu      sync.Mutex
+	// mu serializes rotation operations, including the single remote Add. It is
+	// a channel so a waiting caller still honors its own context.
+	mu      chan struct{}
 	keeper  Keeper
 	remote  Remote
 	persist Persist
@@ -84,8 +85,19 @@ func New(keeper Keeper, remote Remote, persist Persist) (*Engine, error) {
 	if keeper == nil || remote == nil || persist == nil {
 		return nil, errors.New("owner rotation requires a keeper, remote and durable persistence")
 	}
-	return &Engine{keeper: keeper, remote: remote, persist: persist}, nil
+	return &Engine{mu: make(chan struct{}, 1), keeper: keeper, remote: remote, persist: persist}, nil
 }
+
+func (e *Engine) lock(ctx context.Context) error {
+	select {
+	case e.mu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *Engine) unlock() { <-e.mu }
 func operation(parent context.Context) (context.Context, context.CancelFunc, error) {
 	if parent == nil || parent.Err() != nil {
 		return nil, nil, errors.New("owner rotation requires an active context")
@@ -94,7 +106,7 @@ func operation(parent context.Context) (context.Context, context.CancelFunc, err
 	return ctx, cancel, nil
 }
 func (e *Engine) available() error {
-	if e == nil || e.keeper == nil || e.remote == nil || e.persist == nil {
+	if e == nil || e.mu == nil || e.keeper == nil || e.remote == nil || e.persist == nil {
 		return errors.New("owner rotation is unavailable")
 	}
 	return nil
@@ -123,8 +135,10 @@ func (e *Engine) Prepare(ctx context.Context, expected uint64, serverID, account
 		return Plan{}, err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return Plan{}, err
+	}
+	defer e.unlock()
 	if err := ctx.Err(); err != nil {
 		return Plan{}, err
 	}
@@ -149,8 +163,10 @@ func (e *Engine) Inspect(ctx context.Context, expected, planID uint64) (Plan, er
 		return Plan{}, err
 	}
 	defer cancel()
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.lock(ctx); err != nil {
+		return Plan{}, err
+	}
+	defer e.unlock()
 	info, err := e.keeper.RotationAt(expected, planID)
 	if err != nil {
 		return Plan{}, err
