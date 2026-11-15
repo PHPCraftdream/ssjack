@@ -53,6 +53,45 @@ func TestBuildTarCarriesModTimes(t *testing.T) {
 	}
 }
 
+// Regression for the live acceptance: GNU tar sets a directory time once the
+// stream leaves the directory, so "directories first, files after" left every
+// directory with the time of the last child written into it.
+func TestBuildTarKeepsEachSubtreeTogether(t *testing.T) {
+	root, dir := testRoot(t)
+	writeFile(t, filepath.Join(dir, "tree", "a", "b", "x.txt"), []byte("x"))
+	writeFile(t, filepath.Join(dir, "tree", "a", "y.txt"), []byte("y"))
+	writeFile(t, filepath.Join(dir, "tree", "a-b.txt"), []byte("z"))
+	walked, err := root.WalkSource("tree", transfercore.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stream bytes.Buffer
+	if err := root.BuildTar(&stream, "tree", walked); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	reader := tar.NewReader(&stream)
+	for {
+		hdr, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, hdr.Name)
+	}
+	want := []string{"a/", "a/b/", "a/b/x.txt", "a/y.txt", "a-b.txt"}
+	if len(names) != len(want) {
+		t.Fatalf("archive order = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("archive order = %v, want %v", names, want)
+		}
+	}
+}
+
 func TestExtractRestoresModTimesAndSkipsAbsurdOnes(t *testing.T) {
 	root, _ := testRoot(t)
 	staging, err := NewStaging("dest", root.Dir(), false)
@@ -61,6 +100,7 @@ func TestExtractRestoresModTimesAndSkipsAbsurdOnes(t *testing.T) {
 	}
 	withTime := func(entry tarEntry, modTime time.Time) tarEntry {
 		entry.header.ModTime = modTime
+		entry.header.Format = tar.FormatPAX // USTAR cannot hold the year 2400
 		return entry
 	}
 	archive := tarArchive(t, []tarEntry{

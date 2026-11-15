@@ -32,7 +32,7 @@ func (r *Root) BuildTar(w io.Writer, rel string, manifest transfercore.Manifest)
 		}
 		return nil
 	}
-	for _, d := range m.Dirs {
+	writeDir := func(d string) error {
 		if err := validateLocalRelPath(d, transfercore.DefaultLimits()); err != nil {
 			return err
 		}
@@ -46,11 +46,9 @@ func (r *Root) BuildTar(w io.Writer, rel string, manifest transfercore.Manifest)
 			ModTime: entryModTime(filepath.Join(srcBase, filepath.FromSlash(d))),
 			Format:  tar.FormatPAX,
 		}
-		if err := writeHeader(hdr); err != nil {
-			return err
-		}
+		return writeHeader(hdr)
 	}
-	for _, e := range m.Files {
+	writeFile := func(e transfercore.Entry) error {
 		if err := validateLocalRelPath(e.Path, transfercore.DefaultLimits()); err != nil {
 			return err
 		}
@@ -98,6 +96,18 @@ func (r *Root) BuildTar(w io.Writer, rel string, manifest transfercore.Manifest)
 		}
 		if c.sum() != e.SHA256 {
 			return transfercore.Fail(transfercore.ClassIntegrity, "source tree changed since the walk")
+		}
+		return nil
+	}
+	for _, item := range orderedTree(m) {
+		var err error
+		if item.dir {
+			err = writeDir(item.path)
+		} else {
+			err = writeFile(item.file)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if err := tw.Close(); err != nil {
