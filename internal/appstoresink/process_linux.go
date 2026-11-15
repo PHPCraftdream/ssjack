@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"hash"
 	"io"
 	"os"
@@ -124,7 +125,7 @@ func beginDelivery(c *Consumer, ctx context.Context, ref appstoreref.Ref, encode
 	binding := bindingDigest(s.binding)
 	copy(d.frame[24:56], binding[:])
 	binary.BigEndian.PutUint64(d.frame[56:64], length)
-	if checkPeer(command.Process.Pid, identity) != nil {
+	if waitPeer(operation, command.Process.Pid, identity) != nil {
 		return nil, ErrDenied
 	}
 	if err = writeExact(inputWrite, d.frame[:]); err != nil {
@@ -143,6 +144,27 @@ func beginDelivery(c *Consumer, ctx context.Context, ref appstoreref.Ref, encode
 	}
 	keep = true
 	return &Delivery{state: d}, nil
+}
+
+// peerSettle bounds how long a freshly started child may still show the parent's image.
+var peerSettle = 2 * time.Second
+
+// waitPeer retries the identity check across the window where Start has returned
+// but /proc still shows the forked parent image. It never relaxes the check: the
+// frame is written only once the exact frozen program is observed.
+func waitPeer(ctx context.Context, pid int, identity [2]uint64) error {
+	deadline := time.Now().Add(peerSettle)
+	delay := 50 * time.Microsecond
+	for {
+		err := checkPeer(pid, identity)
+		if err == nil || !errors.Is(err, ErrDenied) || ctx.Err() != nil || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		if delay < 5*time.Millisecond {
+			delay *= 2
+		}
+	}
 }
 
 func writeDelivery(delivery *Delivery, p []byte) (int, error) {
