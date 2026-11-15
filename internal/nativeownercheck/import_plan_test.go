@@ -3,12 +3,15 @@ package nativeownercheck
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ktav-lang/golang/pure"
 
@@ -42,9 +45,35 @@ func inspectPlanPreflight(t *testing.T, ctx context.Context, database, archive s
 	t.Logf("import preflight archive_read=%t archive_parse=%t parent_open=%t parent_sync=%t open_errno=%d sync_errno=%d", readErr == nil, parsed, openErr == nil, openErr == nil && syncErr == nil, uint64(openCode), uint64(syncCode))
 }
 
+const importPlanPassword = "synthetic native import plan password"
+
+// reportReloadFailure names what a failed standalone reload saw: a macOS run once
+// failed to unlock a database the coordinator had just written. It never prints
+// ciphertext or key material, only sizes, short digests and equalities.
+func reportReloadFailure(t *testing.T, path string, password, before []byte, loadErr error) {
+	t.Helper()
+	short := func(b []byte) string {
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:6])
+	}
+	now, readErr := os.ReadFile(path)
+	info, statErr := os.Stat(path)
+	modified := "unknown"
+	if statErr == nil {
+		modified = info.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+	retried, retryErr := vault.Load(path, password)
+	if retryErr == nil {
+		retried.Close()
+	}
+	t.Fatalf("standalone reload failed: err=%v before=%d/%s now=%d/%s unchanged=%t readErr=%v modified=%s passwordIntact=%t retry=%v",
+		loadErr, len(before), short(before), len(now), short(now), bytes.Equal(before, now), readErr, modified,
+		string(password) == importPlanPassword, retryErr)
+}
+
 func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	t.Helper()
-	password := []byte("synthetic native import plan password")
+	password := []byte(importPlanPassword)
 	defer clear(password)
 	path := filepath.Join(t.TempDir(), "plans.ktav")
 	v := vault.NewDirectory()
@@ -57,7 +86,9 @@ func verifyImportPlanAdmission(t *testing.T, ctx context.Context) {
 	encodedBefore, err := os.ReadFile(path)
 	must(t, err)
 	readonly, err := vault.Load(path, password)
-	must(t, err)
+	if err != nil {
+		reportReloadFailure(t, path, password, encodedBefore, err)
+	}
 	if err := vault.SaveUnlocked(ctx, path, readonly); !errors.Is(err, vault.ErrWriterRole) {
 		readonly.Close()
 		t.Fatal("standalone authenticated writer bypassed the live coordinator")
