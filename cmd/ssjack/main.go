@@ -13,19 +13,12 @@ import (
 	"time"
 
 	project "github.com/PHPCraftdream/ssjack"
-	"github.com/PHPCraftdream/ssjack/internal/application"
-	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
-	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
-	"github.com/PHPCraftdream/ssjack/internal/mcpstart"
-	"github.com/PHPCraftdream/ssjack/internal/remote"
-	"github.com/PHPCraftdream/ssjack/internal/transfer"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
-	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 var cliLoadAgentCredentials = loadAgentCredentials
@@ -199,195 +192,55 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		flags.Usage()
 		return 1, errors.New("specify a command; default profile is main")
 	}
-	switch command[0] {
-	case "owner":
-		return runOwnerCommand(ctx, flags, *vaultPath, *server, *account, command[1:])
-	case "text-adapter":
-		return runTextAdapterCommand(ctx, *vaultPath, profile, command[1:])
-	case "ssh":
-		if len(command) != 1 {
-			return 1, errors.New("usage: ssjack [-p PROFILE] ssh")
-		}
-		return runVaultShell(ctx, *vaultPath, profile)
-	case "vault":
-		return runVaultMaintenance(ctx, *vaultPath, profile, command[1:])
-	case "list":
-		if len(command) != 1 {
-			return 1, errors.New("usage: ssjack list")
-		}
-		return runVaultCommand(ctx, *vaultPath, command)
-	case "add":
-		args := []string{"add", profile}
-		if len(command) == 2 && command[1] == "--generate-key" {
-			args = append(args, "--generate-key")
-		} else if len(command) != 1 {
-			return 1, errors.New("usage: ssjack [-p PROFILE] add [--generate-key]")
-		}
-		return runVaultCommand(ctx, *vaultPath, args)
-	case "show", "edit", "remove":
-		if len(command) != 1 {
-			return 1, errors.New("select a profile with -p PROFILE before the command")
-		}
-		return runVaultCommand(ctx, *vaultPath, []string{command[0], profile})
-	case "key":
-		if len(command) == 2 && command[1] == "public" {
-			return runVaultCommand(ctx, *vaultPath, []string{"public", profile})
-		}
-		if len(command) == 3 && (command[1] == "import" || command[1] == "export") {
-			return runVaultCommand(ctx, *vaultPath, []string{command[1], profile, command[2]})
-		}
-		return 1, errors.New("usage: ssjack [-p PROFILE] key public | import FILE | export FILE")
-	case "policy":
-		return runPolicy(ctx, *vaultPath, profile, command[1:])
-	case "doctor":
-		if len(command) != 1 {
-			return 1, errors.New("usage: ssjack doctor")
-		}
-		return runSafetyCommand(ctx, *vaultPath, command)
-	case "check", "rotate":
-		if len(command) != 1 {
-			return 1, errors.New("select a profile with -p PROFILE before the command")
-		}
-		return runSafetyCommand(ctx, *vaultPath, []string{command[0], profile})
-	case "hostkey":
-		if len(command) == 2 && command[1] == "show" {
-			return runSafetyCommand(ctx, *vaultPath, []string{"hostkey", "show", profile})
-		}
-		if len(command) == 3 && command[1] == "replace" {
-			return runSafetyCommand(ctx, *vaultPath, []string{"hostkey", "replace", profile, command[2]})
-		}
-		return 1, errors.New("usage: ssjack [-p PROFILE] hostkey show | replace FILE")
-	case "run":
+	if command[0] == "run" {
 		if len(command) < 2 {
 			return 1, errors.New("usage: ssjack [-p PROFILE] run HARNESS [ARGUMENTS...]")
 		}
 		command = command[1:]
+	} else if rc, handled, rerr := dispatchStartupCommand(ctx, flags, *vaultPath, *server, *account, profile, command); handled {
+		return rc, rerr
 	}
 	if *modeFlag != string(broker.ModeFull) && *modeFlag != string(broker.ModeDeclarative) {
 		return 1, errors.New("mode must be full or declarative")
 	}
-	var metadata *enrollment.Metadata
-	var policy *enrollment.Policy
-	var identity *enrollment.Snapshot
-	if metadataSupplied {
-		if *metadataPath == "" {
-			return 1, errors.New("--enrollment-metadata requires a non-empty absolute path")
-		}
-		if *modeFlag != string(broker.ModeDeclarative) {
-			return 1, errors.New("--enrollment-metadata requires --mode declarative")
-		}
-		if !filepath.IsAbs(*metadataPath) {
-			return 1, errors.New("--enrollment-metadata path must be absolute")
-		}
-		loaded, err := enrollment.Load(*metadataPath)
-		if err != nil {
-			return 1, err
-		}
-		metadata = &loaded
-		if policySupplied {
-			if *policyPath == "" || !filepath.IsAbs(*policyPath) {
-				return 1, errors.New("--policy-snapshot requires a non-empty absolute path")
-			}
-			installed, err := enrollment.LoadPolicy(*policyPath, loaded)
-			if err != nil {
-				return 1, err
-			}
-			policy = &installed
-		}
-		if identitySupplied {
-			if *identityPath == "" || !filepath.IsAbs(*identityPath) {
-				return 1, errors.New("--enrollment-identity requires a non-empty absolute path")
-			}
-			if policy == nil {
-				return 1, errors.New("--enrollment-identity requires --policy-snapshot")
-			}
-			loaded, err := enrollment.LoadSnapshot(*identityPath, loaded, *policy)
-			if err != nil {
-				return 1, err
-			}
-			identity = &loaded
-		}
-	} else if policySupplied {
-		return 1, errors.New("--policy-snapshot requires --enrollment-metadata")
-	} else if identitySupplied {
-		return 1, errors.New("--enrollment-identity requires --enrollment-metadata")
+	metadata, policy, identity, err := loadEnrollment(enrollmentInputs{
+		mode:             *modeFlag,
+		metadataPath:     *metadataPath,
+		policyPath:       *policyPath,
+		identityPath:     *identityPath,
+		metadataSupplied: metadataSupplied,
+		policySupplied:   policySupplied,
+		identitySupplied: identitySupplied,
+	})
+	if err != nil {
+		return 1, err
 	}
 	if *ttl <= 0 || *ttl > 10*time.Minute {
 		return 1, errors.New("bootstrap timeout must be greater than zero and at most 10 minutes")
 	}
-	var err error
-	var applicationOptions *application.Options
-	var sshSetup agentSSHSetup
-	var guard remote.GuardProvider
-	var streamRunner remote.StreamRunner
-	var targets []string
+	var handler broker.Handler
 	var remoteMCPDescriptor string
 	var bootstrapOutput launch.OutputSetup
-	var transfers *transferOptions
 	if *modeFlag == string(broker.ModeFull) {
-		applicationOptions, err = registeredClawwright(*clawwrightDirectory, *clawwrightEntry, *clawwrightContainer, *clawwrightUser, profile, nil)
+		session, cleanup, err := startFullMode(ctx, fullModeOptions{
+			vaultPath:           *vaultPath,
+			profile:             profile,
+			clawwrightDirectory: *clawwrightDirectory,
+			clawwrightEntry:     *clawwrightEntry,
+			clawwrightContainer: *clawwrightContainer,
+			clawwrightUser:      *clawwrightUser,
+			transferRoots:       transferRootSpecs,
+			transferMaxBytes:    *transferMaxBytes,
+			transferMaxEntries:  *transferMaxEntries,
+			noOutputFilter:      *noOutputFilter,
+			named:               named,
+			ttl:                 *ttl,
+		})
+		defer cleanup(&code, &result)
 		if err != nil {
 			return 1, err
 		}
-		transfers, err = prepareTransfer(*vaultPath, transferRootSpecs, *transferMaxBytes, *transferMaxEntries)
-		if err != nil {
-			return 1, err
-		}
-		credentials, err := cliLoadAgentCredentials(ctx, *vaultPath, profile)
-		if credentials != nil {
-			defer finishAgentCredentials(credentials, &code, &result)
-		}
-		if err != nil {
-			return 1, err
-		}
-		if credentials == nil {
-			return 1, errors.New("credential session is unavailable")
-		}
-		sshSetup, streamRunner, targets, guard = credentials.sshSetup(), credentials.stream, credentials.targets, credentials.guard
-		guard, err = selectOutputGuard(guard, *noOutputFilter, os.Stderr)
-		if err != nil {
-			return 1, err
-		}
-		guard, remoteMCPDescriptor, err = prepareRemoteMCPChannels(ctx, credentials, guard, *ttl)
-		if err != nil {
-			return 1, errors.New("remote MCP channel setup failed")
-		}
-		guard, bootstrapOutput = prepareMCPBootstrapOutput(ctx, guard, credentials.mcpBridge)
-		if named {
-			if err := bindNamedApplication(applicationOptions, targets); err != nil {
-				return 1, err
-			}
-		}
-	}
-	var handler broker.Handler
-	var manager *remote.Manager
-	var applicationManager *application.Manager
-	var transferManager *transfer.Manager
-	if *modeFlag == string(broker.ModeFull) {
-		manager = sshSetup.manager(ctx, targets, guard, *noOutputFilter)
-		defer manager.Close()
-		if applicationOptions != nil {
-			applicationOptions.Runner, applicationOptions.Guard = streamRunner, guard
-		}
-		applicationManager, err = application.New(ctx, applicationOptions)
-		if err != nil {
-			return 1, err
-		}
-		defer applicationManager.Close()
-		transferManager, err = newTransferManager(transfers, targets, streamRunner)
-		if err != nil {
-			return 1, err
-		}
-		defer transferManager.Close()
-		handler = func(ctx context.Context, request wire.Request) wire.Reply {
-			if reply, handled := applicationManager.Handle(ctx, request); handled {
-				return reply
-			}
-			if reply, handled := transferManager.Handle(ctx, request); handled {
-				return reply
-			}
-			return manager.Handle(ctx, request)
-		}
+		handler, remoteMCPDescriptor, bootstrapOutput = session.handler, session.remoteMCP, session.prepareOutput
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -403,58 +256,4 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		fmt.Fprintln(os.Stderr, "Starting declarative session. MCP access will attach once to this session.")
 	}
 	return cliLaunchRun(ctx, launch.Options{Root: root, Executable: executable, Command: command, BootstrapTTL: *ttl, Handler: handler, Mode: broker.Mode(*modeFlag), Metadata: metadata, Policy: policy, Identity: identity, RemoteMCP: remoteMCPDescriptor, PrepareOutput: bootstrapOutput, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
-}
-
-func runHook(args []string) (int, error) {
-	if len(args) != 1 {
-		return 1, errors.New("usage: ssjack hook pre|post|failure")
-	}
-	input, err := io.ReadAll(io.LimitReader(os.Stdin, hooks.MaxInput+1))
-	if err != nil {
-		return 1, errors.New("failed to read hook event")
-	}
-	output, err := hooks.Run(args[0], input)
-	if err != nil {
-		return 1, err
-	}
-	if _, err := fmt.Fprintln(os.Stdout, string(output)); err != nil {
-		return 1, err
-	}
-	return 0, nil
-}
-
-func runMCP(ctx context.Context) (int, error) {
-	bootstrap, descriptors, err := mcpstart.ReadEnvironment()
-	if err != nil {
-		return 1, err
-	}
-	defer func() { bootstrap.Token = "" }()
-	client, err := broker.ConnectBootstrap(ctx, bootstrap)
-	bootstrap.Token = ""
-	if err != nil {
-		return 1, errors.New("MCP session attachment failed")
-	}
-	defer client.Close()
-	descriptor, err := broker.Describe(ctx, client)
-	if err != nil {
-		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
-	}
-	server, err := bridge.NewRegistryForDescriptor(client, descriptor)
-	if err != nil {
-		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
-	}
-	connCtx, cancel := context.WithCancel(ctx)
-	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
-	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
-	cancel()
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), remoteMCPRegistrationBudget)
-	cleanupErr := registration.Close(cleanupCtx)
-	cleanupCancel()
-	if cleanupErr != nil {
-		return 1, errors.New("MCP bridge cleanup did not complete")
-	}
-	if runErr != nil {
-		return 1, errors.New("MCP bridge session failed")
-	}
-	return 0, nil
 }
