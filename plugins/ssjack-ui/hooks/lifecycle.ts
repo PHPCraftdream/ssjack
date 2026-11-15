@@ -11,18 +11,20 @@ export const logPath = '.claude/ssjack/lifecycle.log'
 export const maxLogBytes = 2 * 1024 * 1024
 export const tailChars = 64 * 1024
 
-const tokenPattern = /^(?:[0-9A-Za-z_.:-]+T[0-9A-Za-z_.:+-]+) (\w+=\S+)$/
-const keyValuePattern = /^([a-z]+)=([A-Za-z0-9_.:-]{1,64})$/
+const tokenPattern = /^(?:[0-9A-Za-z_.:-]+T[0-9A-Za-z_.:+-]+) (\w+=\S+(?: \w+=\S+)*)$/
+const keyValuePattern = /^([a-z][a-z0-9_]*)=([A-Za-z0-9_.:-]{1,64})$/
 
 // Validate the strict line shape and return its key=value fields, or undefined.
 function parseFields(line: string): Map<string, string> | undefined {
-  const match = tokenPattern.exec(line)
-  if (!match) return undefined
+  const body = tokenPattern.exec(line)?.[1]
+  if (body === undefined) return undefined
   const fields = new Map<string, string>()
-  for (const token of match[1].split(' ')) {
+  for (const token of body.split(' ')) {
     const pair = keyValuePattern.exec(token)
-    if (!pair) return undefined
-    fields.set(pair[1], pair[2])
+    const key = pair?.[1]
+    const value = pair?.[2]
+    if (key === undefined || value === undefined) return undefined
+    fields.set(key, value)
   }
   return fields.size > 0 ? fields : undefined
 }
@@ -37,7 +39,9 @@ export function parseSession(line: string): { sid: string } | undefined {
 export function parseLine(line: string): Drop | undefined {
   const fields = parseFields(line)
   if (!fields) return undefined
-  const role = fields.get('role')
+  // The bridge process logs itself as role=mcp; the frame calls it the bridge.
+  const written = fields.get('role')
+  const role = written === 'mcp' ? 'bridge' : written
   const event = fields.get('event')
   if (!event || (role !== 'keeper' && role !== 'bridge')) return undefined
   if (role === 'keeper' && event === 'connection-end') {
@@ -50,7 +54,9 @@ export function parseLine(line: string): Drop | undefined {
     return reason ? { role, event, reason } : undefined
   }
   if (role === 'bridge' && event === 'exit') {
-    const reason = fields.get('context') ?? fields.get('stage')
+    // The real line always carries context; "none" says nothing, so name the stage then.
+    const context = fields.get('context')
+    const reason = context && context !== 'none' ? context : fields.get('stage')
     return reason ? { role, event, reason } : undefined
   }
   return undefined

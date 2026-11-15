@@ -82,7 +82,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="red" paddingX={1}>
         {frameLines(drop).map((line, index) => (
-          <Text key={index} bold={index === 0} color={index === 0 ? 'red' : undefined}>{line}</Text>
+          <Text key={String(index)} bold={index === 0} color={index === 0 ? 'red' : undefined}>{line}</Text>
         ))}
       </Box>
     )

@@ -84,3 +84,21 @@ test('frameLines render the recovery text without echoing identifiers', () => {
   expect(output).toContain('single-use')
   for (const secret of ['4242', '1a2b3c4d', stamp]) expect(output).not.toContain(secret)
 })
+
+// Lines copied from a real lifecycle.log (all fields, in the order the programs write them).
+test('real log lines: the incident of a closed bridge stdio shows the keeper and the bridge reason', () => {
+  const real = [
+    '2026-11-15T16:05:23.127Z pid=97532 role=keeper sid=081dd328 event=listen ttl_ms=120000',
+    '2026-11-15T16:05:26.685Z pid=97532 role=keeper sid=081dd328 event=attached',
+    '2026-11-15T16:05:26.689Z pid=97532 role=keeper sid=081dd328 event=connection-end attached=true stage=request-read cause=eof requests=1 ms=5',
+    '2026-11-15T16:05:26.735Z pid=135676 role=mcp sid=081dd328 event=exit code=1 stage=attach-dial context=none',
+  ]
+  expect(dropFromLog(real.slice(0, 2).join('\n') + '\n')).toBeUndefined()
+  expect(dropFromLog(real.slice(0, 3).join('\n') + '\n')).toEqual({ role: 'keeper', event: 'connection-end', reason: 'eof' })
+  expect(parseLine(real[2]!)).toEqual({ role: 'keeper', event: 'connection-end', reason: 'eof' })
+  expect(parseLine(real[3]!)).toEqual({ role: 'bridge', event: 'exit', reason: 'attach-dial' })
+})
+
+test('a bridge exit with context=none names its stage', () => {
+  expect(parseLine(bridgeLine('event=exit code=1 stage=attach-dial context=none'))).toEqual({ role: 'bridge', event: 'exit', reason: 'attach-dial' })
+})
