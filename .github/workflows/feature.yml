@@ -314,6 +314,29 @@ jobs:
       - name: Check exact release dependency and notice policy (factual source consistency only)
         run: python3 scripts/check_licenses.py
 
+  plugin-check:
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
+    name: Claude Code plugin validate and test
+    runs-on: ubuntu-latest
+    env:
+      # Exact pin: the check runs the vendor binary, so an update is a reviewed change.
+      CLAUDE_CODE_VERSION: "2.1.325"
+      DISABLE_AUTOUPDATER: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install the pinned Claude Code CLI
+        run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - name: Verify the installed CLI version
+        run: test "$(claude --version | cut -d' ' -f1)" = "$CLAUDE_CODE_VERSION"
+      - name: Validate the ssjack-ui plugin manifest and hooks
+        run: claude plugin validate plugins/ssjack-ui
+      - name: Run the ssjack-ui plugin tests
+        run: claude plugin test plugins/ssjack-ui
+
   text-pair:
     if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
     uses: ./.github/workflows/text-pair.yml
