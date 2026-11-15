@@ -109,6 +109,12 @@ func createPrivateDir(path string) error {
 	return nil
 }
 
+// setPublishedRootMode gives a staged directory the mode its subdirectories
+// are created with, before it is published by rename.
+func setPublishedRootMode(path string) error {
+	return os.Chmod(path, 0755)
+}
+
 // syncDirectory flushes a directory entry list.
 func syncDirectory(path string) error {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)

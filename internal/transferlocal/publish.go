@@ -78,6 +78,11 @@ func (s *Staging) publishDir(destAbs string) error {
 	if dinfo.reparse {
 		return refusedPath("destination is a symlink or reparse point")
 	}
+	// The staging root is private until now; the published tree gets the
+	// same mode as its subdirectories.
+	if err := setPublishedRootMode(s.path); err != nil {
+		return transfercore.Fail(transfercore.ClassInternal, "destination could not be published")
+	}
 	if !s.overwrite || !dinfo.exist {
 		err := renameNoReplace(s.path, destAbs)
 		switch {

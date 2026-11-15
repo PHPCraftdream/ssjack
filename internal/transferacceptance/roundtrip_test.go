@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 )
@@ -47,6 +48,31 @@ func scenarioRoundTripFile(t *testing.T) {
 	assertNoLeaks(t, c, source)
 }
 
+func setTime(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertTime(t *testing.T, path string, want time.Time) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil || !info.ModTime().Equal(want) {
+		t.Fatalf("modification time of %s is %v, want %v (%v)", filepath.Base(path), info.ModTime(), want, err)
+	}
+}
+
+// assertSameMode requires a published root to look like its subdirectories.
+func assertSameMode(t *testing.T, root, sub string) {
+	t.Helper()
+	rootInfo, rootErr := os.Stat(root)
+	subInfo, subErr := os.Stat(sub)
+	if rootErr != nil || subErr != nil || rootInfo.Mode().Perm() != subInfo.Mode().Perm() {
+		t.Fatalf("published root mode %v differs from its subdirectory mode %v (%v %v)", rootInfo.Mode().Perm(), subInfo.Mode().Perm(), rootErr, subErr)
+	}
+}
+
 // scenarioRoundTripDirectory copies a nested tree up and back and requires
 // equal trees, equal counts and an equal manifest digest.
 func scenarioRoundTripDirectory(t *testing.T) {
@@ -58,6 +84,10 @@ func scenarioRoundTripDirectory(t *testing.T) {
 		"tree/data/blob.bin": binary,
 		"tree/sub/inner.txt": []byte("nested"),
 	}, []string{"tree/data", "tree/sub", "tree/sub/deeper"})
+	fileTime := time.Date(2021, 3, 4, 5, 6, 7, 0, time.UTC)
+	dirTime := time.Date(2019, 8, 9, 10, 11, 12, 0, time.UTC)
+	setTime(t, filepath.Join(s.rootDir, "tree", "sub", "inner.txt"), fileTime)
+	setTime(t, filepath.Join(s.rootDir, "tree", "sub"), dirTime)
 	mkdirAll(t, filepath.Join(s.sandbox, "out"))
 	remote := s.sandbox + "/out/tree"
 	out := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
@@ -67,6 +97,11 @@ func scenarioRoundTripDirectory(t *testing.T) {
 		t.Fatalf("upload status = %+v", out)
 	}
 	CompareTrees(t, filepath.Join(s.rootDir, "tree"), remote)
+	// Modification times survive the upload, and the published root has the
+	// mode its subdirectories got from tar instead of the private staging mode.
+	assertTime(t, filepath.Join(remote, "sub", "inner.txt"), fileTime)
+	assertTime(t, filepath.Join(remote, "sub"), dirTime)
+	assertSameMode(t, remote, filepath.Join(remote, "sub"))
 	down := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
 		"target": targetName, "remote": remote, "local": "came-back",
 	}))
@@ -74,6 +109,9 @@ func scenarioRoundTripDirectory(t *testing.T) {
 		t.Fatalf("download status = %+v", down)
 	}
 	CompareTrees(t, filepath.Join(s.rootDir, "tree"), filepath.Join(s.rootDir, "came-back"))
+	assertTime(t, filepath.Join(s.rootDir, "came-back", "sub", "inner.txt"), fileTime)
+	assertTime(t, filepath.Join(s.rootDir, "came-back", "sub"), dirTime)
+	assertSameMode(t, filepath.Join(s.rootDir, "came-back"), filepath.Join(s.rootDir, "came-back", "sub"))
 	AssertNoStaging(t, s.rootDir)
 	AssertNoStaging(t, s.sandbox)
 	assertNoLeaks(t, c, binary)

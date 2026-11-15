@@ -57,7 +57,7 @@ looks like:
 `sid` is a short digest of the session identifier, enough to match keeper and
 bridge lines of one launch. Events and their fields:
 
-| Role | Event | Fields |
+| Role (`role=` in the line; the bridge process logs as `mcp`) | Event | Fields |
 | --- | --- | --- |
 | keeper | `listen` | `ttl_ms` |
 | keeper | `harness-start`, `harness-exit` | `pid`; `code`, `context` |
@@ -66,11 +66,11 @@ bridge lines of one launch. Events and their fields:
 | keeper | `request` | `op`, `ok`, `ms` |
 | keeper | `connection-end` | `attached`, `stage`, `cause`, `requests`, `ms` |
 | keeper | `shutdown` | `reason`: `attached-connection-ended`, `bootstrap-ttl-expired`, `parent-cancelled`, `closed` |
-| bridge | `start` | `ppid` |
-| bridge | `attached`, `serving` | none |
-| bridge | `call-failed` | `op`, `stage`, `cause` |
-| bridge | `stdio-end` | `cause` |
-| bridge | `exit` | `code`, `stage`, `context` |
+| mcp | `start` | `ppid` |
+| mcp | `attached`, `serving` | none |
+| mcp | `call-failed` | `op`, `stage`, `cause` |
+| mcp | `stdio-end` | `cause` |
+| mcp | `exit` | `code`, `stage`, `context` |
 
 The log never holds a token, the session identifier, an endpoint, a password,
 request or reply data, a path or error text. Every value is reduced to

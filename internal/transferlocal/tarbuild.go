@@ -41,9 +41,10 @@ func (r *Root) BuildTar(w io.Writer, rel string, manifest transfercore.Manifest)
 			return transfercore.Fail(transfercore.ClassIntegrity, "source tree changed since the walk")
 		}
 		hdr := &tar.Header{
-			Name:   d + "/",
-			Mode:   0755,
-			Format: tar.FormatPAX,
+			Name:    d + "/",
+			Mode:    0755,
+			ModTime: entryModTime(filepath.Join(srcBase, filepath.FromSlash(d))),
+			Format:  tar.FormatPAX,
 		}
 		if err := writeHeader(hdr); err != nil {
 			return err
@@ -73,10 +74,11 @@ func (r *Root) BuildTar(w io.Writer, rel string, manifest transfercore.Manifest)
 			mode = 0755
 		}
 		hdr := &tar.Header{
-			Name:   e.Path,
-			Mode:   mode,
-			Size:   e.Size,
-			Format: tar.FormatPAX,
+			Name:    e.Path,
+			Mode:    mode,
+			Size:    e.Size,
+			ModTime: entryModTime(entrySrc),
+			Format:  tar.FormatPAX,
 		}
 		if err := writeHeader(hdr); err != nil {
 			_ = file.Close()

@@ -39,6 +39,7 @@ func ExtractTar(r io.Reader, staging *Staging, want *transfercore.Manifest, limi
 	folded := make(map[string]struct{})
 	dirsSet := make(map[string]struct{})
 	var computed transfercore.Manifest
+	var dirTimes []dirTime
 	entries := 0
 	var totalBytes int64
 	for {
@@ -105,6 +106,7 @@ func ExtractTar(r io.Reader, staging *Staging, want *transfercore.Manifest, limi
 			}
 			recordDirs(&computed, dirsSet, created)
 			recordDirs(&computed, dirsSet, []string{name})
+			dirTimes = append(dirTimes, dirTime{rel: name, modTime: hdr.ModTime})
 			continue
 		}
 		parentDir, _ := splitRelName(name)
@@ -113,12 +115,13 @@ func ExtractTar(r io.Reader, staging *Staging, want *transfercore.Manifest, limi
 			return transfercore.Manifest{}, err
 		}
 		recordDirs(&computed, dirsSet, created)
-		n, digest, err := extractFileEntry(root, name, tr, hdr.Size, hdr.Mode&0100 != 0, &totalBytes, limits)
+		n, digest, err := extractFileEntry(root, name, tr, hdr.Size, hdr.Mode&0100 != 0, hdr.ModTime, &totalBytes, limits)
 		if err != nil {
 			return transfercore.Manifest{}, err
 		}
 		computed.Files = append(computed.Files, transfercore.Entry{Path: name, Size: n, SHA256: digest})
 	}
+	applyDirTimes(root, dirTimes)
 	// Publish re-checks the staging state; a failed directory sync is
 	// best-effort here.
 	_ = syncDirectory(root)

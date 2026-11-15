@@ -66,7 +66,7 @@ Upload: stream the local file through a counting hasher into `cat > staging` (re
 
 ## Directories
 
-Entries are regular files and directories only. Symlinks, hard links, devices, FIFOs, sockets and names containing control characters are refused in v1; refusal happens in preflight (before bytes move) and is re-checked while streaming. Modes are normalized as for files; ownership, timestamps and xattrs are not preserved.
+Entries are regular files and directories only. Symlinks, hard links, devices, FIFOs, sockets and names containing control characters are refused in v1; refusal happens in preflight (before bytes move) and is re-checked while streaming. Modes are normalized as for files, and the published root directory gets the mode its subdirectories get (`0755`, minus the remote umask on a remote target) instead of the private staging mode. Files and directories keep their modification time in whole seconds in both directions; it is restored best effort after verification, a time before 1980 or after 2100 is ignored, and a failure to set it never fails the transfer. A single-file transfer carries no time (the copy is dated when it is written). Ownership and xattrs are not preserved.
 
 Upload: walk the local tree under the root, build a manifest (relative path, size, SHA-256, sorted, bounded), stream `tar` produced by Go `archive/tar` into `tar -x --no-same-owner --no-same-permissions` in the staging directory, stream the manifest to a second command that runs `sha256sum -c`, and require that the remote file and directory counts equal the manifest and that no extra entry or non-regular type exists. Then publish.
 
@@ -101,7 +101,7 @@ Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 
 
 ## Non-goals
 
-Move/delete/sync/delta/resume; symlink or hard-link replication; ownership, timestamp and xattr preservation; remote-to-remote copy; Windows remote targets; SFTP or rsync; a declarative or narrower authorization surface; scheduling; any change to key custody or to the output guard.
+Move/delete/sync/delta/resume; symlink or hard-link replication; ownership and xattr preservation, and timestamps of single files; remote-to-remote copy; Windows remote targets; SFTP or rsync; a declarative or narrower authorization surface; scheduling; any change to key custody or to the output guard.
 
 ## Implementation order
 

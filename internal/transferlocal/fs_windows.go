@@ -215,6 +215,10 @@ func privateDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	return windows.SecurityDescriptorFromString("O:" + sid + "D:P(A;;FA;;;" + sid + ")")
 }
 
+// setPublishedRootMode is a no-op on Windows: modes do not exist there, and
+// widening the private ACL of the staging root is a separate decision.
+func setPublishedRootMode(string) error { return nil }
+
 // syncDirectory is a no-op on windows: directory entry lists cannot be
 // flushed portably, MOVEFILE_WRITE_THROUGH provides ordering instead.
 func syncDirectory(path string) error {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 )
@@ -58,7 +59,7 @@ func ensureDirChain(root, relDir string) ([]string, error) {
 // extractFileEntry creates one regular file exclusively inside the staged
 // tree and streams exactly size bytes from tr into it, hashing and enforcing
 // the byte limit per chunk.
-func extractFileEntry(root, name string, tr *tar.Reader, size int64, executable bool, totalBytes *int64, limits transfercore.Limits) (int64, [32]byte, error) {
+func extractFileEntry(root, name string, tr *tar.Reader, size int64, executable bool, modTime time.Time, totalBytes *int64, limits transfercore.Limits) (int64, [32]byte, error) {
 	mode := os.FileMode(0644)
 	if executable {
 		mode = 0755
@@ -102,5 +103,6 @@ func extractFileEntry(root, name string, tr *tar.Reader, size int64, executable 
 	if err := file.Close(); err != nil {
 		return 0, [32]byte{}, transfercore.Fail(transfercore.ClassInternal, "archive entry could not be written")
 	}
+	applyModTime(joinOSPath(root, name), modTime)
 	return c.count(), c.sum(), nil
 }

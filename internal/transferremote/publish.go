@@ -52,6 +52,9 @@ mv -T -f "$src" "$dst" || exit 24
 const publishDirTemplate = `set -eu
 src=%s
 dst=%s
+# The staging root is private until now; give the published tree the mode
+# its subdirectories get from tar (0755 under the remote umask).
+chmod "$(printf '%%o' "$((0755 & ~$(umask)))")" "$src" || exit 24
 if [ -L "$dst" ] || [ -e "$dst" ]; then
 	exit 22
 fi
@@ -74,6 +77,9 @@ const publishDirOverwriteTemplate = `set -eu
 src=%s
 dst=%s
 old=%s
+# The staging root is private until now; give the published tree the mode
+# its subdirectories get from tar (0755 under the remote umask).
+chmod "$(printf '%%o' "$((0755 & ~$(umask)))")" "$src" || exit 24
 if [ -L "$dst" ]; then
 	exit 21
 fi
