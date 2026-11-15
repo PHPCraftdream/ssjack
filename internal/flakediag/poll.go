@@ -10,10 +10,11 @@ import (
 // condition has been met. desc may be empty; it is only rendered as evidence.
 type Probe func() (desc string, done bool)
 
-// WaitFor polls probe every 5ms, the interval of the helpers it replaced until done or timeout. It never fails the
-// test on timeout; the caller decides. Failure-only evidence (what, timeout,
-// elapsed, attempts, last description, goroutine dump) is registered via
-// t.Cleanup and printed only if the test subsequently fails.
+// WaitFor polls probe every 5ms (the interval of the helpers it replaced) until
+// done or timeout. It never fails the test on timeout; the caller decides.
+// Failure-only evidence (what, timeout, elapsed, attempts, last description,
+// goroutine dump) is registered via t.Cleanup and printed only if the test
+// subsequently fails.
 func WaitFor(t *testing.T, what string, timeout time.Duration, probe Probe) (lastDesc string) {
 	done, lastDesc, _ := waitForAll(t, what, timeout, func() (string, bool, error) {
 		desc, ok := probe()
