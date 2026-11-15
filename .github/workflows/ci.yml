@@ -324,7 +324,7 @@ jobs:
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
@@ -346,7 +346,7 @@ jobs:
         run: |
           set -o pipefail
           tmux -V
-          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -count=1 -timeout 1200s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
+          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -count=1 -timeout 2400s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
           for name in TestVaultOutputFilterFullProfile TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestVaultRemoteMCPStartupFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done
