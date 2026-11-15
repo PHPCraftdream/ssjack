@@ -127,7 +127,9 @@ The keeper authenticates with the new key and removes only the bare old public
 key entry from the selected account's regular `authorized_keys`. It refuses
 option-bearing entries, symlinks and a missing new key, keeps the previous file
 as `authorized_keys.ssjack-retired`, and is safe to repeat. Every other client
-that still uses the old key loses access, so verify them first. Archiving
+that still uses the old key loses access, so verify them first. The command
+refuses while another saved profile of the same remote account still holds the
+old key. Archiving
 discards the old public key from the journal, so retire before you archive.
 
 A completed journal blocks another rotation until the owner explicitly archives

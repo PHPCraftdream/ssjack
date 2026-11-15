@@ -19,6 +19,7 @@ type rotationRecorder struct {
 	rotationCalls []string
 	archives      int
 	prepares      int
+	retires       int
 }
 type rotationlessManager struct{ manager }
 
@@ -66,6 +67,17 @@ func (r *rotationRecorder) DecideRotation(_ context.Context, revision, planID ui
 			return ownerrotation.Plan{}, errors.New("cancel refused")
 		}
 		info.Phase, info.OldPublic, info.NewPublic = vault.RotationCancelled, nil, nil
+	case "abandon":
+		if !vault.RotationAwaitsVerification(info.Phase) {
+			return ownerrotation.Plan{}, errors.New("abandon refused")
+		}
+		info.Phase, info.OldPublic, info.NewPublic = vault.RotationCancelled, nil, nil
+	case "retire":
+		if info.Phase != vault.RotationComplete {
+			return ownerrotation.Plan{}, errors.New("retire refused")
+		}
+		r.retires++
+		return ownerrotation.Plan{Info: *info, Revision: revision, Digest: [32]byte{1}}, nil
 	case "archive":
 		if info.Phase != vault.RotationComplete {
 			return ownerrotation.Plan{}, errors.New("archive refused")

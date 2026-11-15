@@ -249,6 +249,11 @@ func (s *Session) retirementMaterialAt(expected, planID uint64) (Target, []byte,
 	if !exists || !rotationScopeEqual(current, j.Original) || !bytes.Equal(current.PrivateKey, j.NewPrivate) {
 		return Target{}, nil, nil, errors.New("completed rotation no longer matches the account credential")
 	}
+	for name, other := range s.state.Targets {
+		if name != j.Profile && other.Address == current.Address && other.User == current.User && bytes.Equal(other.PrivateKey, j.Original.PrivateKey) {
+			return Target{}, nil, nil, errors.New("another saved profile still uses the old key for this remote account; rotate or change it before retiring the key")
+		}
+	}
 	return ownTarget(current), append([]byte(nil), j.OldPublic...), append([]byte(nil), j.NewPublic...), nil
 }
 
