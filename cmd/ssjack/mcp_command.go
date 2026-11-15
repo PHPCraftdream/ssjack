@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
+	"github.com/PHPCraftdream/ssjack/internal/lifelog"
 	"github.com/PHPCraftdream/ssjack/internal/mcpstart"
 )
 
@@ -32,37 +34,60 @@ func runHook(args []string) (int, error) {
 }
 
 func runMCP(ctx context.Context) (int, error) {
+	// Read before the bootstrap environment is consumed; the log holds no secret.
+	life := lifelog.New(os.Getenv(lifelog.Env), "mcp", os.Getenv(broker.EnvSession))
+	life.Event("start", "ppid", strconv.Itoa(os.Getppid()))
+	code, stage, err := serveMCP(ctx, life)
+	life.Event("exit", "code", strconv.Itoa(code), "stage", stage, "context", lifelog.Cause(ctx.Err()))
+	return code, err
+}
+
+// serveMCP also names the stage it stopped at, for the lifecycle log only.
+func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 	bootstrap, descriptors, err := mcpstart.ReadEnvironment()
 	if err != nil {
-		return 1, err
+		return 1, "bootstrap-environment", err
 	}
 	defer func() { bootstrap.Token = "" }()
 	client, err := broker.ConnectBootstrap(ctx, bootstrap)
 	bootstrap.Token = ""
 	if err != nil {
-		return 1, errors.New("MCP session attachment failed")
+		stage := "attach-parameters"
+		switch {
+		case errors.Is(err, broker.ErrDial):
+			stage = "attach-dial"
+		case errors.Is(err, broker.ErrAuth):
+			stage = "attach-send"
+		case errors.Is(err, broker.ErrRejected):
+			stage = "attach-rejected"
+		}
+		return 1, stage, errors.New("MCP session attachment failed")
 	}
 	defer client.Close()
+	client.SetTrace(life.Event)
+	life.Event("attached")
 	descriptor, err := broker.Describe(ctx, client)
 	if err != nil {
-		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
+		return 1, "describe", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
 	server, err := bridge.NewRegistryForDescriptor(client, descriptor)
 	if err != nil {
-		return 1, errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
+		return 1, "registry", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
 	connCtx, cancel := context.WithCancel(ctx)
 	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
+	life.Event("serving")
 	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
+	life.Event("stdio-end", "cause", lifelog.Cause(runErr))
 	cancel()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), remoteMCPRegistrationBudget)
 	cleanupErr := registration.Close(cleanupCtx)
 	cleanupCancel()
 	if cleanupErr != nil {
-		return 1, errors.New("MCP bridge cleanup did not complete")
+		return 1, "cleanup", errors.New("MCP bridge cleanup did not complete")
 	}
 	if runErr != nil {
-		return 1, errors.New("MCP bridge session failed")
+		return 1, "stdio", errors.New("MCP bridge session failed")
 	}
-	return 0, nil
+	return 0, "stdio-closed", nil
 }

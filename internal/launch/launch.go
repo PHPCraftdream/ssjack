@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/hooks"
+	"github.com/PHPCraftdream/ssjack/internal/lifelog"
 	"github.com/PHPCraftdream/ssjack/internal/mcpchannel"
 	"github.com/PHPCraftdream/ssjack/internal/mcpjson"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
@@ -53,7 +55,7 @@ func Environment(base []string, bootstrap broker.Bootstrap, executable string) [
 		}
 		switch {
 		case strings.EqualFold(name, broker.EnvToken), strings.EqualFold(name, broker.EnvFile),
-			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin), strings.EqualFold(name, mcpchannel.Env),
+			strings.EqualFold(name, broker.EnvSession), strings.EqualFold(name, broker.EnvEndpoint), strings.EqualFold(name, broker.EnvPin), strings.EqualFold(name, mcpchannel.Env), strings.EqualFold(name, lifelog.Env),
 			strings.EqualFold(name, "SSJACK_APP_ENDPOINT"), strings.EqualFold(name, "SSJACK_APP_TOKEN"), strings.EqualFold(name, "SSJACK_APP_CERTIFICATE_SHA256"), strings.EqualFold(name, "SSJACK_VAULT_PASSWORD"):
 			continue
 		case strings.EqualFold(name, "PATH"):
@@ -233,7 +235,9 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	if err := hooks.RemoveDisplay(root); err != nil {
 		return 1, err
 	}
-	keeper, err := broker.Listen(ctx, session, envToken, opts.BootstrapTTL, dispatch)
+	// Secret-free lifecycle events of this keeper and of the bridge it launches.
+	life := lifelog.New(lifelog.Path(root), "keeper", session)
+	keeper, err := broker.ListenTraced(ctx, session, envToken, opts.BootstrapTTL, dispatch, life.Event)
 	if err != nil {
 		return 1, err
 	}
@@ -245,12 +249,14 @@ func Run(ctx context.Context, opts Options) (int, error) {
 	}
 	command.Dir = root
 	command.Env = uiplugin.Environment(Environment(os.Environ(), bootstrap, opts.Executable), pluginDirectory)
-	command.Env = mcpchannel.Environment(command.Env, opts.RemoteMCP)
+	command.Env = append(mcpchannel.Environment(command.Env, opts.RemoteMCP), lifelog.Env+"="+lifelog.Path(root))
 	command.Stdin, command.Stdout, command.Stderr = opts.Stdin, opts.Stdout, opts.Stderr
 	if err := command.Start(); err != nil {
 		return 1, fmt.Errorf("failed to start harness: %w", err)
 	}
+	life.Event("harness-start", "pid", strconv.Itoa(command.Process.Pid))
 	err = command.Wait()
+	life.Event("harness-exit", "code", strconv.Itoa(command.ProcessState.ExitCode()), "context", lifelog.Cause(ctx.Err()))
 	if err == nil {
 		return 0, nil
 	}

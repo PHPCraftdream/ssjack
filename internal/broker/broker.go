@@ -7,13 +7,19 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/lifelog"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
 type Handler func(context.Context, wire.Request) wire.Reply
+
+// Trace receives fixed lifecycle event names and key/value pairs; it never
+// receives request data, replies, tokens or error text.
+type Trace func(event string, pairs ...string)
 
 type Server struct {
 	listener  net.Listener
@@ -22,6 +28,7 @@ type Server struct {
 	tokenHash [32]byte
 	expires   time.Time
 	handler   Handler
+	trace     Trace
 	ctx       context.Context
 	cancel    context.CancelFunc
 
@@ -35,6 +42,14 @@ type Server struct {
 }
 
 func Listen(parent context.Context, session, token string, ttl time.Duration, handler Handler) (*Server, error) {
+	return ListenTraced(parent, session, token, ttl, handler, nil)
+}
+
+// ListenTraced is Listen with lifecycle events reported to trace.
+func ListenTraced(parent context.Context, session, token string, ttl time.Duration, handler Handler, trace Trace) (*Server, error) {
+	if trace == nil {
+		trace = func(string, ...string) {}
+	}
 	if !validToken(session) || !validToken(token) || ttl <= 0 || handler == nil {
 		return nil, errors.New("invalid session parameters")
 	}
@@ -50,13 +65,15 @@ func Listen(parent context.Context, session, token string, ttl time.Duration, ha
 	s := &Server{
 		listener: listener, pin: pin, session: session,
 		tokenHash: sha256.Sum256([]byte(token)),
-		expires:   time.Now().Add(ttl), handler: handler, ctx: ctx, cancel: cancel,
+		expires:   time.Now().Add(ttl), handler: handler, trace: trace, ctx: ctx, cancel: cancel,
 		conns: make(map[net.Conn]struct{}), attached: make(chan struct{}), done: make(chan struct{}),
 	}
+	trace("listen", "ttl_ms", strconv.FormatInt(ttl.Milliseconds(), 10))
 	go s.accept()
 	go func() {
 		timer := time.NewTimer(ttl)
 		defer timer.Stop()
+		reason := "parent-cancelled"
 		select {
 		case <-s.attached:
 			<-ctx.Done()
@@ -66,10 +83,12 @@ func Listen(parent context.Context, session, token string, ttl time.Duration, ha
 			s.mu.Unlock()
 			if consumed {
 				<-ctx.Done()
+			} else {
+				reason = "bootstrap-ttl-expired"
 			}
 		case <-ctx.Done():
 		}
-		s.shutdown()
+		s.shutdown(reason)
 	}()
 	return s, nil
 }
@@ -79,8 +98,10 @@ func (s *Server) Pin() string               { return s.pin }
 func (s *Server) Done() <-chan struct{}     { return s.done }
 func (s *Server) Attached() <-chan struct{} { return s.attached }
 
-func (s *Server) shutdown() {
+// shutdown records only the first reason: later callers find it already done.
+func (s *Server) shutdown(reason string) {
 	s.once.Do(func() {
+		s.trace("shutdown", "reason", reason)
 		s.cancel()
 		s.listener.Close()
 		s.mu.Lock()
@@ -93,7 +114,7 @@ func (s *Server) shutdown() {
 }
 
 func (s *Server) Close() {
-	s.shutdown()
+	s.shutdown("closed")
 	s.wg.Wait()
 }
 
@@ -106,18 +127,21 @@ func (s *Server) accept() {
 			return
 		}
 		if !loopbackPeer(conn.RemoteAddr()) {
+			s.trace("accept-refused", "reason", "not-loopback")
 			conn.Close()
 			continue
 		}
 		select {
 		case slots <- struct{}{}:
 		default:
+			s.trace("accept-refused", "reason", "handshake-slots-full")
 			conn.Close()
 			continue
 		}
 		s.mu.Lock()
 		if s.ctx.Err() != nil || s.consumed {
 			s.mu.Unlock()
+			s.trace("accept-refused", "reason", "already-attached-or-stopped")
 			conn.Close()
 			<-slots
 			continue
@@ -133,28 +157,37 @@ func (s *Server) accept() {
 	}
 }
 
-func (s *Server) claim(auth wire.Auth) bool {
+// claim returns "" on success, else the first failed condition for the log.
+func (s *Server) claim(auth wire.Auth) string {
 	tokenHash := sha256.Sum256([]byte(auth.Token))
 	tokenOK := subtle.ConstantTimeCompare(s.tokenHash[:], tokenHash[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.consumed || s.ctx.Err() != nil || !time.Now().Before(s.expires) || auth.Version != 2 || auth.Session != s.session || tokenOK != 1 {
-		return false
+	switch {
+	case s.consumed:
+		return "token-already-used"
+	case s.ctx.Err() != nil:
+		return "stopped"
+	case !time.Now().Before(s.expires):
+		return "bootstrap-expired"
+	case auth.Version != 2 || auth.Session != s.session || tokenOK != 1:
+		return "credentials"
 	}
 	s.consumed = true
 	close(s.attached)
-	return true
+	return ""
 }
 
 func (s *Server) serve(conn net.Conn) {
-	claimed := false
+	claimed, started, requests, stage, cause := false, time.Now(), 0, "auth-read", "none"
 	defer func() {
 		conn.Close()
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
+		s.trace("connection-end", "attached", strconv.FormatBool(claimed), "stage", stage, "cause", cause, "requests", strconv.Itoa(requests), "ms", lifelog.Millis(started))
 		if claimed {
-			s.shutdown()
+			s.shutdown("attached-connection-ended")
 		}
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -163,137 +196,37 @@ func (s *Server) serve(conn net.Conn) {
 	}
 	conn.SetDeadline(deadline)
 	var auth wire.Auth
-	if wire.Read(conn, &auth) != nil {
+	if err := wire.Read(conn, &auth); err != nil {
+		cause = lifelog.Cause(err)
 		return
 	}
-	if !s.claim(auth) {
+	if reason := s.claim(auth); reason != "" {
+		stage, cause = "claim", reason
 		wire.Write(conn, wire.Reply{Error: "access denied"})
 		return
 	}
 	claimed = true
+	s.trace("attached")
 	// No new connections are needed after attachment.
 	s.listener.Close()
-	if wire.Write(conn, wire.Reply{OK: true}) != nil {
+	if err := wire.Write(conn, wire.Reply{OK: true}); err != nil {
+		stage, cause = "attach-reply", lifelog.Cause(err)
 		return
 	}
 	conn.SetDeadline(time.Time{})
 	for {
 		var request wire.Request
-		if wire.Read(conn, &request) != nil {
+		if err := wire.Read(conn, &request); err != nil {
+			stage, cause = "request-read", lifelog.Cause(err)
 			return
 		}
-		if wire.Write(conn, s.handler(s.ctx, request)) != nil {
+		began := time.Now()
+		reply := s.handler(s.ctx, request)
+		requests++
+		s.trace("request", "op", request.Operation, "ok", strconv.FormatBool(reply.OK), "ms", lifelog.Millis(began))
+		if err := wire.Write(conn, reply); err != nil {
+			stage, cause = "reply-write", lifelog.Cause(err)
 			return
 		}
 	}
-}
-
-type Client struct {
-	conn net.Conn
-	mu   sync.Mutex
-}
-
-func Connect(ctx context.Context, endpoint, pin string, auth wire.Auth) (*Client, error) {
-	if err := validateEndpoint(endpoint); err != nil {
-		return nil, err
-	}
-	config, err := wire.ClientTLS(pin)
-	if err != nil {
-		return nil, err
-	}
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: config}
-	conn, err := dialer.DialContext(ctx, "tcp4", endpoint)
-	if err != nil {
-		return nil, errors.New("failed to establish a secure connection to the keeper")
-	}
-	if !loopbackPeer(conn.RemoteAddr()) {
-		conn.Close()
-		return nil, errors.New("keeper TCP peer is not loopback")
-	}
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	var reply wire.Reply
-	if err := wire.Write(conn, auth); err != nil {
-		conn.Close()
-		return nil, errors.New("failed to authenticate to the keeper")
-	}
-	if err := wire.Read(conn, &reply); err != nil || !reply.OK {
-		conn.Close()
-		return nil, errors.New("keeper rejected the connection")
-	}
-	conn.SetDeadline(time.Time{})
-	return &Client{conn: conn}, nil
-}
-
-func (c *Client) Close() error { return c.conn.Close() }
-
-func (c *Client) CallRaw(ctx context.Context, operation string, input any) (string, error) {
-	data, err := wire.Encode(input)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	c.conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { c.conn.Close() })
-	defer stop()
-	var reply wire.Reply
-	if wire.Write(c.conn, wire.Request{Operation: operation, Data: data}) != nil || wire.Read(c.conn, &reply) != nil {
-		c.conn.Close()
-		return "", errors.New("keeper connection closed; start a new session")
-	}
-	c.conn.SetDeadline(time.Time{})
-	if !reply.OK {
-		return "", errors.New(reply.Error)
-	}
-	return reply.Data, nil
-}
-
-func (c *Client) Call(ctx context.Context, operation string, input, output any) error {
-	data, err := wire.Encode(input)
-	if err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	c.conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { c.conn.Close() })
-	defer stop()
-	var reply wire.Reply
-	if wire.Write(c.conn, wire.Request{Operation: operation, Data: data}) != nil || wire.Read(c.conn, &reply) != nil {
-		c.conn.Close()
-		return errors.New("keeper connection closed; start a new session")
-	}
-	c.conn.SetDeadline(time.Time{})
-	if !reply.OK {
-		return errors.New(reply.Error)
-	}
-	if output != nil {
-		return wire.Decode(reply.Data, output)
-	}
-	return nil
-}
-
-func Result(value any, err error) wire.Reply {
-	if err != nil {
-		return wire.Reply{Error: err.Error()}
-	}
-	data, err := wire.Encode(value)
-	if err != nil {
-		return wire.Reply{Error: "failed to encode reply"}
-	}
-	return wire.Reply{OK: true, Data: data}
 }

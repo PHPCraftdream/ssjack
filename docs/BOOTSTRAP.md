@@ -21,6 +21,52 @@ The bridge validates inputs and the loopback endpoint, checks the TLS pin, and s
 
 The database password, private key, Argon2id outputs, and database master never become bootstrap fields or MCP results. Persistent MCP/plugin registration remains secret-free. The protocol removes application-authored plaintext bootstrap writes; it does not make process environment theft impossible.
 
+## When the bridge drops
+
+The token is single-use and the keeper's channel ends with the one connection
+that claimed it. If the harness stops or restarts its `ssjack mcp` child, the
+new child cannot attach: the listener is already closed and the token is spent.
+The harness then reports the `ssjack` MCP server as disconnected. This is by
+design, not a fault to retry around. The only recovery is to leave the harness
+and start it again through `ssjack run`, which creates a new channel. A
+re-attach path would widen the trust boundary and is not implemented.
+
+To find out why a bridge dropped, the keeper and the bridge append fixed
+lifecycle events to `.claude/ssjack/lifecycle.log` in the project (owner-only
+mode, rotated once to `lifecycle.log.1` above 1 MiB). The keeper hands the path
+to the bridge in `SSJACK_LIFECYCLE_LOG`; an inherited value is scrubbed. A line
+looks like:
+
+```text
+2026-11-15T12:00:00.123Z pid=4242 role=keeper sid=1a2b3c4d event=shutdown reason=attached-connection-ended
+```
+
+`sid` is a short digest of the session identifier, enough to match keeper and
+bridge lines of one launch. Events and their fields:
+
+| Role | Event | Fields |
+| --- | --- | --- |
+| keeper | `listen` | `ttl_ms` |
+| keeper | `harness-start`, `harness-exit` | `pid`; `code`, `context` |
+| keeper | `accept-refused` | `reason`: `not-loopback`, `handshake-slots-full`, `already-attached-or-stopped` |
+| keeper | `attached` | none |
+| keeper | `request` | `op`, `ok`, `ms` |
+| keeper | `connection-end` | `attached`, `stage`, `cause`, `requests`, `ms` |
+| keeper | `shutdown` | `reason`: `attached-connection-ended`, `bootstrap-ttl-expired`, `parent-cancelled`, `closed` |
+| bridge | `start` | `ppid` |
+| bridge | `attached`, `serving` | none |
+| bridge | `call-failed` | `op`, `stage`, `cause` |
+| bridge | `stdio-end` | `cause` |
+| bridge | `exit` | `code`, `stage`, `context` |
+
+The log never holds a token, the session identifier, an endpoint, a password,
+request or reply data, a path or error text. Every value is reduced to
+`[A-Za-z0-9_.:-]` and at most 64 bytes, and an error is recorded only as one of
+a fixed set of classes (`eof`, `timeout`, `reset`, `closed`, `cancelled`,
+`other` and similar). Operation names (`op`) are recorded; their arguments are
+not. The file is diagnostic only: nothing reads it back to make a decision, so
+editing it grants nothing. Failing to write it never fails a launch.
+
 ## Single-channel threat model
 
 The old guarantee that stealing only the environment capability is insufficient no longer applies. Anyone obtaining the child's full bootstrap environment before attachment can race the intended bridge. TLS pinning protects transport identity, not against an attacker who has stolen the endpoint, pin, session ID, and bearer token together. Processes sharing the same harness connection are not distinguished as individual models.
