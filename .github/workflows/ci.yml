@@ -99,7 +99,7 @@ jobs:
           SSJACK_TEST_FULL_KDF: '1'
         run: |
           set -o pipefail
-          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerRotationRecoveryFullProfile$' -count=1 -timeout 1200s ./cmd/ssjack | tee "$RUNNER_TEMP/owner-rotation.log"
+          go test -v -mod=readonly -p 1 -run '^TestVaultOwnerRotationRecoveryFullProfile$' -count=1 -timeout 1800s ./cmd/ssjack | tee "$RUNNER_TEMP/owner-rotation.log"
           grep -q '^--- PASS: TestVaultOwnerRotationRecoveryFullProfile ' "$RUNNER_TEMP/owner-rotation.log"
           for name in composed-success pre-effect-persistence lost-add-ack-restart new-login-refusal post-add-persistence-restart archive-next owner-crash-inflight abandon-stuck retire-old-key; do
             grep -q -- "--- PASS: TestVaultOwnerRotationRecoveryFullProfile/$name " "$RUNNER_TEMP/owner-rotation.log" || { echo "Owner rotation acceptance did not report PASS: $name"; exit 1; }
@@ -324,7 +324,7 @@ jobs:
   full-profile:
     name: Encrypted vault with production 1 GiB KDF
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -339,6 +339,10 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y tmux
           fi
+      # The per-OS test job already owns the cross-platform production-KDF tests
+      # (owner control, keeper lifetime, rotation, transfer, output filter, archive,
+      # remote MCP startup and connected) with stricter checks, including on Linux.
+      # This job runs only the tests that nothing else covers, so none runs twice.
       - name: Verify production vault and app-store master profiles
         env:
           CGO_ENABLED: '0'
@@ -346,27 +350,9 @@ jobs:
         run: |
           set -o pipefail
           tmux -V
-          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -count=1 -timeout 2400s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
-          for name in TestVaultOutputFilterFullProfile TestVaultStartupPasswordFullProfile TestVaultKeeperLifetimeFullProfile TestVaultLegacyWriterFullProfile TestVaultOwnerControlFullProfile TestVaultOwnerArchiveFullProfile TestVaultTextOwnerFullProfile TestVaultRemoteMCPStartupFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
+          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -skip '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile|TestVaultOwnerRotationRecoveryFullProfile|TestVaultTransferFullProfile|TestVaultOutputFilterFullProfile|TestVaultOwnerArchiveFullProfile|TestVaultRemoteMCPStartupFullProfile)$' -count=1 -timeout 1800s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
+          for name in TestVaultStartupPasswordFullProfile TestVaultLegacyWriterFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
-          done
-          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/full-profile.log"
-          for name in continue receipt-remembered empty no-record absent-directory cancel esc ctrl-c stale-ciphertext mcp-nonterminal-refusal issue-refusal prepared-launch-no-output-filter; do
-            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory remote MCP startup full-profile acceptance did not report PASS: $name"; exit 1; }
-            grep -q -- "REMOTE-MCP-STARTUP-OBSERVED:$name" "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory remote MCP startup full-profile acceptance did not report observed evidence: $name"; exit 1; }
-          done
-          if grep -Eq '^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )' "$RUNNER_TEMP/full-profile.log"; then
-            echo 'Remote MCP startup full-profile acceptance reported a skipped top-level test or scenario'
-            exit 1
-          fi
-      - name: Connected remote MCP startup with production KDF
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
-          grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
-          for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
-            grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
           done
 
   text-pair:

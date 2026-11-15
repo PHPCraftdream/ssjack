@@ -64,6 +64,19 @@ class FullTriggerTests(unittest.TestCase):
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/ci.yml", release)
 
+    def test_full_profile_job_does_not_repeat_per_os_tests(self):
+        owned = set()
+        for line in job(self.full, "test").splitlines():
+            if "go test" in line and "./cmd/ssjack" in line and "-run '" in line:
+                owned.update(re.findall(r"Test\w+FullProfile", re.search(r"-run '([^']+)'", line).group(1)))
+        self.assertGreaterEqual(len(owned), 7)
+        profile = job(self.full, "full-profile")
+        skipped = set(re.search(r"-skip '\^\(([^)]+)\)\$'", profile).group(1).split("|"))
+        self.assertEqual(skipped, owned)
+        mandatory = set(re.search(r"for name in (Test\w+(?: Test\w+)*); do", profile).group(1).split())
+        self.assertFalse(mandatory & owned)
+        self.assertNotIn("remote_mcp_connected.py", profile)
+
     def test_agent_instructions_cover_both_explicit_routes(self):
         instructions = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertIn("[ci:full]", instructions)

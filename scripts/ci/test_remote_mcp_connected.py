@@ -104,7 +104,10 @@ class RemoteMCPConnectedCI(unittest.TestCase):
         self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", named_job(self.feature, "impacted"))
         self.assertIn("runs-on: ubuntu-latest", named_job(self.workflow, "full-profile"))
 
-        startup_steps = (feature_startup, full_startup, linux_full_profile)
+        # The Linux full-profile job does not repeat these gates; the matrix job owns them.
+        self.assertIn("TestVaultRemoteMCPStartupFullProfile", linux_full_profile.split(" -skip ", 1)[1].split(" -count", 1)[0])
+        self.assertNotIn("remote_mcp_connected.py", named_job(self.workflow, "full-profile"))
+        startup_steps = (feature_startup, full_startup)
         startup_list = f"for name in {' '.join(startup)}; do"
         for step in startup_steps:
             self.assertIn(startup_list, step)

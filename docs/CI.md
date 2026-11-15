@@ -73,8 +73,10 @@ required checks. Private infrastructure verification remains local.
 Feature CI and the full workflow's native test matrix run the remote-MCP startup
 and connected-bridge gates on Linux, Windows and macOS when relevant CLI sources
 are selected (and unconditionally in the full workflow). The full workflow's
-separate production-KDF full-profile job runs the same startup and connected
-gates on Linux. Startup covers selector/refusal and prepared-launch cases;
+separate production-KDF full-profile job does not repeat them or any other
+production-KDF test the matrix steps already own: its `-skip` list is checked
+against those steps by `scripts/ci/test_full_trigger.py`, so each such test runs
+once per platform. Startup covers selector/refusal and prepared-launch cases;
 connected acceptance uses a temporary private local TLS route overlay and
 exercises the real launched stdio bridge. The source runner verifies complete
 PASS and observed evidence and rejects top-level or scenario SKIP records.
