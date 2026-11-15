@@ -44,6 +44,7 @@ opening a database; global flags precede commands.
 `mcp`, `hook` and `install-hooks` are bridge/compatibility endpoints, not ways to
 supply database passwords or grant access. Ordinary launches install the embedded
 project-local UI plugin when supported. [UI source and compatibility](../plugins/ssjack-ui/README.md).
+[Mods, plugins and hooks: security review](review/CLAUDE-CODE-MODS-SECURITY.md).
 
 ## What the boundaries mean
 
