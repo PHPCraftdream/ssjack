@@ -37,7 +37,7 @@ type Manager struct {
 	resources      *resources
 	guardHistory   *outputguard.Snapshot
 	exportRequest  *ExportRequest
-	busy           bool
+	busy, rotating bool
 	closed         bool
 	closing        bool
 	err            error
@@ -272,7 +272,7 @@ func (m *Manager) Discard() {
 }
 
 func (m *Manager) stop() {
-	m.mu.Lock()
+	m.lockAfterRotation()
 	if m.closed {
 		m.mu.Unlock()
 		return

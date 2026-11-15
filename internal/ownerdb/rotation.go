@@ -24,14 +24,48 @@ func (m *Manager) rotationSnapshot() (*vault.RotationInfo, error) {
 	return &info, nil
 }
 
-// PrepareRotation runs a keeper-backed rotation synchronously under m.mu; it
-// reuses the session's unlocked context and excludes all manager writers.
-func (m *Manager) PrepareRotation(ctx context.Context, revision uint64, serverID, account string) (ownerrotation.Plan, error) {
+// beginRotation admits one rotation operation and marks the manager busy.
+// Writers, jobs and Close are excluded by the flag, so m.mu is not held across
+// remote I/O and status readers stay responsive.
+func (m *Manager) beginRotation(deciding bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.rotationAdmission(false); err != nil {
+	if err := m.rotationAdmission(deciding); err != nil {
+		return err
+	}
+	m.busy, m.rotating = true, true
+	m.signal()
+	return nil
+}
+
+func (m *Manager) endRotation() {
+	m.mu.Lock()
+	m.busy, m.rotating = false, false
+	m.signal()
+	m.mu.Unlock()
+}
+
+// lockAfterRotation takes m.mu once no rotation operation is in flight: a
+// discard never pulls the database from under a remote exchange.
+func (m *Manager) lockAfterRotation() {
+	for {
+		m.mu.Lock()
+		if !m.rotating {
+			return
+		}
+		changed := m.changed
+		m.mu.Unlock()
+		<-changed
+	}
+}
+
+// PrepareRotation runs a keeper-backed rotation synchronously in the caller's
+// goroutine; it reuses the session's unlocked context.
+func (m *Manager) PrepareRotation(ctx context.Context, revision uint64, serverID, account string) (ownerrotation.Plan, error) {
+	if err := m.beginRotation(false); err != nil {
 		return ownerrotation.Plan{}, err
 	}
+	defer m.endRotation()
 	engine, err := m.rotationEngine()
 	if err != nil {
 		return ownerrotation.Plan{}, err
@@ -42,11 +76,10 @@ func (m *Manager) PrepareRotation(ctx context.Context, revision uint64, serverID
 // DecideRotation applies one closed, identity-bound operation. recover inspects;
 // archive preserves the completed rotation's exact saved ciphertext locally.
 func (m *Manager) DecideRotation(ctx context.Context, revision, planID uint64, id, action string) (ownerrotation.Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.rotationAdmission(true); err != nil {
+	if err := m.beginRotation(true); err != nil {
 		return ownerrotation.Plan{}, err
 	}
+	defer m.endRotation()
 	if len(id) != 32 || planID == 0 {
 		return ownerrotation.Plan{}, errors.New("invalid rotation identity")
 	}
