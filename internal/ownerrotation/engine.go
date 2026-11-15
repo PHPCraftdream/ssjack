@@ -28,6 +28,7 @@ type Keeper interface {
 	CompleteRotationAt(uint64, uint64, [32]byte) error
 	CancelRotationAt(uint64, uint64) error
 	AbandonRotationAt(uint64, uint64) error
+	WithRetirementMaterialAt(uint64, uint64, func(current vault.Target, oldPublic, newPublic []byte) error) error
 }
 
 type Evidence struct {
@@ -40,6 +41,9 @@ type Remote interface {
 	Preflight(ctx context.Context, original, replacement vault.Target, oldPublic, newPublic []byte) error
 	Add(context.Context, vault.Target, []byte, []byte) error
 	Verify(context.Context, vault.Target) error
+	// Retire removes the old public key over a session authenticated by target,
+	// which holds the replacement key. An already absent key is success.
+	Retire(ctx context.Context, target vault.Target, oldPublic, newPublic []byte) error
 }
 type SSHRemote struct{}
 type Plan struct {
@@ -73,6 +77,13 @@ func (SSHRemote) Add(ctx context.Context, target vault.Target, oldPublic, newPub
 		return err
 	}
 	return remote.AddAuthorizedKey(ctx, target.Address, config, oldPublic, newPublic)
+}
+func (SSHRemote) Retire(ctx context.Context, target vault.Target, oldPublic, newPublic []byte) error {
+	config, err := target.ClientConfig()
+	if err != nil {
+		return err
+	}
+	return remote.RetireAuthorizedKey(ctx, target.Address, config, oldPublic, newPublic)
 }
 func (SSHRemote) Verify(ctx context.Context, target vault.Target) error {
 	config, err := target.ClientConfig()

@@ -90,7 +90,7 @@ jobs:
           set -o pipefail
           go test -v -mod=readonly -p 1 -run '^TestVaultOwnerRotationRecoveryFullProfile$' -count=1 -timeout 1200s ./cmd/ssjack | tee "$RUNNER_TEMP/owner-rotation.log"
           grep -q '^--- PASS: TestVaultOwnerRotationRecoveryFullProfile ' "$RUNNER_TEMP/owner-rotation.log"
-          for name in composed-success pre-effect-persistence lost-add-ack-restart new-login-refusal post-add-persistence-restart archive-next owner-crash-inflight abandon-stuck; do
+          for name in composed-success pre-effect-persistence lost-add-ack-restart new-login-refusal post-add-persistence-restart archive-next owner-crash-inflight abandon-stuck retire-old-key; do
             grep -q -- "--- PASS: TestVaultOwnerRotationRecoveryFullProfile/$name " "$RUNNER_TEMP/owner-rotation.log" || { echo "Owner rotation acceptance did not report PASS: $name"; exit 1; }
           done
           if grep -Eq '^[[:space:]]*--- SKIP: TestVaultOwnerRotationRecoveryFullProfile' "$RUNNER_TEMP/owner-rotation.log"; then

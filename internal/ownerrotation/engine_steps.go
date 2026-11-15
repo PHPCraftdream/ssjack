@@ -247,6 +247,36 @@ func (e *Engine) Abandon(ctx context.Context, expected, planID uint64) error {
 	return err
 }
 
+// Retire removes the old public key from the remote account after a completed
+// rotation, over a session authenticated by the committed replacement key. It
+// changes no journal state and is idempotent, so an uncertain outcome is simply
+// retried. Keys of other clients are never touched.
+func (e *Engine) Retire(ctx context.Context, expected, planID uint64) error {
+	if err := e.available(); err != nil {
+		return err
+	}
+	ctx, cancel, err := operation(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	if err := e.lock(ctx); err != nil {
+		return err
+	}
+	defer e.unlock()
+	if _, err := e.require(ctx, expected, planID, vault.RotationComplete); err != nil {
+		return err
+	}
+	return e.keeper.WithRetirementMaterialAt(expected, planID, func(current vault.Target, oldPublic, newPublic []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		retireCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+		defer stop()
+		return e.remote.Retire(retireCtx, current, oldPublic, newPublic)
+	})
+}
+
 // Fingerprint formats public-only confirmation metadata.
 func Fingerprint(encoded []byte) (string, error) {
 	key, _, options, rest, err := ssh.ParseAuthorizedKey(encoded)

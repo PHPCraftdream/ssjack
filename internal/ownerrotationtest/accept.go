@@ -31,6 +31,7 @@ func Accept(t *testing.T) {
 		{"archive-next", (*rig).archiveAndNextRotation},
 		{"owner-crash-inflight", (*rig).ownerCrashInFlight},
 		{"abandon-stuck", (*rig).abandonStuckRotation},
+		{"retire-old-key", (*rig).retireOldKey},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			r := newRig(t)

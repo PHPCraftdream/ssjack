@@ -70,6 +70,8 @@ func Run(ctx context.Context, path, globalServer, globalAccount string, args []s
 	}()
 	if command.Archive {
 		code, result = runRotationArchive(ctx, control, command, readSecret)
+	} else if command.Retire {
+		code, result = runRotationRetire(ctx, control, command, readSecret)
 	} else if command.Recover || command.Cancel {
 		code, result = runRotationRecovery(ctx, control, command, readSecret)
 	} else {

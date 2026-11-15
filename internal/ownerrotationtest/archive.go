@@ -113,3 +113,28 @@ func (r *rig) archiveAndNextRotation() {
 	r.stopKeeper()
 	r.expectInventory(filepath.Base(r.path), filepath.Base(archivePath))
 }
+
+// retireOldKey completes a rotation, then removes the old remote key in a
+// separate exact-confirmed invocation that authenticates with the new key.
+// A repeat is harmless, and local journal state never changes.
+func (r *rig) retireOldKey() {
+	t := r.t
+	newKey := r.rotate()
+	if r.fixture.mutationCount() != 1 || !r.fixture.hasKeyFromPrivate(r.oldPrivate) || !r.fixture.hasKeyFromPrivate(newKey) {
+		t.Fatal("rotation did not leave both keys authorized before retirement")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		retire, capture := r.start("cli", false, "--retire-old")
+		r.approve(retire, capture, r.consent(capture, "RETIRE-OLD-KEY"), "Old remote key retired:")
+		r.scan(r.ctx, capture)
+		r.expectClean(r.keeperCapture)
+		if r.fixture.hasKeyFromPrivate(r.oldPrivate) || !r.fixture.hasKeyFromPrivate(newKey) || r.fixture.mutationCount() != 2 {
+			t.Fatalf("attempt %d: retirement did not remove exactly the old key once", attempt)
+		}
+		if r.diskPhase() != vault.RotationComplete {
+			t.Fatal("retirement changed the local journal phase")
+		}
+	}
+	r.stopKeeper()
+	r.expectInventory(filepath.Base(r.path))
+}

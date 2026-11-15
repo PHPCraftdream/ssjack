@@ -157,6 +157,16 @@ func (d *Dispatcher) routeRotation(ctx context.Context, p *Peer, revision uint64
 		_, err := api.DecideRotation(ctx, revision, request.PlanID, request.ID, request.Action)
 		return err
 	}
+	if request.Action == "retire" {
+		if before.Rotation.Phase != vault.RotationComplete || revision != before.Status.Database.Revision || before.Status.Database.SavedRevision != revision {
+			return ownerdb.ErrPending
+		}
+		if p.seenRotation != request.ID || p.seenRotationPlan != request.PlanID || p.seenRotationRevision != revision {
+			return ownerdb.ErrPending
+		}
+		_, err := api.DecideRotation(ctx, revision, request.PlanID, request.ID, request.Action)
+		return err
+	}
 	if d.rotationOwner != nil && d.rotationOwner != p {
 		if !d.rotationOwner.closed.Load() || request.Action != "recover" || !orphan {
 			return ownerdb.ErrPending

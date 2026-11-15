@@ -71,6 +71,13 @@ confirmation. The unused new private key is destroyed and the current key stays
 in use; the remote add is not undone, so the new public key may remain
 authorized until you remove it.
 
+After completion, and before archive, one separate `--retire-old` invocation
+removes only the old public key from the account's `authorized_keys` after exact
+RETIRE-OLD-KEY confirmation. It authenticates with the new key, refuses
+option-bearing entries and a missing new key, keeps the previous file as
+`authorized_keys.ssjack-retired`, and is safe to repeat. Other clients still
+using the old key lose access.
+
 After completion, another rotation requires explicit preservation. Run
 `owner rotate-key --server NAME --account NAME --archive-completed` as a separate
 invocation. It displays the retained operation and current revision and requires

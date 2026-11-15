@@ -212,6 +212,17 @@ func (f *rotationSSHFixture) serveCommand(conn net.Conn, ch ssh.Channel, command
 			return
 		}
 		exitStatus(ch, status)
+	case rotationRetireScript:
+		payload, err := io.ReadAll(ch)
+		if err == nil {
+			err = f.retire(payload)
+		}
+		clear(payload)
+		status := uint32(0)
+		if err != nil {
+			status = 1
+		}
+		exitStatus(ch, status)
 	case "ssjack-ci-owner-rotation-hold":
 		f.serveHold(ch, finished)
 	case "ssjack-ci-owner-rotation-release":
@@ -289,4 +300,28 @@ func (f *rotationSSHFixture) close() {
 	f.mu.Unlock()
 	f.wg.Wait()
 	clear(f.hostPrivate)
+}
+
+// retire removes only the old key, and only while the new key is authorized.
+// An already absent old key is success, like the production script.
+func (f *rotationSSHFixture) retire(payload []byte) error {
+	lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+	if len(lines) != 2 {
+		return fmt.Errorf("expected old/new public lines")
+	}
+	old, oldErr := publicLine(lines[0])
+	next, nextErr := publicLine(lines[1])
+	if oldErr != nil || nextErr != nil || bytes.Equal(old.Marshal(), next.Marshal()) {
+		return fmt.Errorf("invalid old or replacement public line")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.keys[string(next.Marshal())]; !ok {
+		return fmt.Errorf("new key is not authorized")
+	}
+	if _, ok := f.keys[string(old.Marshal())]; ok {
+		delete(f.keys, string(old.Marshal()))
+		f.mutations++
+	}
+	return nil
 }

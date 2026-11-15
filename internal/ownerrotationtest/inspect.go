@@ -182,7 +182,7 @@ func (r *rig) expectEncrypted(path string) {
 		r.t.Fatal("synthetic fixture artifact could not be inspected")
 	}
 	defer clear(data)
-	for _, secret := range append([][]byte{[]byte(rotationAuthorizedScript)}, r.secrets...) {
+	for _, secret := range append([][]byte{[]byte(rotationAuthorizedScript), []byte(rotationRetireScript)}, r.secrets...) {
 		if len(secret) > 0 && bytes.Contains(data, secret) {
 			r.t.Fatal("synthetic fixture artifact contained private plaintext")
 		}

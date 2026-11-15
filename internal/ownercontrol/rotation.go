@@ -62,7 +62,7 @@ func (c *Control) DecideRotation(ctx context.Context, revision, planID uint64, i
 		return ownerrotation.Plan{}, ErrControl
 	}
 	switch action {
-	case "install", "verify", "commit", "cancel", "abandon", "recover", "archive":
+	case "install", "verify", "commit", "cancel", "abandon", "retire", "recover", "archive":
 	default:
 		return ownerrotation.Plan{}, errors.New("unsupported rotation action")
 	}
@@ -170,6 +170,10 @@ func (c *Control) remoteRotation(ctx context.Context, revision uint64, rotation 
 	} else if rotation.Action == "archive" {
 		if info.Phase != "archived" || info.ID != rotation.ID || info.PlanID != rotation.PlanID || info.ServerID == "" || info.Account == "" || info.Profile == "" || info.Address != "" || info.User != "" || info.Usage != "" || len(info.OldPublic) != 0 || len(info.NewPublic) != 0 || len(info.HostKeys) != 0 || info.RecoveryPath == "" || len(info.RecoveryPath) > 4096 || strings.ContainsAny(info.RecoveryPath, "\x00\r\n\x1b") || !validArchiveDigest(info.CommitDigest) || !validArchiveDigest(info.RecoveryDigest) || snapshot.Status.Err != nil || snapshot.Status.Busy || snapshot.Status.Pending || snapshot.Status.Database.Err != nil || snapshot.Status.Database.Pending || snapshot.Status.Database.Revision <= revision || snapshot.CipherDigest == ([32]byte{}) {
 			return ownerrotation.Plan{}, errors.New("keeper archive receipt did not match healthy retained metadata")
+		}
+	} else if rotation.Action == "retire" {
+		if info.Phase != "complete" || info.ID != rotation.ID || info.PlanID != rotation.PlanID || info.ServerID == "" || info.Account == "" || info.Profile == "" || snapshot.Status.Database.Revision != revision {
+			return ownerrotation.Plan{}, errors.New("keeper retirement receipt did not match the unchanged completed journal")
 		}
 	} else if rotation.ID != "" && (info.ID != rotation.ID || info.PlanID != rotation.PlanID || info.ServerID == "" || info.Account == "" || info.Profile == "") {
 		return ownerrotation.Plan{}, errors.New("keeper rotation receipt did not match the requested journal identity")

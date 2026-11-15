@@ -17,6 +17,7 @@ func TestRotationCommandUnionIsClosedAndIdentityBound(t *testing.T) {
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "commit", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "cancel", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "abandon", ID: id, PlanID: 7}},
+		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "retire", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "recover", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "archive", ID: id, PlanID: 7}},
 	}
@@ -35,6 +36,8 @@ func TestRotationCommandUnionIsClosedAndIdentityBound(t *testing.T) {
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "delete", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "archive", ID: id}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "abandon", ID: id}},
+		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "retire", ID: id}},
+		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "retire", ID: id, PlanID: 7, Account: "deploy"}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "abandon", ID: id, PlanID: 7, ServerID: id}},
 		{Operation: "rotation", Revision: &revision, Plan: 7, Rotation: &Rotation{Action: "archive", ID: id, PlanID: 7}},
 		{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "archive", ID: id, PlanID: 7, ServerID: id}},

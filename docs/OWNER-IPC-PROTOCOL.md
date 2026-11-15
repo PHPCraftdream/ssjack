@@ -350,6 +350,17 @@ new private key, keeps the current key in use, and leaves the journal in the
 cancelled phase. It does not undo the remote add, so the new public key may stay
 authorized until the owner removes it through a trusted session.
 
+After completion, and before archive, an owner can retire the old remote key in
+one separate `--retire-old` invocation after exact RETIRE-OLD-KEY confirmation.
+The `retire` packet action needs the exact completed journal at the displayed
+saved revision. The keeper connects with the committed replacement key, so the
+session also proves the new key works, and runs a fixed script that removes only
+the bare old public key entry from the account's regular `authorized_keys`. The
+script refuses option-bearing entries, symlinks and a missing new key, keeps the
+previous file beside it as `authorized_keys.ssjack-retired`, and treats an absent
+old key as success, so a retry is safe. It changes no journal state. Other
+clients that still use the old key lose access.
+
 A completed journal blocks another rotation until an owner explicitly runs
 `rotate-key --archive-completed` for the exact selected server/account. The
 separate invocation displays the completed operation and current revision and

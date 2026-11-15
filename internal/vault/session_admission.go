@@ -219,6 +219,39 @@ func (s *Session) WithRotationMaterialAt(expected, planID uint64, use func(origi
 	return use(original, replacement)
 }
 
+// WithRetirementMaterialAt is keeper-only. For a completed rotation it lends the
+// account's current credential, which is the committed replacement key, and
+// both public keys, so the old remote key can be retired. It clears the
+// credential on return; use must not retain it.
+func (s *Session) WithRetirementMaterialAt(expected, planID uint64, use func(current Target, oldPublic, newPublic []byte) error) error {
+	if use == nil {
+		return errors.New("retirement material requires a callback")
+	}
+	current, oldPublic, newPublic, err := s.retirementMaterialAt(expected, planID)
+	if err != nil {
+		return err
+	}
+	defer clearRotationTarget(&current)
+	return use(current, oldPublic, newPublic)
+}
+
+func (s *Session) retirementMaterialAt(expected, planID uint64) (Target, []byte, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.state == nil || s.revision != expected || s.state.Rotation == nil {
+		return Target{}, nil, nil, ErrOwnerRevision
+	}
+	j := s.state.Rotation
+	if j.PlanID != planID || j.Phase != RotationComplete {
+		return Target{}, nil, nil, ErrOwnerRevision
+	}
+	current, exists := s.state.Targets[j.Profile]
+	if !exists || !rotationScopeEqual(current, j.Original) || !bytes.Equal(current.PrivateKey, j.NewPrivate) {
+		return Target{}, nil, nil, errors.New("completed rotation no longer matches the account credential")
+	}
+	return ownTarget(current), append([]byte(nil), j.OldPublic...), append([]byte(nil), j.NewPublic...), nil
+}
+
 func clearRotationTarget(target *Target) {
 	clear(target.PrivateKey)
 	clear(target.Password)

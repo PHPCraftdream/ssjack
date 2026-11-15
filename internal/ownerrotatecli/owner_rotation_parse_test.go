@@ -33,6 +33,10 @@ func TestParseRotationCommandSelectorsAndRecovery(t *testing.T) {
 	if err != nil || !parsed.Recover || !parsed.Abandon || parsed.Cancel || parsed.Archive {
 		t.Fatalf("abandon: %#v, %v", parsed, err)
 	}
+	parsed, err = parseRotationCommand([]string{"rotate-key", "--retire-old"}, "prod", "deploy")
+	if err != nil || !parsed.Retire || parsed.Recover || parsed.Cancel || parsed.Archive || parsed.Abandon {
+		t.Fatalf("retire: %#v, %v", parsed, err)
+	}
 }
 
 func TestParseRotationCommandRejectsDuplicateConflictingAndIntentFlags(t *testing.T) {
@@ -52,6 +56,11 @@ func TestParseRotationCommandRejectsDuplicateConflictingAndIntentFlags(t *testin
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--recover", "--abandon", "--cancel-prepared"},
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--abandon", "--archive-completed"},
 		{"rotate-key", "--server", "prod", "--account", "deploy", "--recover", "--abandon", "--archive-completed"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--retire-old", "--retire-old"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--retire-old", "--recover"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--retire-old", "--recover", "--cancel-prepared"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--retire-old", "--recover", "--abandon"},
+		{"rotate-key", "--server", "prod", "--account", "deploy", "--retire-old", "--archive-completed"},
 	}
 	for _, args := range invalid {
 		if _, err := parseRotationCommand(args, "", ""); err == nil {
@@ -77,6 +86,7 @@ func TestRotationConfirmationBindsDisplayedIdentity(t *testing.T) {
 		cancellationConfirmation(info): "CANCEL-PREPARED server-opaque operator revision=42 operation=operation-opaque",
 		archiveConfirmation(info):      "ARCHIVE server-opaque operator revision=42 operation=operation-opaque",
 		abandonConfirmation(info):      "ABANDON server-opaque operator revision=42 operation=operation-opaque",
+		retireConfirmation(info):       "RETIRE-OLD-KEY server-opaque operator revision=42 operation=operation-opaque",
 	}
 	for got, want := range checks {
 		if got != want {

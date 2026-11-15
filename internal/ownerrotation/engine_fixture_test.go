@@ -113,9 +113,18 @@ func (k *memoryKeeper) AbandonRotationAt(revision, planID uint64) error {
 	return nil
 }
 
+func (k *memoryKeeper) WithRetirementMaterialAt(revision, planID uint64, use func(vault.Target, []byte, []byte) error) error {
+	if _, err := k.RotationAt(revision, planID); err != nil || k.info.Phase != vault.RotationComplete {
+		return vault.ErrOwnerRevision
+	}
+	return use(vault.Target{Address: "test:22"}, k.info.OldPublic, k.info.NewPublic)
+}
+
 type memoryRemote struct {
 	calls                     []string
 	addErr, verifyErr         error
+	retireErr                 error
+	retired                   [][2]string
 	persistCalls, failPersist int
 	preflightErr              error
 	preflights                int
@@ -172,4 +181,10 @@ func contains(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func (r *memoryRemote) Retire(_ context.Context, _ vault.Target, oldPublic, newPublic []byte) error {
+	r.calls = append(r.calls, "retire")
+	r.retired = append(r.retired, [2]string{string(oldPublic), string(newPublic)})
+	return r.retireErr
 }
