@@ -36,7 +36,8 @@
     "THIRD_PARTY_NOTICES.md": {"kind": "notice"},
     "plugins/ssjack-ui/.claude-plugin/plugin.json": {"kind": "file", "sha256": "9216edf8204641e8dc97052ae25126beaf0f94e573bd1b581cd4f433e9af5956"},
     "plugins/ssjack-ui/hooks/hooks.json": {"kind": "file", "sha256": "cb00289411841ac04db5314d4b9f838a1a1527019adc3aedd9155550cf729c23"},
-    "plugins/ssjack-ui/hooks/register.tsx": {"kind": "file", "sha256": "2ea87ba48fe267b07df892c0c5d183e36606676c2067bae78500b369f62c6b56"},
+    "plugins/ssjack-ui/hooks/register.tsx": {"kind": "file", "sha256": "71c812d916a3c7fd0a75dbb36d0dc07ac58e6bba797710ac526ac5a156a3ef5d"},
+    "plugins/ssjack-ui/hooks/lifecycle.ts": {"kind": "file", "sha256": "ec62786f79c82bf99c406b42ccad2c9e8e07413105b1bf58807ae7137c1905f2"},
     "plugins/ssjack-ui/hooks/format.ts": {"kind": "file", "sha256": "4c019325b5f1977a20137133e3b04120c9f02cb6db383e44127081dd919761a4"}
   }
 }
