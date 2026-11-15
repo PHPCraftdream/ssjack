@@ -17,7 +17,7 @@ const (
 )
 
 var (
-	errNoRoots    = errors.New("no transfer roots are registered")
+	errNoRoots    = errors.New("no transfer roots are registered; the owner registers one with --transfer-root when starting the keeper")
 	errUnknownJob = errors.New("unknown transfer job")
 )
 

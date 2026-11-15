@@ -48,8 +48,13 @@ type Description struct {
 	Container string `json:"container,omitempty"`
 }
 
+// noApplicationHint is the fixed text of an empty application list.
+const noApplicationHint = "no application is registered; the owner starts the keeper with --clawwright-directory"
+
 type ListOutput struct {
 	Applications []Description `json:"applications"`
+	// Hint explains an empty list; it carries no owner data.
+	Hint string `json:"hint,omitempty"`
 }
 
 type Manager struct {
@@ -159,6 +164,8 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 		out := ListOutput{Applications: []Description{}}
 		if m.jobs != nil {
 			out.Applications = append(out.Applications, m.description)
+		} else {
+			out.Hint = noApplicationHint
 		}
 		return broker.Result(out, nil), true
 	case "app_start", "app_read", "app_cancel":

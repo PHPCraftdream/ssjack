@@ -250,6 +250,9 @@ func TestApplicationAdmissionAndDisabledRegistration(t *testing.T) {
 	if len(list.Applications) != 0 {
 		t.Fatal("disabled registration advertised an application")
 	}
+	if list.Hint != noApplicationHint || !strings.Contains(list.Hint, "--clawwright-directory") {
+		t.Fatalf("empty application list did not explain how it is enabled: %q", list.Hint)
+	}
 	if reply := applicationCall(t, context.Background(), manager, "app_start", Input{}, nil); reply.OK {
 		t.Fatal("disabled application started")
 	}

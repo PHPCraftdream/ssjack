@@ -62,7 +62,7 @@ func scenarioRefuseNoRoots(t *testing.T) {
 	for _, call := range calls {
 		result := callTool(t, s, call.tool, call.args)
 		c.add(t, result)
-		if text := refusal(t, result); text != "no transfer roots are registered" {
+		if text := refusal(t, result); text != "no transfer roots are registered; the owner registers one with --transfer-root when starting the keeper" {
 			t.Fatalf("%s refusal = %q", call.tool, text)
 		}
 	}

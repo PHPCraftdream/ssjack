@@ -12,7 +12,7 @@ Copy only. The source is never modified or deleted. There is no move, sync, delt
 
 `remote_exec` already grants arbitrary writes as the SSH principal, so the remote side gains no new authority. The new authority is **local filesystem access**. It is bounded by owner-registered transfer roots:
 
-- The owner registers roots at keeper startup with repeatable `--transfer-root [NAME=]DIR`, before the vault prompt, like `--clawwright-directory`. With no root the transfer tools refuse every call (fail closed).
+- The owner registers roots at keeper startup with repeatable `--transfer-root [NAME=]DIR`, before the vault prompt, like `--clawwright-directory`. With no root the transfer tools refuse every call (fail closed) and the refusal names `--transfer-root` so the model can tell the owner what is missing.
 - A root must be an absolute existing directory with no symlink or reparse point in its resolved path, must not be a filesystem root, and must not contain the vault file or any ancestor of it. Violations fail before unlocking.
 - Callers pass `root` (omitted when exactly one root exists) and a root-relative `local` path. Absolute paths, `..`, drive letters, UNC paths and alternate data streams are refused. Results never contain an absolute local path.
 - Roots should be dedicated directories. Because a download can create files that other local tooling executes, download destinations and extracted entries are additionally refused when any component is `.git`, `.hg`, `.svn`, `.ssh`, `.claude`, `.vscode`, `.husky` or `.github`. This is defense in depth, not a sandbox.
@@ -30,7 +30,7 @@ The keeper handles the operations `transfer_upload`, `transfer_download`, `trans
 
 The kind (file or directory) is taken from the source, never from the caller. A start call returns `job_id` at once. At most two transfers run concurrently, and no two target one destination. `overwrite=true` requires `confirm=true`; the flag records caller acknowledgment only, and harness permissions still apply.
 
-`transfer_status` returns: `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. Finished records are retained in a bounded set.
+`transfer_status` returns: `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. `refused_path` is deliberately coarse: it covers a missing local parent directory, a path outside the root and a symlink alike, because a finer reason would disclose the structure of the owner's file system to the model. Finished records are retained in a bounded set.
 
 ### Job and status schema
 
