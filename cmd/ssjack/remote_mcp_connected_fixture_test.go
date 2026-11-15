@@ -168,6 +168,8 @@ func (s *remoteMCPConnectedServer) closeAdmission() {
 	s.stopWaitWorkers()
 }
 
+// The fixture listens on loopback but is addressed by a remote-style host name,
+// which the SDK's DNS-rebinding protection (v1.8.0) refuses with 403 by default.
 func (s *remoteMCPConnectedServer) handlerForRequest(requestCtx context.Context) http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "synthetic-connected-upstream", Version: "1"}, nil)
 	server.AddTool(&mcp.Tool{Name: "echo", Description: "synthetic verified TLS echo", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -205,7 +207,7 @@ func (s *remoteMCPConnectedServer) handlerForRequest(requestCtx context.Context)
 		defer s.endWork()
 		return s.wait(ctx, requestCtx)
 	})
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true})
 }
 
 func (s *remoteMCPConnectedServer) wait(ctx, requestCtx context.Context) (*mcp.CallToolResult, error) {

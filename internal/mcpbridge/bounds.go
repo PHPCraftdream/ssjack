@@ -132,7 +132,35 @@ func (s *slot) lateCaptureClose(conn mcp.Connection) {
 	}
 	if closeErr := conn.Close(); closeErr != nil {
 		s.mu.Lock()
-		s.closeErr = errors.Join(s.closeErr, closeErr)
+		s.addCloseErrLocked(closeErr)
 		s.mu.Unlock()
 	}
+}
+
+// addCloseErrLocked joins close errors once each, so an error seen both by the
+// observing connection and by the closer that received it is retained once.
+func (s *slot) addCloseErrLocked(errs ...error) {
+	for _, err := range errs {
+		if err != nil && !errors.Is(s.closeErr, err) {
+			s.closeErr = errors.Join(s.closeErr, err)
+		}
+	}
+}
+
+// observedConn records the error of every Close of the upstream connection,
+// whoever calls it. The SDK closes a connection itself when its handshake
+// fails and discards that error, so only the connection can keep it.
+type observedConn struct {
+	mcp.Connection
+	slot *slot
+}
+
+func (c observedConn) Close() error {
+	err := c.Connection.Close()
+	if err != nil {
+		c.slot.mu.Lock()
+		c.slot.addCloseErrLocked(err)
+		c.slot.mu.Unlock()
+	}
+	return err
 }

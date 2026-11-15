@@ -38,8 +38,11 @@ call is answered with JSON-RPC `-32601 method not found` and any other
 notification is dropped. Claude Code probes stdio servers with
 `server/discover` before `initialize` and respawns a server that closes on it,
 which used to spend the token at startup. An `initialize` offering a protocol
-version newer than the bridge supports (`2024-11-05`, `2025-03-26`,
-`2025-06-18`) is negotiated down to `2025-06-18` instead of refused.
+version newer than the bridge serves (`2024-11-05`, `2025-03-26`,
+`2025-06-18` and `2025-11-25` are served natively) is negotiated down to
+`2025-11-25` instead of refused. The stateless `2026-07-28` era
+(`server/discover`, `subscriptions/listen`) is not served; Claude Code falls
+back to `initialize`.
 
 To find out why a bridge dropped, the keeper and the bridge append fixed
 lifecycle events to `.claude/ssjack/lifecycle.log` in the project (owner-only

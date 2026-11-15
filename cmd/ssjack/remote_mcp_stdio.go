@@ -16,6 +16,7 @@ const (
 	mcpProtocol20241105 = "2024-11-05"
 	mcpProtocol20250326 = "2025-03-26"
 	mcpProtocol20250618 = "2025-06-18"
+	mcpProtocol20251125 = "2025-11-25"
 )
 
 var (
@@ -183,8 +184,15 @@ func supportedMCPMethod(method string) bool {
 	return false
 }
 
+// supportedMCPProtocol lists the initialize-era versions the bridge serves
+// natively. The stateless 2026-07-28 era (server/discover, subscriptions/listen)
+// is not served: the pinned SDK negotiates an initialize offering it down.
 func supportedMCPProtocol(version string) bool {
-	return version == mcpProtocol20241105 || version == mcpProtocol20250326 || version == mcpProtocol20250618
+	switch version {
+	case mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618, mcpProtocol20251125:
+		return true
+	}
+	return false
 }
 
 func (r *boundedMCPStdioReader) Close() error {

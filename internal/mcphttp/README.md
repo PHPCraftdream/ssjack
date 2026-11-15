@@ -55,20 +55,24 @@ failure. Go erasure remains best effort, not a memory sandbox.
 
 ## Pinned SDK findings
 
-The repository pins `github.com/modelcontextprotocol/go-sdk v1.0.0`; no dependency
-or project version was changed. Its `StreamableClientTransport.MaxRetries == 0`
+The repository pins `github.com/modelcontextprotocol/go-sdk v1.8.0`. Its `StreamableClientTransport.MaxRetries == 0`
 means five retries, not zero. `Take` issues one lazy transport using `-1`, an
 explicit bounded HTTP client without a cookie jar, and redirect refusal. Reuse
 refuses. Callers must close their SDK session before the upstream owner, must not
 format raw SDK errors into model output, and must never replay an uncertain mutation.
-The pinned SDK supports `2025-06-18`, `2025-03-26` and `2024-11-05`, and rejects
-unsupported initialization versions. This is not a claim of 2026 protocol support.
-The bridge must preserve that explicit compatibility boundary rather than silently
-adopting a different protocol or upgrading dependencies.
+The pinned SDK also speaks newer protocol versions, and its client opens with
+`server/discover` and offers the latest one. The upstream session therefore pins
+`ClientSessionOptions.ProtocolVersion` to `2025-06-18`
+(`internal/mcpbridge/lifecycle.go`), and the exchange admits only `2025-06-18`,
+`2025-03-26` and `2024-11-05` and rejects unsupported initialization versions.
+This is not a claim of 2026 protocol support on the upstream side. The bridge
+must preserve that explicit compatibility boundary rather than silently
+adopting a different protocol; the downstream stdio side to the harness is
+separate and serves `2025-11-25` as well (`docs/BOOTSTRAP.md`).
 
-Sources: [streamable transport](https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/mcp/streamable.go),
-[protocol constants](https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/mcp/shared.go),
-[client initialization](https://github.com/modelcontextprotocol/go-sdk/blob/v1.0.0/mcp/client.go).
+Sources: [streamable transport](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/streamable.go),
+[protocol constants](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/shared.go),
+[client initialization](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/client.go).
 
 Policy tests inject private lookup/dial functions and use in-memory connections.
 A private loopback TLS fixture separately exercises the real pinned SDK with

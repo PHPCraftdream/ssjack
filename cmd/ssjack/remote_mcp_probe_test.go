@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Regression for the 2026-11-15 drop: Claude Code probes stdio servers with
@@ -146,14 +148,15 @@ func TestMCPStdioCauseNamesBridgeRefusals(t *testing.T) {
 
 // The incident end to end through the pinned SDK server: the probe is refused,
 // the session survives, every supported version negotiates to itself, and a
-// newer one negotiates down to the latest the bridge supports.
+// newer or stateless-era one negotiates down to the latest the bridge serves.
 func TestMCPStdioSDKSurvivesDiscoverProbeAndNegotiatesVersions(t *testing.T) {
 	for _, tc := range []struct{ offered, want string }{
 		{mcpProtocol20241105, mcpProtocol20241105},
 		{mcpProtocol20250326, mcpProtocol20250326},
 		{mcpProtocol20250618, mcpProtocol20250618},
-		{"2025-11-25", mcpProtocol20250618},
-		{"2099-01-01", mcpProtocol20250618},
+		{mcpProtocol20251125, mcpProtocol20251125},
+		{"2026-07-28", mcpProtocol20251125},
+		{"2099-01-01", mcpProtocol20251125},
 	} {
 		t.Run(tc.offered, func(t *testing.T) {
 			in, out, cancel, runErr := startStdioSDKFixture(t, "stdio-probe-fixture")
@@ -175,5 +178,25 @@ func TestMCPStdioSDKSurvivesDiscoverProbeAndNegotiatesVersions(t *testing.T) {
 				t.Fatalf("session did not survive until the orderly cancellation: %v", err)
 			}
 		})
+	}
+}
+
+// A future SDK bump that adds an initialize-era version must not be silently
+// negotiated down by the bridge's own tracker: every version the SDK serves
+// below the stateless era has to be declared supported here.
+func TestBridgeDeclaresEverySDKInitializeEraVersion(t *testing.T) {
+	const statelessEra = "2026-07-28"
+	for _, version := range mcp.SupportedProtocolVersions() {
+		if version < statelessEra && !supportedMCPProtocol(version) {
+			t.Errorf("SDK serves initialize-era version %s but the bridge does not declare it", version)
+		}
+	}
+	for _, version := range []string{mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618, mcpProtocol20251125} {
+		if !slices.Contains(mcp.SupportedProtocolVersions(), version) {
+			t.Errorf("bridge declares %s but the pinned SDK no longer serves it", version)
+		}
+	}
+	if negotiatedMCPVersion(statelessEra) != mcpProtocol20251125 || negotiatedMCPVersion("") != mcpProtocol20251125 {
+		t.Error("stateless or empty version did not negotiate to the latest initialize-era version")
 	}
 }

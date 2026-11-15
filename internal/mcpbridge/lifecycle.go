@@ -2,7 +2,6 @@ package mcpbridge
 
 import (
 	"context"
-	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,6 +15,9 @@ type capturingTransport struct {
 
 func (t *capturingTransport) Connect(context.Context) (mcp.Connection, error) {
 	conn, err := t.base.Connect(t.slot.ctx)
+	if conn != nil {
+		conn = observedConn{Connection: conn, slot: t.slot}
+	}
 	t.slot.lateCaptureClose(conn)
 	return conn, err
 }
@@ -89,6 +91,11 @@ func sessionReady(r *Runtime, s *slot, opCtx context.Context) error {
 	return errInventory
 }
 
+// upstreamProtocolVersion pins the upstream handshake to the initialize era the
+// one-shot exchange admits. Without it the SDK client offers its latest version
+// and opens with server/discover, which the exchange refuses by design.
+const upstreamProtocolVersion = "2025-06-18"
+
 func (r *Runtime) initialize(s *slot, initCtx context.Context, cancel context.CancelFunc, stopOperation func() bool, opCtx context.Context) {
 	transport, takeErr := s.handle.TakeTransport()
 	if takeErr != nil || transport == nil {
@@ -103,7 +110,7 @@ func (r *Runtime) initialize(s *slot, initCtx context.Context, cancel context.Ca
 	}
 	stopConnect := context.AfterFunc(initCtx, s.cancel)
 	client := mcp.NewClient(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
-	session, err := client.Connect(initCtx, &capturingTransport{base: transport, slot: s}, nil)
+	session, err := client.Connect(initCtx, &capturingTransport{base: transport, slot: s}, &mcp.ClientSessionOptions{ProtocolVersion: upstreamProtocolVersion})
 	r.mu.Lock()
 	s.mu.Lock()
 	valid := err == nil && session != nil && initCtx.Err() == nil && opCtx.Err() == nil && s.ctx.Err() == nil && r.ctx.Err() == nil && !r.closing
@@ -161,7 +168,7 @@ func (s *slot) closeOwned() {
 		closeErr = conn.Close()
 	}
 	s.mu.Lock()
-	s.closeErr = errors.Join(s.closeErr, firstCloseErr, closeErr, waitErr)
+	s.addCloseErrLocked(firstCloseErr, closeErr, waitErr)
 	s.mu.Unlock()
 }
 

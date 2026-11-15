@@ -17,8 +17,8 @@ func TestLicenseTextIncludesProjectAndPinnedDependencyNotices(t *testing.T) {
 	for _, required := range []string{
 		"MIT OR Apache-2.0", "Copyright (c) 2026 ssjack contributors",
 		"Apache License", "Version 2.0, January 2004", "MIT License",
-		"The Ktav contributors", "Go MCP SDK Authors", "JSON Schema Go Project Authors",
-		"Kohei YOSHIDA", "The Go Authors", "v0.8.1", "v1.0.0", "v0.3.0", "v3.0.2",
+		"The Ktav contributors", "licensing transition from the MIT License to the Apache License", "JSON Schema Go Project Authors",
+		"Kohei YOSHIDA", "The Go Authors", "v0.8.1", "v1.8.0", "v0.4.3", "v3.0.2",
 		"v0.53.0", "v0.46.0", "v0.44.0", "go1.26.0", "Additional IP Rights Grant (Patents)",
 	} {
 		if !strings.Contains(text, required) {

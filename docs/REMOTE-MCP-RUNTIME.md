@@ -58,20 +58,13 @@ include raw SDK transport or read errors. No failed or timed-out call is ever
 automatically replayed, and a later explicit model call is a new bounded
 request.
 
-SDK logging, audited against the pinned `go-sdk@v1.0.0` source: the only
-standard-`log` site reachable through `Client.Connect`/`ClientSession` over
-our transport is the default `OnInternalError` hook (`mcp/transport.go:154`),
-which writes `jsonrpc2 error: %v`. The error value comes from
-`jsonrpc2` `internalErrorf` (`internal/jsonrpc2/conn.go:806`); its five call
-sites embed only the message type name (conn.go:556), the JSON-RPC method
-string of an incoming request (conn.go:712, 718, 739 — peer-controlled text,
-but MCP protocol method names, never message bodies or request/response IDs),
-or marshal errors of the client's own handler result (conn.go:735). No raw
-upstream payload bytes are included. A second site, `log.Printf("calling %s:
-%v")` in `notifySessions` (`mcp/shared.go:357`), is reachable only through
-`Client.AddRoots`/`RemoveRoots`; the runtime constructs its client with nil
-options (`internal/mcpbridge/lifecycle.go:109`) and never calls them, so this
-site is unreachable here. Upstream
+SDK logging, re-audited against the pinned `go-sdk@v1.8.0` source: the SDK
+logs only through `slog`. The runtime builds its client, and the bridge its
+server, with nil `Logger` options, which `ensureLogger(nil)` resolves to
+`slog.DiscardHandler` (`mcp/logging.go:112`), so the `OnInternalError` hook
+(`mcp/transport.go:233`), `notifySessions` and the other SDK log sites write
+nowhere. The earlier v1.0.0 audit found standard-`log` sites instead; none
+remain. Upstream
 credential material lives only as HTTP headers applied by the `mcpflow`
 request hook (`internal/mcphttp/auth.go`); `mcpexchange` returns only the
 fixed `errExchange` sentinel (`internal/mcpexchange/connection.go`), so
@@ -79,7 +72,7 @@ header bytes never enter any error value that reaches either log site.
 Scoped to what these sources show, this review found no reachable
 private-peer-diagnostic escape.
 
-`ClientSession.Wait` (`mcp/client.go:228`) delegates to `jsonrpc2
+Audited against go-sdk v1.0.0 (line references are that version's; the join mechanism below was not re-audited line by line for v1.8.0, which the full-profile tests cover): `ClientSession.Wait` (`mcp/client.go:228`) delegates to `jsonrpc2
 Connection.Wait` (`internal/jsonrpc2/conn.go:485`), which blocks on the
 connection `done` channel; that channel closes only after the
 `readIncoming` goroutine has exited and the connection is idle — no outgoing

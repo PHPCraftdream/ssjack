@@ -241,7 +241,7 @@ func (c *mcpStdioConnection) trackNegotiatedVersion(messages []jsonrpc.Message) 
 
 func negotiatedMCPVersion(version string) string {
 	if !supportedMCPProtocol(version) {
-		return mcpProtocol20250618
+		return mcpProtocol20251125
 	}
 	return version
 }
