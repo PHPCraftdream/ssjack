@@ -103,7 +103,7 @@ func (d *Dispatcher) route(ctx context.Context, c *ownerpacket.Command) error {
 }
 
 func activeRotation(info *vault.RotationInfo) bool {
-	return info != nil && vault.RotationActive(info.Phase)
+	return info != nil && vault.LiveRotationPhase(info.Phase)
 }
 
 func (d *Dispatcher) observeRotation(s ownerdb.Snapshot) {

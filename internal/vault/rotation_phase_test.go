@@ -13,8 +13,8 @@ func TestRotationPhasePredicates(t *testing.T) {
 		RotationCommitted, RotationComplete, RotationCancelled, RotationArchived, "", "bogus",
 	}
 	for _, phase := range phases {
-		if got := RotationActive(phase); got != active[phase] {
-			t.Errorf("RotationActive(%q) = %v, want %v", phase, got, active[phase])
+		if got := LiveRotationPhase(phase); got != active[phase] {
+			t.Errorf("LiveRotationPhase(%q) = %v, want %v", phase, got, active[phase])
 		}
 		if got := RotationAwaitsVerification(phase); got != verification[phase] {
 			t.Errorf("RotationAwaitsVerification(%q) = %v, want %v", phase, got, verification[phase])

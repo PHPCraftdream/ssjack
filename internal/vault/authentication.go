@@ -116,7 +116,7 @@ func validateRotationVault(v *Vault) error {
 		}
 		return nil // Completed recovery evidence survives unrelated later edits.
 	}
-	if !RotationActive(j.Phase) {
+	if !LiveRotationPhase(j.Phase) {
 		return errors.New("invalid key rotation phase")
 	}
 	if j.CommitRevision != 0 || j.CommitDigest != "" {

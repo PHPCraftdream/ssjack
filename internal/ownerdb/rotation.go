@@ -130,7 +130,7 @@ func activeImportPhase(phase ImportPhase) bool {
 }
 
 func activeRotationInfo(info vault.RotationInfo) bool {
-	return vault.RotationActive(info.Phase)
+	return vault.LiveRotationPhase(info.Phase)
 }
 
 // rotationBlocksMutation fails closed if journal state cannot be read. Local

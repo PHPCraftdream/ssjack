@@ -35,8 +35,8 @@ const (
 	RotationArchived   = "archived"
 )
 
-// RotationActive reports phases of a journal that still needs owner action.
-func RotationActive(phase string) bool {
+// LiveRotationPhase reports phases of a journal that still needs owner action.
+func LiveRotationPhase(phase string) bool {
 	switch phase {
 	case RotationPrepared, RotationAttempting, RotationUnknown, RotationAdded, RotationVerified, RotationCommitted:
 		return true
