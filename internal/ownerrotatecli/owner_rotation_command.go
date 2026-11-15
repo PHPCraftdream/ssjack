@@ -149,7 +149,7 @@ func runRotationPrepareInstall(ctx context.Context, control *ownercontrol.Contro
 	if err := validateRotationTransition(verified, complete, vault.RotationComplete); err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(os.Stdout, "Encrypted selected-account commit: durable at revision %d. Old remote key remains authorized. This does not prove adoption by every consumer; active sessions/jobs were not restarted or terminated.\n", complete.Revision)
+	fmt.Fprintf(os.Stdout, "Encrypted selected-account commit: durable at revision %d. Old remote key remains authorized; remove it with a separate rotate-key --retire-old before --archive-completed, once every intended client uses the new key. This does not prove adoption by every consumer; active sessions/jobs were not restarted or terminated.\n", complete.Revision)
 	finalSnapshot, err := control.RotationSnapshot(ctx)
 	if err == nil {
 		printAdoptionStatus(os.Stdout, finalSnapshot.Status.Database.SSH)

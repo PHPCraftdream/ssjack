@@ -36,7 +36,7 @@ func runRotationArchive(ctx context.Context, control *ownercontrol.Control, comm
 	}
 	confirmation := archiveConfirmation(display)
 	printRotationMetadata(os.Stdout, display, confirmation)
-	fmt.Fprintln(os.Stdout, "This preserves the exact encrypted completed database as a recovery file. No key retirement or remote action is requested. Run a separate rotate-key command after archive confirmation to prepare another rotation.")
+	fmt.Fprintln(os.Stdout, "This preserves the exact encrypted completed database as a recovery file. No key retirement or remote action is requested, and after archive ssjack can no longer retire the old remote key: run rotate-key --retire-old first if you want it removed. Run a separate rotate-key command after archive confirmation to prepare another rotation.")
 	if err := rotationConsent(readSecret, "Type the exact ARCHIVE confirmation shown above: ", confirmation); err != nil {
 		return 1, err
 	}

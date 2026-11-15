@@ -164,9 +164,14 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(plan.changes("base", "HEAD"), ["old/a.go", "new/b.go"])
             self.assertIn("--no-renames", run.call_args.args[0])
         self.assertEqual(plan.changes("0" * 40, "HEAD"), [".github/unknown-base"])
-        with patch.object(subprocess, "check_output", side_effect=subprocess.CalledProcessError(1, "git")):
+        failure = subprocess.CalledProcessError(1, "git")
+        with patch.object(plan, "commit_exists", return_value=True), \
+                patch.object(subprocess, "check_output", side_effect=failure):
             with self.assertRaises(subprocess.CalledProcessError):
-                plan.changes("missing", "HEAD")
+                plan.changes("existing-base", "HEAD")
+        with patch.object(plan, "commit_exists", return_value=False), \
+                patch.object(subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, "git")):
+            self.assertEqual(plan.changes("force-pushed-away", "HEAD"), [".github/unknown-base"])
 
     def test_formatting_failure_retains_nonzero_diff_output(self):
         selected = json.dumps({"packages": ["./internal/example"]})

@@ -144,6 +144,6 @@ func continueRotationRecovery(ctx context.Context, control *ownercontrol.Control
 		}
 		plan = complete
 	}
-	fmt.Fprintf(os.Stdout, "Encrypted selected-account commit: durable at revision %d. Old remote key remains authorized. This does not prove adoption by every consumer; active sessions/jobs were not restarted or terminated.\n", plan.Revision)
+	fmt.Fprintf(os.Stdout, "Encrypted selected-account commit: durable at revision %d. Old remote key remains authorized; remove it with a separate rotate-key --retire-old before --archive-completed, once every intended client uses the new key. This does not prove adoption by every consumer; active sessions/jobs were not restarted or terminated.\n", plan.Revision)
 	return 0, nil
 }

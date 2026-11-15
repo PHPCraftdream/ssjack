@@ -74,8 +74,15 @@ def decode_stream(text):
 
 
 def graph(root):
-    raw = subprocess.check_output(
-        ["go", "list", "-mod=readonly", "-json", "./..."], text=True)
+    try:
+        raw = subprocess.check_output(
+            ["go", "list", "-mod=readonly", "-json", "./..."], text=True)
+    except subprocess.CalledProcessError:
+        # A force-pushed branch leaves github.event.before pointing at a
+        # commit that no longer exists; broaden instead of failing the run.
+        if commit_exists(base):
+            raise
+        return [".github/unknown-base"]
     result = []
     for package in decode_stream(raw):
         directory = Path(package["Dir"]).resolve().relative_to(root).as_posix()
@@ -92,11 +99,24 @@ def graph(root):
     return result
 
 
+def commit_exists(commit):
+    return subprocess.run([
+        "git", "cat-file", "-e", commit + "^{commit}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 def changes(base, head):
     if not base or set(base) == {"0"}:
         return [".github/unknown-base"]
-    raw = subprocess.check_output(
-        ["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"])
+    try:
+        raw = subprocess.check_output(
+            ["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"])
+    except subprocess.CalledProcessError:
+        # A force-pushed branch leaves github.event.before pointing at a
+        # commit that no longer exists; broaden instead of failing the run.
+        if commit_exists(base):
+            raise
+        return [".github/unknown-base"]
     return [p.decode("utf-8", errors="strict") for p in raw.split(b"\0") if p]
 
 
