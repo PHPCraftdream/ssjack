@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerterminal"
 )
 
@@ -73,8 +74,13 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 			nativeArchiveMust(t, err)
 		}
 	}
-	if terminal.Wait(lifetime) != nil {
-		t.Fatal("native archive command did not complete its explicit decision")
+	if err := terminal.Wait(lifetime); err != nil {
+		// Tell a timeout from a child that exited with an error; both used to read the same.
+		class := "child ended with error: " + flakediag.Tail(err.Error(), 200)
+		if lifetime.Err() != nil {
+			class = "lifetime expired: " + lifetime.Err().Error()
+		}
+		t.Fatal("native archive command did not complete its explicit decision (" + class + ")")
 	}
 	if !cancelled {
 		captureWaitDiag(t, lifetime, capture, "Owner command completed; encrypted persistence confirmed.", "native archive command omitted its persistence receipt")

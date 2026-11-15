@@ -97,8 +97,12 @@ func ownerChildTerminal(t *testing.T, what, executableName string, terminal *own
 	flakediag.OnFailure(t, func() string {
 		state := "still running or unjoined"
 		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
-		if terminal.Wait(ctx) == nil {
+		switch err := terminal.Wait(ctx); {
+		case err == nil:
 			state = "exited cleanly"
+		case ctx.Err() == nil:
+			// The child ended on its own: the error is its exit status.
+			state = "exited with error: " + flakediag.Tail(err.Error(), 200)
 		}
 		stop()
 		return "owner terminal child: what=" + what +
