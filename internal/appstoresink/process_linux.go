@@ -114,7 +114,7 @@ func beginDelivery(c *Consumer, ctx context.Context, ref appstoreref.Ref, encode
 	}()
 	end, _ := operation.Deadline()
 	if inputWrite.SetWriteDeadline(end) != nil || outputRead.SetReadDeadline(end) != nil {
-		return nil, ErrUnsupported
+		return nil, beginFailed("pipe-deadline", command.Process.Pid, identity, nil, ErrUnsupported)
 	}
 	// Revocation/cancellation also interrupts pipe IO even if a descendant retained a descriptor.
 	context.AfterFunc(operation, func() { _ = inputWrite.Close(); _ = outputRead.Close() })
@@ -125,22 +125,22 @@ func beginDelivery(c *Consumer, ctx context.Context, ref appstoreref.Ref, encode
 	binding := bindingDigest(s.binding)
 	copy(d.frame[24:56], binding[:])
 	binary.BigEndian.PutUint64(d.frame[56:64], length)
-	if waitPeer(operation, command.Process.Pid, identity) != nil {
-		return nil, ErrDenied
+	if err = waitPeer(operation, command.Process.Pid, identity); err != nil {
+		return nil, beginFailed("peer-before-handshake", command.Process.Pid, identity, err, ErrDenied)
 	}
 	if err = writeExact(inputWrite, d.frame[:]); err != nil {
-		return nil, ErrUnavailable
+		return nil, beginFailed("frame-write", command.Process.Pid, identity, err, ErrUnavailable)
 	}
 	var ready [160]byte
 	defer clear(ready[:])
 	if _, err = io.ReadFull(outputRead, ready[:]); err != nil {
-		return nil, ErrUnavailable
+		return nil, beginFailed("ready-read", command.Process.Pid, identity, err, ErrUnavailable)
 	}
 	if string(ready[:8]) != "SSRDY001" || !bytes.Equal(ready[8:64], d.frame[8:]) || !bytes.Equal(ready[64:96], s.binding.Target[:]) || !bytes.Equal(ready[96:128], s.binding.Revision[:]) || !bytes.Equal(ready[128:160], s.binding.Purpose[:]) {
-		return nil, ErrDenied
+		return nil, beginFailed("ready-mismatch", command.Process.Pid, identity, nil, ErrDenied)
 	}
 	if checkConsumer(c, ref, encoded) != nil || checkPeer(command.Process.Pid, identity) != nil {
-		return nil, ErrDenied
+		return nil, beginFailed("peer-after-handshake", command.Process.Pid, identity, nil, ErrDenied)
 	}
 	keep = true
 	return &Delivery{state: d}, nil

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,7 +50,38 @@ func fixtureConsumer(t *testing.T, path string, binding Binding) *Consumer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
+	traceBeginFailures(t)
 	return c
+}
+
+var beginTraceLines struct {
+	sync.Mutex
+	lines []string
+}
+
+// traceBeginFailures prints what Begin saw only if this test fails. Lines are
+// package-wide, so a failure also shows neighbours that ran at the same time.
+func traceBeginFailures(t *testing.T) {
+	t.Helper()
+	record := func(line string) {
+		beginTraceLines.Lock()
+		defer beginTraceLines.Unlock()
+		if len(beginTraceLines.lines) < 256 {
+			beginTraceLines.lines = append(beginTraceLines.lines, time.Now().UTC().Format("15:04:05.000000 ")+line)
+		}
+	}
+	beginTrace.Store(&record)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		beginTraceLines.Lock()
+		defer beginTraceLines.Unlock()
+		t.Logf("Begin failure trace (%d lines):", len(beginTraceLines.lines))
+		for _, line := range beginTraceLines.lines {
+			t.Log(line)
+		}
+	})
 }
 func sinkContext(t *testing.T) context.Context {
 	t.Helper()
