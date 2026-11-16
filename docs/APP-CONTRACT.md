@@ -21,7 +21,7 @@ ssjack -p lab --app ./first --app ./second --app-route incus:lab-guest:operator 
 
 - `--app DIR` is repeatable. `DIR` holds `ssjack-app.json`. Every descriptor is read, validated and resolved before any credential is unlocked; a failure ends startup. Two registrations with the same `name` are refused, and so is the same directory twice. At most 16 applications are registered.
 - `--app-route incus:CONTAINER:USER` is optional and applies to every registered application. Without `--app` it is refused.
-- Registration is available in full mode only. No application is enabled implicitly, and nothing is discovered from the working directory or PATH.
+- Registration is available in full mode only. No application is enabled implicitly, and no application is discovered from the working directory or PATH; only a bare `launch.executable` name is looked up on PATH, once, at startup.
 
 ## Descriptor: `ssjack-app.json`
 

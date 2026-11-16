@@ -24,7 +24,8 @@ func syntheticApp(t *testing.T, name string) string {
 	if err := os.WriteFile(filepath.Join(dir, executable), []byte("fixture, never executed"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	descriptor := `{"format":"ssjack-app-v1","name":"` + name + `","launch":{"executable":"` + executable + `","args":["entry"]},"commands":{"observational":["status"]}}`
+	// "./" keeps the fixture inside DIR; a bare name would be a PATH lookup.
+	descriptor := `{"format":"ssjack-app-v1","name":"` + name + `","launch":{"executable":"./` + executable + `","args":["entry"]},"commands":{"observational":["status"]}}`
 	if err := os.WriteFile(filepath.Join(dir, application.DescriptorFile), []byte(descriptor), 0o600); err != nil {
 		t.Fatal(err)
 	}
