@@ -190,8 +190,16 @@ Exact framing, limits and replies are defined in
   value. The target's SSH stderr carries an injected secret that must be
   discarded.
 - A backup never overwrites an existing `OUTPUT` and never leaves a partial one.
-  Existing output is discovered at exclusive publication, after the remote read
-  was dispatched, so that outcome is `unknown`.
+  The existing file must stay byte-for-byte intact and the call must exit
+  non-zero. The kit allows exactly two outcomes, and does not prescribe when the
+  consumer notices the existing file:
+  - the consumer refuses before any remote read: status `withheld`, zero remote
+    reads;
+  - the consumer dispatches the read and exclusive publication then fails:
+    status `unknown`, exactly one remote read.
+
+  More than one read, `withheld` after a read, `unknown` without one, or
+  `received` is a violation.
 - Forward calls whose request the consumer can refuse locally (no adapter
   context, profile mismatch, oversize template, malformed references) must exit
   non-zero before any network call.
@@ -232,17 +240,36 @@ SSH target which allows only its fixed read and write commands.
 | Large deploy (over 1 MiB) | `received`; exact hydrated bytes; exactly one SSH write. |
 | Large reference-only backup | `received`; exact reference-only copy; source unchanged; one read. |
 | Large exact-version restore | Original bytes restored with exactly one more write; copy unchanged. |
-| Existing output | `unknown`, non-zero, existing copy and source intact; the SSH read was dispatched exactly once more. |
+| Existing output | Non-zero; existing copy byte-for-byte intact and source unchanged; either `withheld` with no new SSH read or `unknown` with exactly one (see Result). |
 | Missing exact version | `withheld`, non-zero, no new SSH connection or write. |
 | Whole run | The copy and `HOME` contain no synthetic value. |
 
 ## The synthetic consumer
 
-`internal/syntheticconsumer` is a small Go program that implements this
-contract exactly as written above, using only the pinned transport, the frame
-codec and the standard library. It requires the fixed leading arguments
-`--consumer synthetic` (set through `SSJACK_CONSUMER_ARGS`, which exercises that
-plumbing) and the default subcommand names. It is test infrastructure and is not
-part of any shipped binary. It is the reference for new consumers, but its
-passing run is evidence about ssjack's side of the contract only: an external
-consumer's own run is what establishes the consumer's conformance.
+`internal/syntheticconsumer` implements this contract exactly as written above,
+using only the pinned transport, the frame codec and the standard library; its
+program is `internal/syntheticconsumer/cmd/syntheticconsumer`. It requires the
+fixed leading arguments `--consumer synthetic` (set through
+`SSJACK_CONSUMER_ARGS`, which exercises that plumbing) and the default
+subcommand names. It is test infrastructure and is not part of any shipped
+binary. It is the reference for new consumers, but its passing run is evidence
+about ssjack's side of the contract only: an external consumer's own run is what
+establishes the consumer's conformance.
+
+## Negative controls
+
+A kit that cannot fail proves nothing. `TestConsumerKitNegativeControls` (in the
+ordinary Linux test suite; no root, no SSH) re-executes the test binary as the
+synthetic consumer over the real pinned listener with in-memory adapters and
+runs the kit's own helpers against it, capturing failures instead of failing the
+test:
+
+| Consumer | Kit must |
+| --- | --- |
+| Correct (deploy, existing output) | Pass. |
+| Leaks a value into its output (`--fault leak=VALUE`) | Fail with "consumer output disclosed private data". |
+| Overwrites an existing output and reports `received` (`--fault overwrite-output`) | Fail with "consumer completion mismatch". |
+| Overwrites an existing output but reports `unknown` (`--fault clobber-output`) | Fail with "existing output was modified". |
+
+The `--fault` leading argument exists only in this test-only program and is
+never reachable from a shipped binary.

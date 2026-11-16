@@ -1,4 +1,4 @@
-package main
+package syntheticconsumer
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 // approved source is published to --output exclusively. The output is staged
 // beside its destination and linked into place, so an existing file is never
 // replaced; that failure is discovered after dispatch and is unknown.
-func backup(ctx context.Context, args []string) string {
+func backup(ctx context.Context, args []string, fault string) string {
 	flags := flag.NewFlagSet("backup-text", flag.ContinueOnError)
 	file := flags.String("file", "", "")
 	output := flags.String("output", "", "")
@@ -39,10 +39,18 @@ func backup(ctx context.Context, args []string) string {
 		return statusWithheld
 	}
 	defer staging.discard()
+	staging.replace = fault == faultOverwrite || fault == faultClobber
+	status := backupText
 	if set["stream-references"] {
-		return backupStream(ctx, c, *profile, *file, *references, staging)
+		status = func(ctx context.Context, c *connection, file string, staging *staged) string {
+			return backupStream(ctx, c, *profile, file, *references, staging)
+		}
 	}
-	return backupText(ctx, c, *file, staging)
+	result := status(ctx, c, *file, staging)
+	if fault == faultClobber && result == statusReceived {
+		return statusUnknown
+	}
+	return result
 }
 
 func backupText(ctx context.Context, c *connection, file string, staging *staged) string {
@@ -119,8 +127,9 @@ func backupStream(ctx context.Context, c *connection, profile, file, referencesP
 // staged is a private same-directory file that becomes the output only by an
 // exclusive hard link once the copy is complete.
 type staged struct {
-	file   *os.File
-	output string
+	file    *os.File
+	output  string
+	replace bool // negative-control defect: rename over an existing output
 }
 
 func stage(output string) (*staged, bool) {
@@ -132,7 +141,13 @@ func stage(output string) (*staged, bool) {
 }
 
 func (s *staged) publish() bool {
-	return s.file.Sync() == nil && s.file.Close() == nil && os.Link(s.file.Name(), s.output) == nil
+	if s.file.Sync() != nil || s.file.Close() != nil {
+		return false
+	}
+	if s.replace {
+		return os.Rename(s.file.Name(), s.output) == nil
+	}
+	return os.Link(s.file.Name(), s.output) == nil
 }
 
 func (s *staged) discard() {

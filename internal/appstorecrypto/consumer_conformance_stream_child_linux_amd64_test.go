@@ -138,11 +138,12 @@ func consumerStreamChildRun(t *testing.T) {
 	}
 	if !t.Run("existing-stream-output-is-preserved", func(t *testing.T) {
 		bootstrap := consumerStreamServer(t, installation, backup, runner)
-		cli.backup(t, &bootstrap, "unknown", false, "--file", target.path, "--output", cli.backupPath, "--profile", base.Profile, "--stream-references", references)
+		reads := target.reads.Load()
+		cli.backupExisting(t, &bootstrap, func() int { return int(target.reads.Load() - reads) }, "--file", target.path, "--output", cli.backupPath, "--profile", base.Profile, "--stream-references", references)
 		consumerAssertFile(t, cli.backupPath, template)
 		consumerAssertFile(t, target.path, expected)
-		if target.reads.Load() != 2 || target.writes.Load() != 2 {
-			t.Fatal("existing-output refusal repeated SSH or changed the source")
+		if target.writes.Load() != 2 {
+			t.Fatal("existing-output refusal changed the source")
 		}
 	}) {
 		return
@@ -154,10 +155,10 @@ func consumerStreamChildRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		metadata := consumerStreamReferences(t, cli, "missing-version-refs.json", missing.References)
-		before := target.accepted.Load()
+		before, reads := target.accepted.Load(), target.reads.Load()
 		bootstrap := consumerStreamServer(t, installation, missing, runner)
 		cli.deploy(t, &bootstrap, "withheld", false, "--file", target.path, "--template", selected, "--profile", base.Profile, "--stream-references", metadata)
-		if target.accepted.Load() != before || target.writes.Load() != 2 || target.reads.Load() != 2 {
+		if target.accepted.Load() != before || target.writes.Load() != 2 || target.reads.Load() != reads {
 			t.Fatal("missing exact stream version contacted SSH")
 		}
 		consumerAssertFile(t, target.path, expected)

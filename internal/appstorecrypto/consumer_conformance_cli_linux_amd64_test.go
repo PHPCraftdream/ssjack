@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -49,6 +50,16 @@ var (
 	consumerFixedEnv    = map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true, "LANG": true}
 )
 
+// consumerT is the subset of testing.T the kit's helpers use. The negative
+// controls implement it to capture a failure instead of failing their own test.
+type consumerT interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	Error(args ...any)
+	TempDir() string
+}
+
 type consumerConfig struct {
 	command string
 	args    []string
@@ -60,7 +71,7 @@ type consumerConfig struct {
 
 // loadConsumerConfig validates the SSJACK_CONSUMER_* settings and fails the
 // test on any missing or malformed value; a requested kit never skips.
-func loadConsumerConfig(t testing.TB) consumerConfig {
+func loadConsumerConfig(t consumerT) consumerConfig {
 	t.Helper()
 	config := consumerConfig{command: os.Getenv(consumerCommandEnv), deploy: "deploy-text", backup: "backup-text"}
 	info, err := os.Stat(config.command)
@@ -124,7 +135,7 @@ type consumerCLI struct {
 	backupPath   string
 }
 
-func newConsumerCLI(t *testing.T, template string) consumerCLI {
+func newConsumerCLI(t consumerT, template string) consumerCLI {
 	t.Helper()
 	root := t.TempDir()
 	cli := consumerCLI{config: loadConsumerConfig(t), root: root, templatePath: filepath.Join(root, "template.txt"), backupPath: filepath.Join(root, "backup.txt")}
@@ -134,20 +145,20 @@ func newConsumerCLI(t *testing.T, template string) consumerCLI {
 	return cli
 }
 
-func (cli consumerCLI) deploy(t *testing.T, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, args ...string) {
+func (cli consumerCLI) deploy(t consumerT, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, args ...string) string {
 	t.Helper()
-	cli.run(t, bootstrap, wantStatus, success, cli.config.deploy, args...)
+	return cli.run(t, bootstrap, wantStatus, success, cli.config.deploy, args...)
 }
 
-func (cli consumerCLI) backup(t *testing.T, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, args ...string) {
+func (cli consumerCLI) backup(t consumerT, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, args ...string) string {
 	t.Helper()
-	cli.run(t, bootstrap, wantStatus, success, cli.config.backup, args...)
+	return cli.run(t, bootstrap, wantStatus, success, cli.config.backup, args...)
 }
 
 // run executes the consumer once. With a bootstrap the consumer receives the
 // launcher environment; without one it must refuse. wantStatus, when set,
 // must appear as exactly one {"status":...} object on the output.
-func (cli consumerCLI) run(t *testing.T, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, name string, args ...string) {
+func (cli consumerCLI) run(t consumerT, bootstrap *apptransport.Bootstrap, wantStatus string, success bool, name string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -172,17 +183,46 @@ func (cli consumerCLI) run(t *testing.T, bootstrap *apptransport.Bootstrap, want
 		t.Fatalf("consumer completion mismatch: success=%t error=%v\n%s", success, err, output)
 	}
 	if wantStatus == "" {
-		return
+		return ""
 	}
-	matches := 0
+	allowed := strings.Split(wantStatus, "|")
+	var matched []string
 	for _, line := range strings.Split(output, "\n") {
 		var result map[string]any
-		if json.Unmarshal([]byte(line), &result) == nil && len(result) == 1 && result["status"] == wantStatus {
-			matches++
+		if json.Unmarshal([]byte(line), &result) != nil || len(result) != 1 {
+			continue
+		}
+		if status, ok := result["status"].(string); ok && slices.Contains(allowed, status) {
+			matched = append(matched, status)
 		}
 	}
-	if matches != 1 {
+	if len(matched) != 1 {
 		t.Fatalf("consumer did not emit exactly one expected status\n%s", output)
+	}
+	return matched[0]
+}
+
+// backupExisting runs a backup whose OUTPUT already exists. The contract
+// allows two outcomes and nothing else: the consumer refuses before any remote
+// read (withheld, zero reads) or the read was dispatched and exclusive
+// publication failed (unknown, one read). Either way the existing output stays
+// byte-for-byte intact. dispatched reports the remote reads seen since the
+// scenario began.
+func (cli consumerCLI) backupExisting(t consumerT, bootstrap *apptransport.Bootstrap, dispatched func() int, args ...string) {
+	t.Helper()
+	before, err := os.ReadFile(cli.backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := cli.backup(t, bootstrap, "unknown|withheld", false, args...)
+	after, err := os.ReadFile(cli.backupPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("existing output was modified")
+	}
+	switch reads := dispatched(); {
+	case reads == 0 && status == "withheld", reads == 1 && status == "unknown":
+	default:
+		t.Fatalf("existing output: status %q with %d remote reads", status, reads)
 	}
 }
 
@@ -216,7 +256,7 @@ func consumerServer(t *testing.T, installation *appstorecrypto.Installation, gra
 	return server.Bootstrap()
 }
 
-func consumerAssertFile(t *testing.T, path, expected string) {
+func consumerAssertFile(t consumerT, path, expected string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != expected {
@@ -224,7 +264,7 @@ func consumerAssertFile(t *testing.T, path, expected string) {
 	}
 }
 
-func consumerAssertOperatorFiles(t *testing.T, root string) {
+func consumerAssertOperatorFiles(t consumerT, root string) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {

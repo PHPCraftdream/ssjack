@@ -1,7 +1,7 @@
-// Command syntheticconsumer is the in-repository reference consumer of the
+// Package syntheticconsumer is the in-repository reference consumer of the
 // selected-text contract in docs/CONSUMER-CONFORMANCE.md. It is test
-// infrastructure that the conformance kit drives; it is never shipped.
-package main
+// infrastructure driven by the conformance kit; no shipped binary imports it.
+package syntheticconsumer
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,31 +19,45 @@ const (
 	statusUnknown  = "unknown"
 
 	operationTimeout = 62 * time.Second
+
+	// Deliberate defects for the kit's negative controls. They are selectable
+	// only through the leading "--fault" argument of this test-only program.
+	faultOverwrite  = "overwrite-output"
+	faultClobber    = "clobber-output"
+	faultLeakPrefix = "leak="
 )
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout))
-}
-
-// run requires the fixed leading arguments "--consumer synthetic" so the kit's
-// SSJACK_CONSUMER_ARGS plumbing is exercised, then dispatches the subcommand.
-// Exactly one status line is printed; only received exits zero.
-func run(args []string, stdout io.Writer) int {
+// Run requires the fixed leading arguments "--consumer synthetic", optionally
+// followed by "--fault NAME", so the kit's SSJACK_CONSUMER_ARGS plumbing is
+// exercised, then dispatches the subcommand. Exactly one status line is
+// printed; only received exits zero.
+func Run(args []string, stdout io.Writer) int {
 	if len(args) < 3 || args[0] != "--consumer" || args[1] != "synthetic" {
-		fmt.Fprintln(os.Stderr, "usage: syntheticconsumer --consumer synthetic deploy-text|backup-text FLAGS")
+		fmt.Fprintln(os.Stderr, "usage: syntheticconsumer --consumer synthetic [--fault NAME] deploy-text|backup-text FLAGS")
 		return 2
+	}
+	rest, fault := args[2:], ""
+	if rest[0] == "--fault" {
+		if len(rest) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: --fault requires a name")
+			return 2
+		}
+		fault, rest = rest[1], rest[2:]
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
 	var status string
-	switch args[2] {
+	switch rest[0] {
 	case "deploy-text":
-		status = deploy(ctx, args[3:])
+		status = deploy(ctx, rest[1:])
 	case "backup-text":
-		status = backup(ctx, args[3:])
+		status = backup(ctx, rest[1:], fault)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		return 2
+	}
+	if value, leak := strings.CutPrefix(fault, faultLeakPrefix); leak {
+		fmt.Fprintln(stdout, value)
 	}
 	fmt.Fprintf(stdout, "{\"status\":%q}\n", status)
 	if status == statusReceived {

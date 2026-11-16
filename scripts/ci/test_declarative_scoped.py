@@ -91,7 +91,7 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn("^--- SKIP: {name}", runner)
         self.assertIn("^--- PASS: {name}", runner)
         self.assertIn('f"^({NAME}|{STREAM_NAME})$"', runner)
-        self.assertIn("./internal/syntheticconsumer", runner)
+        self.assertIn("./internal/syntheticconsumer/cmd/syntheticconsumer", runner)
 
     def test_fixture_request_identifiers_are_exact_16_bytes(self):
         files = (ROOT / "internal/declarativeslice").glob("scoped*_test.go")

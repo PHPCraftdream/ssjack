@@ -44,7 +44,7 @@ def main() -> int:
         if options.synthetic:
             consumer = directory / "syntheticconsumer"
             subprocess.run(
-                ["go", "build", "-mod=readonly", "-trimpath", "-o", str(consumer), "./internal/syntheticconsumer"],
+                ["go", "build", "-mod=readonly", "-trimpath", "-o", str(consumer), "./internal/syntheticconsumer/cmd/syntheticconsumer"],
                 cwd=ROOT,
                 check=True,
                 timeout=180,
