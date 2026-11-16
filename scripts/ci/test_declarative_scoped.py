@@ -70,27 +70,28 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         planner = (ROOT / "scripts/ci/plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./internal/declarativeslice" in plan["packages"]).lower()', planner)
 
-    def test_text_pair_is_pinned_and_mandatory_in_both_tiers(self):
+    def test_consumer_conformance_is_mandatory_in_both_tiers(self):
         feature = (ROOT / ".github/workflows/feature.yml").read_text(encoding="utf-8")
         full = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         for source in (feature, full):
-            self.assertIn("  text-pair:\n", source)
-            self.assertIn("uses: ./.github/workflows/text-pair.yml", source)
-        workflow = (ROOT / ".github/workflows/text-pair.yml").read_text(encoding="utf-8")
-        self.assertIn("053655da09086986a23f66efe42dd5e8a2907f70", workflow)
-        self.assertIn("repository: PHPCraftdream/clawwright", workflow)
+            self.assertIn("  consumer-conformance:\n", source)
+            self.assertIn("uses: ./.github/workflows/consumer-conformance.yml", source)
+        workflow = (ROOT / ".github/workflows/consumer-conformance.yml").read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("actions/checkout@"), 1)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("python3 scripts/ci/text_pair_scoped.py", workflow)
-        runner = (ROOT / "scripts/ci/text_pair_scoped.py").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/ci/consumer_conformance.py --synthetic", workflow)
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            self.assertNotIn("repository:", path.read_text(encoding="utf-8"), path.name)
+        runner = (ROOT / "scripts/ci/consumer_conformance.py").read_text(encoding="utf-8")
         self.assertIn("os.geteuid() != 0", runner)
-        self.assertIn("actual != expected", runner)
-        self.assertIn('NAME = "TestClawwrightTextPairConnected"', runner)
-        self.assertIn("^--- SKIP: {NAME}", runner)
-        self.assertIn("^--- PASS: {NAME}", runner)
-        self.assertIn('STREAM_NAME = "TestClawwrightTextStreamPairConnected"', runner)
-        self.assertIn("^--- SKIP: {STREAM_NAME}", runner)
-        self.assertIn("^--- PASS: {STREAM_NAME}", runner)
+        self.assertIn("SSJACK_CONSUMER_COMMAND is required without --synthetic", runner)
+        self.assertIn('env["SSJACK_CONSUMER_CONFORMANCE"] = "1"', runner)
+        self.assertIn('NAME = "TestConsumerConformance"', runner)
+        self.assertIn('STREAM_NAME = "TestConsumerStreamConformance"', runner)
+        self.assertIn("^--- SKIP: {name}", runner)
+        self.assertIn("^--- PASS: {name}", runner)
         self.assertIn('f"^({NAME}|{STREAM_NAME})$"', runner)
+        self.assertIn("./internal/syntheticconsumer", runner)
 
     def test_fixture_request_identifiers_are_exact_16_bytes(self):
         files = (ROOT / "internal/declarativeslice").glob("scoped*_test.go")

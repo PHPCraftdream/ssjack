@@ -92,7 +92,7 @@ backupText results and public exports retain their v1 contract.
 
 ## Required proof before publication
 
-Use actual Clawwright CLI, keeper grants, authenticated transport and isolated
+Use an actual consumer CLI (see [conformance kit](../CONSUMER-CONFORMANCE.md)), keeper grants, authenticated transport and isolated
 SSH composition for a file larger than 1 MiB. Add counterfactuals for wrong
 profile/direction/refs/file, malformed preparation with no SSH contact, source
 change between passes, limits, tiny/oversized frames, invalid UTF-8/NUL, late

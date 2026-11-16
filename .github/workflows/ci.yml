@@ -419,7 +419,7 @@ jobs:
       - name: Run the ssjack-ui plugin tests
         run: claude plugin test plugins/ssjack-ui
 
-  text-pair:
-    uses: ./.github/workflows/text-pair.yml
+  consumer-conformance:
+    uses: ./.github/workflows/consumer-conformance.yml
     with:
       source_ref: ${{ inputs.source_ref || github.sha }}

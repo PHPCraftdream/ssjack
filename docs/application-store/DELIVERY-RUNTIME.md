@@ -16,7 +16,7 @@ Before handoff, the coordinator rechecks the spool's identity and full encoded h
 
 ## Native endpoint boundary
 
-The initial endpoint is Linux amd64/arm64 static ELF, not a shell, interpreter, Node entry, arbitrary callback or caller-selected `io.Writer`. Other platforms and dynamic/interpreted images fail closed. This intentionally limits the development slice; it is not arbitrary-application support or the Nix/Clawwright adapter implementation.
+The initial endpoint is Linux amd64/arm64 static ELF, not a shell, interpreter, Node entry, arbitrary callback or caller-selected `io.Writer`. Other platforms and dynamic/interpreted images fail closed. This intentionally limits the development slice; it is not arbitrary-application support or an external consumer adapter implementation.
 
 A configured program descriptor is duplicated and retained. At the single-use handoff, the implementation bounds the image at 16 MiB, compares its complete SHA-256 and revision, rejects dynamic interpreter/program headers, copies it into a private memfd, removes write permission and requires write/growth/shrink/seal seals. It executes that exact image through an inherited descriptor, not by reopening a mutable program path. Kernel `/proc` observations verify the running image identity and UID/GID values. No alternate executable or shell fallback exists.
 

@@ -34,7 +34,7 @@ has separate, finite authorization; unrestricted SSH output is **not** secret-sa
 | Coding-agent access | One selected credential, pinned loopback TLS, single-use bootstrap, bounded `remote_*` jobs, read/cancel, compatible project-local command/result cards. |
 | Application operations | Opt-in Clawwright registration and finite `app_*` jobs; optional fixed Incus route. This remains trusted shell-capable application code, not a sandbox. |
 | Application secrets | Separate encrypted versioned store, exact placeholder refs, private owner CRUD, global/server-local bindings and controlled value export/import. |
-| Text deploy/backup | Separately granted hydration and reference-only reverse copy; v1 bounded text or opt-in v2 streaming up to 64 MiB. Real paired Clawwright CLI/keeper/SSH acceptance. |
+| Text deploy/backup | Separately granted hydration and reference-only reverse copy; v1 bounded text or opt-in v2 streaming up to 64 MiB. Consumer conformance kit with real keeper/SSH acceptance ([docs](docs/CONSUMER-CONFORMANCE.md)). |
 | Declarative slice | Separate Linux/amd64 root-granted synthetic metadata and delivery paths. The general declarative driver/enrollment contract remains a proposal. |
 | Distribution | Windows/Linux/macOS installers, verified release/local candidates, embedded build identity and third-party license notices. |
 
@@ -184,8 +184,8 @@ The [text adapter](docs/application-store/TEXT-ADAPTER.md) has its own root-appr
 grants. `text-adapter serve` serves v1; `serve-stream` serves separate forward or
 reverse v2 grants. Metadata, CLI flags and a parsed reference are **not approval**.
 
-For v2, Clawwright uses the single valued `--stream-references PATH` option on
-`deploy-text` / `backup-text`; the file contains exact canonical refs, never values.
+For v2, a consumer uses the single valued `--stream-references PATH` option on
+its deploy/backup subcommand; the file contains exact canonical refs, never values.
 There is no v1 fallback. Streaming uses bounded 32 KiB frames with 64 MiB decoded
 input/output caps, at most 16 refs and 1 MiB selected values. Backup publishes only
 a validated reference-only copy, never modifies the remote source and never
@@ -199,7 +199,7 @@ refusal, `received` is delivery evidence, and `unknown` may follow effects: no b
 retry, adoption claim or crash-durability guarantee follows from a receipt.
 
 [Streaming and HTTP](docs/application-store/TEXT-STREAM-HTTP.md) ·
-[Clawwright paired acceptance](docs/application-store/CLAWWRIGHT-TEXT-PAIR.md) ·
+[Consumer conformance kit](docs/CONSUMER-CONFORMANCE.md) ·
 [General application transport](docs/APP-TRANSPORT.md)
 
 ## Security boundaries
@@ -253,7 +253,7 @@ alone does not prove behavior. The matrix includes Linux/macOS/Windows, race tes
 real production-KDF fixtures, real Bubble Tea terminals and synthetic SSH peers.
 [Full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
 accepted source `0576409` with all nine jobs, including owner import/recovery and
-the paired Clawwright v1/v2 paths. This is a source-specific receipt, not a promise
+the external-consumer v1/v2 paths. This is a source-specific receipt, not a promise
 that every installed or future revision behaves identically.
 
 ```sh

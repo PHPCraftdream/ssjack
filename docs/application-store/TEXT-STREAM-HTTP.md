@@ -1,21 +1,22 @@
 # Private text-stream HTTP transport APIs
 
-Status: directional producer/transport and Clawwright streaming CLI/API have
-paired and full-sprint CI acceptance on ssjack `0576409` with Clawwright
-`053655da09086986a23f66efe42dd5e8a2907f70` in
-[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948).
-Forward and reverse listeners remain separate and opt-in; v1 defaults and limits
-are unchanged. Release, production enrollment and adoption remain separate.
+Status: the directional producer/transport and the streaming consumer path are
+verified by the [consumer conformance kit](../CONSUMER-CONFORMANCE.md). Every
+ssjack CI tier runs it against the in-repository synthetic consumer, and an
+external consumer can run it against its own CLI at a pinned ssjack revision.
+Earlier receipt with an external consumer:
+[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+on ssjack `0576409`. Forward and reverse listeners remain separate and opt-in;
+v1 defaults and limits are unchanged. Release, production enrollment and
+adoption remain separate.
 
-The verified pair is ssjack `9ce209e45c8a8d6c2345f960c3708a3f58ebcea5` and
-Clawwright `b0babb132d74532746501b3aeda92e088d343d17` in
-[CI 41755082293](https://github.com/PHPCraftdream/ssjack/actions/runs/41755082293).
-Both mandatory legacy and streaming pairs reported PASS without SKIP. The v2 case
-uses the actual Clawwright CLI entry, root finite grants, UID 65534, pinned HTTPS
-and authenticated/pinned SSH for greater-than-1-MiB deploy/backup/exact restore,
-source preservation, existing-output refusal and exact-version refusal before
-SSH. It does not establish production enrollment, interactive approval/unlock
-prompts, crash durability or OpenClaw adoption.
+The v2 case (`TestConsumerStreamConformance`) uses a real consumer process, root
+finite grants, UID 65534, pinned HTTPS and authenticated/pinned SSH for
+greater-than-1-MiB deploy/backup/exact restore, source preservation,
+existing-output refusal and exact-version refusal before SSH. The legacy and
+streaming cases must both report PASS without SKIP. It does not establish
+production enrollment, interactive approval/unlock prompts, crash durability or
+application adoption.
 
 ## Explicit CLI path
 
@@ -39,8 +40,8 @@ instead uses `register-reverse-stream` and confirms
 the reverse listener only for an authenticated `reverse-copy-stream-v2` grant;
 it never enables both directions. `revoke-stream` covers either v2 direction.
 
-The Clawwright child selects v2 with `--stream-references grant-refs.json` on
-`deploy-text` or `backup-text`. The file is a bounded UTF-8 JSON array of the exact
+The consumer child selects v2 with `--stream-references grant-refs.json` on
+its deploy or backup subcommand. The file is a bounded UTF-8 JSON array of the exact
 canonical placeholder strings from the grant, not secret values or approval.
 The existing `SSJACK_TEXT_LAUNCH=1` and expected `SSJACK_TEXT_PROFILE` child mapping
 converts only the temporary endpoint/token/pin bootstrap. Use `serve-stream`, not

@@ -33,7 +33,7 @@ Resolution happens inside the already authenticated database load and returns th
 existing stable credential-record identity. It does not run a second unlock and
 it does not grant SSH/delivery permission. Existing usage restrictions, selected
 key/password evidence, verified pins and human/root delivery grants still apply.
-Registered Clawwright application options receive that resolved identity, never a
+Registered application options receive that resolved identity, never a
 server label or an ambiguous account set. Literal secret references and explicit
 server-local/global scopes are unchanged; there is no secret-name fallback.
 

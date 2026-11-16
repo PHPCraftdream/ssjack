@@ -3,9 +3,11 @@
 `internal/appstoretext.ReplaceStream` is the private replacement primitive used
 by the separate v2 producer/client path. It is not a public secret getter.
 V1 limits/grants remain unchanged. The current [v2 HTTP/CLI path](TEXT-STREAM-HTTP.md)
-and actual Clawwright pair passed in
+and an actual consumer passed in
 [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
-on ssjack `0576409`; the engine alone is not evidence of that complete path.
+on ssjack `0576409`; the engine alone is not evidence of that complete path. The
+[consumer conformance kit](../CONSUMER-CONFORMANCE.md) now repeats that
+composition in every CI tier.
 
 ## Engine behavior
 
@@ -49,8 +51,8 @@ late raw-input ambiguity, explicit byte quotas, short writes, stalled readers
 and cancellation during final publication to the tentative writer. These are
 synthetic correctness tests, not local load tests or live-server execution.
 
-Producer/wire integration, final authenticated completion and Clawwright's
+Producer/wire integration, final authenticated completion and the consumer's
 exclusive validated publication have their own connected acceptance, in addition
-to engine tests. See [HTTP/CLI contract](TEXT-STREAM-HTTP.md) and
-[paired evidence](CLAWWRIGHT-TEXT-PAIR.md). The accepted v2 CLI supports bounded
+to engine tests. See [HTTP/CLI contract](TEXT-STREAM-HTTP.md) and the
+[consumer conformance kit](../CONSUMER-CONFORMANCE.md). The accepted v2 CLI supports bounded
 large text, not unlimited files, arbitrary binary backups or application adoption.

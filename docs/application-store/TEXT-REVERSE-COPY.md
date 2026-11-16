@@ -1,6 +1,6 @@
 # Reverse selected-text copy v1
 
-This is the `reverse-copy-v1` adapter contract. Its actual Clawwright client and root-keeper/SSH pair are implemented; [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948) passed on ssjack `0576409` with Clawwright `053655da09086986a23f66efe42dd5e8a2907f70`. See [paired evidence](CLAWWRIGHT-TEXT-PAIR.md). V2 is a separate opt-in [streaming path](TEXT-STREAM-HTTP.md), not an increase to v1 limits. This is no production enrollment, adoption or crash-durability claim.
+This is the `reverse-copy-v1` adapter contract. Its consumer and root-keeper/SSH path is verified by the [consumer conformance kit](../CONSUMER-CONFORMANCE.md); an earlier external-consumer receipt is [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948) on ssjack `0576409`. V2 is a separate opt-in [streaming path](TEXT-STREAM-HTTP.md), not an increase to v1 limits. This is no production enrollment, adoption or crash-durability claim.
 
 ## Human authority and lifecycle
 
@@ -58,4 +58,4 @@ Required root acceptance: TestTextReverseMappingsConnected, TestTextReverseLateC
 
 Root registration and same-UID process isolation are administrative boundaries, not protection from a malicious root user, recipient process, harness, trusted runtime, kernel, or compromised host. A trusted runner and pinned HTTPS/MCP channel do not prove that the approved command's side effects are limited to the intended file. Secret-bearing output exists transiently in trusted process memory and can be exposed by a compromised runtime or host.
 
-The actual v1 client and paired path are covered by the source-specific full receipt above; low-level assertions are not the entire acceptance proof. They do not establish safe handling of unselected secrets, live production enrollment or application adoption. Unknown outcomes remain non-retryable.
+The actual v1 consumer path is covered by the conformance kit and the receipt above; low-level assertions are not the entire acceptance proof. They do not establish safe handling of unselected secrets, live production enrollment or application adoption. Unknown outcomes remain non-retryable.

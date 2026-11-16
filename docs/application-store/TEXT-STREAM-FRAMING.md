@@ -1,7 +1,7 @@
 # Private selected-text v2 framing core
 
 Status: framing and incremental template validation only. No v2 HTTP endpoint,
-streaming SSH producer or Clawwright client is delivered by this package. Separate
+streaming SSH producer or consumer client is delivered by this package. Separate
 crypto/authority modules prepare private tickets, but there is no execution route.
 V1 CLI/transport limits and behavior are unchanged. An operation ID is correlation
 metadata, not authorization or human approval.
@@ -26,7 +26,7 @@ operation's authority, text validation and runner outcome also succeed. A late
 failure may follow partial output; callers must not publish it or report received.
 The codec alone does not enforce UTF-8/NUL rules, placeholder mappings, immutable
 references, credentials, file/direction grants, private MAC preparation or final
-file publication. Those belong to the producer and client integration.
+file publication. Those belong to the producer and consumer integration.
 
 Errors do not include raw frame bodies. No public content digest is added.
 Cancellation and no-progress checks are bounded; interruption of a blocking
@@ -63,5 +63,6 @@ MAC/counts, zero exit and final authority/snapshot rechecks can produce received
 Received still does not assert application adoption or remote durability.
 
 These are internal producer APIs. HTTP framing, CLI registration/startup and the
-Clawwright streaming client are not connected yet. Private pipeline tests are not
-root-granted producer/client pair acceptance.
+streaming consumer are not connected by this package. Private pipeline tests are
+not root-granted producer/consumer acceptance; the
+[consumer conformance kit](../CONSUMER-CONFORMANCE.md) provides that.

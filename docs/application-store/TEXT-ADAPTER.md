@@ -2,11 +2,12 @@
 
 The Linux/amd64 text-adapter CLI supports separately approved forward hydration
 and reverse selected-copy contexts. It is not the general `app_*` transport or
-the fixed synthetic confidential-delivery route. Actual v1/v2 Clawwright
-CLI/root-keeper/SSH pairs passed in
-[full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
-on ssjack `0576409` and Clawwright `053655da09086986a23f66efe42dd5e8a2907f70`.
-This does not prove production enrollment, interactive grant/unlock prompts,
+the fixed synthetic confidential-delivery route. The v1/v2 consumer/root-keeper/SSH
+path is verified by the [consumer conformance kit](../CONSUMER-CONFORMANCE.md),
+which every ssjack CI tier runs against a synthetic consumer and which an
+external consumer can run against its own CLI. An earlier external-consumer
+receipt is [full CI 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948)
+on ssjack `0576409`. This does not prove production enrollment, interactive grant/unlock prompts,
 consumer adoption, crash durability or unknown-secret detection.
 
 ## Human setup and CLI entry
@@ -88,8 +89,8 @@ delivery and a distinct reverse-copy listener. Bounded 32 KiB chunks, ≤64 MiB
 decoded input/output, ≤4096 data frames, ≤96 MiB wire, ≤16 refs and ≤1 MiB selected
 values are separate from v1's limits. Reverse output remains tentative until the
 complete counters, final checks and EOF permit exclusive local publication.
-Clawwright opts in through `--stream-references PATH`, one valued option on
-`deploy-text` or `backup-text`; no split flag pair or automatic protocol fallback.
+The consumer opts in through `--stream-references PATH`, one valued option on
+its deploy or backup subcommand; no split flag pair or automatic protocol fallback.
 Restore uses a separate forward grant and captured exact reference-only text.
 
 ## Literal mapping and trust
@@ -104,5 +105,5 @@ and approved final target plaintext storage remain operator responsibilities.
 Root, recipient/same-UID processes, trusted runtime and kernel are trusted
 boundaries. Captured external refs retain exact versions; owner snapshot updates
 do not reinterpret them as latest. New snapshots do not extend old grants.
-See [paired acceptance](CLAWWRIGHT-TEXT-PAIR.md), [framing](TEXT-STREAM-FRAMING.md)
+See the [consumer conformance kit](../CONSUMER-CONFORMANCE.md), [framing](TEXT-STREAM-FRAMING.md)
 and [HTTP APIs](TEXT-STREAM-HTTP.md) for source-specific evidence and exact limits.

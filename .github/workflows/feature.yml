@@ -375,8 +375,8 @@ jobs:
       - name: Run the ssjack-ui plugin tests
         run: claude plugin test plugins/ssjack-ui
 
-  text-pair:
+  consumer-conformance:
     if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}
-    uses: ./.github/workflows/text-pair.yml
+    uses: ./.github/workflows/consumer-conformance.yml
     with:
       source_ref: ${{ github.sha }}
