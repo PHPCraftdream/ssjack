@@ -30,15 +30,17 @@ type ExecServer struct {
 	client   ssh.Signer
 	wg       sync.WaitGroup
 
-	mu       sync.Mutex
-	conns    map[net.Conn]struct{}
-	stopped  bool
-	holds    map[string]chan struct{}
-	entered  []string
-	seen     chan string
-	kill     injection
-	corrupt  injection
-	password string
+	mu           sync.Mutex
+	conns        map[net.Conn]struct{}
+	stopped      bool
+	holds        map[string]chan struct{}
+	entered      []string
+	seen         chan string
+	kill         injection
+	corrupt      injection
+	password     string
+	diagnostics  []*execDiagnostic
+	droppedExecs int
 }
 
 // injection describes one fault and the command substring that arms it.
@@ -98,6 +100,12 @@ func StartExecServer(t *testing.T, sandbox string, env []string) *ExecServer {
 		return nil, errors.New("synthetic password refused")
 	}
 	go server.accept(config)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		server.logDiagnostics(t)
+	})
 	t.Cleanup(server.Stop)
 	return server
 }
@@ -170,6 +178,54 @@ func (s *ExecServer) WaitEntered(t *testing.T, match string) {
 			t.Fatalf("exec server never accepted a command containing %q", match)
 		}
 	}
+}
+
+func (s *ExecServer) logDiagnostics(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	records := make([]execDiagnosticSnapshot, 0, len(s.diagnostics))
+	for _, record := range s.diagnostics {
+		records = append(records, execDiagnosticSnapshot{
+			script: append([]byte(nil), record.script...),
+			stdout: record.stdout.snapshot(),
+			stderr: record.stderr.snapshot(),
+			exit:   record.exit,
+		})
+	}
+	dropped := s.droppedExecs
+	s.mu.Unlock()
+	for i, record := range records {
+		t.Log(formatExecDiagnostic(i+1, record))
+	}
+	if dropped > 0 {
+		t.Logf("remote exec diagnostics dropped %d records (limit %d)", dropped, execDiagnosticLimit)
+	}
+}
+
+func (s *ExecServer) recordExec(command string) *execDiagnostic {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.diagnostics) >= execDiagnosticLimit {
+		s.droppedExecs++
+		return nil
+	}
+	record := &execDiagnostic{
+		script: append([]byte(nil), command[:min(len(command), execDiagnosticScriptLimit)]...),
+		stdout: newDiagnosticBuffer(execDiagnosticOutputLimit),
+		stderr: newDiagnosticBuffer(execDiagnosticOutputLimit),
+		exit:   111,
+	}
+	s.diagnostics = append(s.diagnostics, record)
+	return record
+}
+
+func (s *ExecServer) finishExec(record *execDiagnostic, status int) {
+	if record == nil {
+		return
+	}
+	s.mu.Lock()
+	record.exit = status
+	s.mu.Unlock()
 }
 
 func (s *ExecServer) note(command string) {

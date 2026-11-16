@@ -28,8 +28,8 @@ func TestCapsSelectVariants(t *testing.T) {
 		{
 			name:   "shasum",
 			report: "SSJACK-CAPS shasum t gnu\n",
-			stat:   `shasum -a 256 "$path"`,
-			tree:   `xargs -0 shasum -a 256`,
+			stat:   "out=$(shasum -a 256 < \"$path\") || exit 24\nhash=${out%% *}\n[ \"$out\" = \"$hash  -\" ] || exit 24\nprintf '%s  %s\\n' \"$hash\" \"$path\"",
+			tree:   `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; out=$(shasum -a 256 < "$f") || exit 24; hash=${out%% *}; [ "$out" = "$hash  -" ] || exit 24; printf "%s  %s\n" "$hash" "$f"' _`,
 		},
 		{
 			name:   "sha256q",
@@ -54,6 +54,9 @@ func TestCapsSelectVariants(t *testing.T) {
 			probe := f.recorded()[0]
 			if !regexp.MustCompile(`'/\.ssjack-probe-[0-9a-f]{16}'`).MatchString(probe) {
 				t.Errorf("probe lacks random scratch path with leading slash: %s", probe)
+			}
+			if !strings.Contains(probe, `elif out="$(shasum -a 256 < "$d/h" 2>/dev/null)" && [ "$out" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -" ]; then`) {
+				t.Errorf("probe lacks exact abc stdin shasum check:\n%s", probe)
 			}
 			for _, want := range []string{
 				"mkdir -m 700",

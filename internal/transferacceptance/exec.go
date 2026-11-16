@@ -55,6 +55,7 @@ func (s *ExecServer) serve(conn net.Conn, config *ssh.ServerConfig) {
 // runExec executes the command with sh -c in the sandbox, byte-exactly.
 func (s *ExecServer) runExec(conn net.Conn, ch ssh.Channel, command string) {
 	s.note(command)
+	diagnostic := s.recordExec(command)
 	kill, corrupt, gate := s.plan(command)
 	if gate != nil {
 		select {
@@ -64,6 +65,11 @@ func (s *ExecServer) runExec(conn net.Conn, ch ssh.Channel, command string) {
 	}
 	var stdin io.Reader = ch
 	var stdout io.Writer = ch
+	var stderr io.Writer = ch.Stderr()
+	if diagnostic != nil {
+		stdout = &diagnosticWriter{downstream: stdout, capture: diagnostic.stdout}
+		stderr = &diagnosticWriter{downstream: stderr, capture: diagnostic.stderr}
+	}
 	if corrupt.armed {
 		stdin = &corruptingReader{reader: ch, at: corrupt.amount}
 	}
@@ -84,18 +90,19 @@ func (s *ExecServer) runExec(conn net.Conn, ch ssh.Channel, command string) {
 	if s.env != nil {
 		cmd.Env = s.env
 	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, ch.Stderr()
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	err := cmd.Run()
-	status := uint32(0)
+	status := 0
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			status = uint32(exit.ExitCode())
+			status = exit.ExitCode()
 		} else {
 			status = 111
 		}
 	}
-	_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+	s.finishExec(diagnostic, status)
+	_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
 	_ = ch.Close()
 }
 

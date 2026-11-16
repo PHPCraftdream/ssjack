@@ -23,7 +23,8 @@ func TestTransferBusyboxAcceptance(t *testing.T) {
 	t.Run("overwrite-failure-leaves-old-destination", scenarioOverwriteFailure)
 	t.Run("refuse-destination-exists", scenarioRefuseDestinationExists)
 	t.Run("failure-hash-mismatch-corruption", scenarioFailureCorruption)
-	t.Run("failure-unsupported-remote", scenarioFailureUnsupportedRemote)
+	// Standalone BusyBox ash can resolve SHA applets independently of restricted PATH,
+	// so that fixture cannot establish that hash utilities are absent.
 }
 
 // scenarioRoundTripDirectoryBasic compares a simple nested tree in each

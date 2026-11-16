@@ -44,7 +44,6 @@ BUSYBOX_SCENARIOS = (
     "overwrite-failure-leaves-old-destination",
     "refuse-destination-exists",
     "failure-hash-mismatch-corruption",
-    "failure-unsupported-remote",
 )
 
 

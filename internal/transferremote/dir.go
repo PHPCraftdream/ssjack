@@ -41,12 +41,13 @@ find "$root" -type f -print0 | %s
 `
 
 // treeHashTail returns the xargs pipeline tail that prints one GNU
-// sha256sum line per file for the probed hash variant. sha256 -q has no
-// name in its output, so each file is wrapped by a one-argument sh -c.
+// sha256sum line per file for the probed hash variant. Tool-specific filename
+// formatting is avoided for portable hash variants by printing the original
+// find path from the shell argument.
 func treeHashTail(hash string) string {
 	switch hash {
 	case hashShasum:
-		return `xargs -0 shasum -a 256`
+		return `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; out=$(shasum -a 256 < "$f") || exit 24; hash=${out%% *}; [ "$out" = "$hash  -" ] || exit 24; printf "%s  %s\n" "$hash" "$f"' _`
 	case hashSha256q:
 		return `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; hash=$(sha256 -q "$f") || exit 24; printf "%s  %s\n" "$hash" "$f"' _`
 	default:
@@ -60,6 +61,14 @@ if [ ! -d "$root" ] || [ -L "$root" ]; then
 	exit %d
 fi
 find "$root" -type f -print0 | xargs -0 -n 1 wc -c
+`
+
+const treePortableSizesTemplate = `set -eu
+root=%s
+if [ ! -d "$root" ] || [ -L "$root" ]; then
+	exit %d
+fi
+find "$root" -type f -print0 | xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; size=$(wc -c < "$f") || exit 24; printf "%%s %%s\n" "$size" "$f"' _
 `
 
 // PreflightTree rejects symlinks, devices, FIFOs and sockets (the
@@ -86,7 +95,11 @@ func (r *remoteRunner) PreflightTree(ctx context.Context, root string) (transfer
 	if err != nil {
 		return transfercore.Manifest{}, err
 	}
-	sizesData, err := r.runListed(ctx, fmt.Sprintf(treeSizesTemplate, shellQuote(root), exitRefusedPath), bound)
+	sizesTemplate := treeSizesTemplate
+	if r.capabilities().hash != hashSha256sum {
+		sizesTemplate = treePortableSizesTemplate
+	}
+	sizesData, err := r.runListed(ctx, fmt.Sprintf(sizesTemplate, shellQuote(root), exitRefusedPath), bound)
 	if err != nil {
 		return transfercore.Manifest{}, err
 	}

@@ -56,7 +56,7 @@ printf 'abc' > "$d/h" || exit 20
 hash=''
 if out="$(sha256sum "$d/h" 2>/dev/null)" && [ "$out" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  $d/h" ]; then
 	hash='sha256sum'
-elif out="$(shasum -a 256 "$d/h" 2>/dev/null)" && [ "$out" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  $d/h" ]; then
+elif out="$(shasum -a 256 < "$d/h" 2>/dev/null)" && [ "$out" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -" ]; then
 	hash='shasum'
 elif sha256q="$(sha256 -q "$d/h" 2>/dev/null)"; then
 	out="$(printf '%%s  %%s\n' "$sha256q" "$d/h")" || exit 20

@@ -73,7 +73,10 @@ func (r *remoteRunner) WriteFile(ctx context.Context, path string, src io.Reader
 func statHashCommand(hash string) string {
 	switch hash {
 	case hashShasum:
-		return `shasum -a 256 "$path"`
+		return `out=$(shasum -a 256 < "$path") || exit 24
+hash=${out%% *}
+[ "$out" = "$hash  -" ] || exit 24
+printf '%s  %s\n' "$hash" "$path"`
 	case hashSha256q:
 		return `hash=$(sha256 -q "$path") || exit 24
 printf '%s  %s\n' "$hash" "$path"`

@@ -144,7 +144,7 @@ jobs:
           done
           SSJACK_TRANSFER_BUSYBOX_BIN="$bin" go test -v -mod=readonly -run '^TestTransferBusyboxAcceptance$' -count=1 -timeout 900s ./internal/transferacceptance | tee "$RUNNER_TEMP/transfer-acceptance-busybox.log"
           grep -q '^--- PASS: TestTransferBusyboxAcceptance ' "$RUNNER_TEMP/transfer-acceptance-busybox.log"
-          for name in roundtrip-file-both-directions roundtrip-directory-basic-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii overwrite-replaces-file-and-directory refuse-symlink-destination overwrite-failure-leaves-old-destination refuse-destination-exists failure-hash-mismatch-corruption failure-unsupported-remote; do
+          for name in roundtrip-file-both-directions roundtrip-directory-basic-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii overwrite-replaces-file-and-directory refuse-symlink-destination overwrite-failure-leaves-old-destination refuse-destination-exists failure-hash-mismatch-corruption; do
             grep -q -- "--- PASS: TestTransferBusyboxAcceptance/$name " "$RUNNER_TEMP/transfer-acceptance-busybox.log" || { echo "BusyBox file transfer acceptance did not report PASS: $name"; exit 1; }
           done
           if grep -Eq '^[[:space:]]*--- SKIP: TestTransferBusyboxAcceptance(/| )' "$RUNNER_TEMP/transfer-acceptance-busybox.log"; then
