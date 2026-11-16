@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package transferacceptance
 
@@ -108,13 +108,22 @@ func scenarioFailureCancel(t *testing.T) {
 	}
 }
 
-// scenarioFailureUnsupportedRemote hides sha256sum from the remote PATH and
-// requires unsupported_remote before any mutation.
+// scenarioFailureUnsupportedRemote hides every SHA-256 utility from the
+// remote PATH and requires unsupported_remote before any mutation.
 func scenarioFailureUnsupportedRemote(t *testing.T) {
 	bin := filepath.Join(evalDir(t), "bin")
 	mkdirAll(t, bin)
-	for _, tool := range []string{"cat", "find", "xargs", "tar", "rm", "mv", "wc", "mkdir", "chmod"} {
-		found, err := exec.LookPath(tool)
+	busyboxDir := os.Getenv("SSJACK_TRANSFER_BUSYBOX_BIN")
+	tools := []string{"cat", "find", "xargs", "tar", "rm", "mv", "wc", "mkdir", "chmod", "ln", "sh"}
+	for _, tool := range tools {
+		found := ""
+		var err error
+		if busyboxDir != "" {
+			found = filepath.Join(busyboxDir, tool)
+			_, err = os.Stat(found)
+		} else {
+			found, err = exec.LookPath(tool)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +131,11 @@ func scenarioFailureUnsupportedRemote(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s := newStack(t, transfercore.DefaultLimits(), []string{"PATH=" + bin})
+	env := []string{"PATH=" + bin}
+	if busyboxDir != "" {
+		env = append(env, "SSJACK_REMOTE_SHELL="+filepath.Join(busyboxDir, "sh"))
+	}
+	s := newStack(t, transfercore.DefaultLimits(), env)
 	var c captured
 	WriteTree(t, s.rootDir, map[string][]byte{"blob.bin": SeedPayload(16*1024, 16)}, nil)
 	mkdirAll(t, filepath.Join(s.sandbox, "in"))
@@ -140,6 +153,79 @@ func scenarioFailureUnsupportedRemote(t *testing.T) {
 	}
 	AssertNoStaging(t, s.rootDir)
 	AssertNoStaging(t, s.sandbox)
+}
+
+// scenarioFailureUnsupportedPublicationPrimitive constrains the remote PATH
+// to real required tools while omitting Perl and substituting a failing mv.
+// The real transfer stack must refuse both directions before changing either
+// fixture tree or leaving staging paths behind.
+func scenarioFailureUnsupportedPublicationPrimitive(t *testing.T) {
+	bin := filepath.Join(evalDir(t), "bin")
+	mkdirAll(t, bin)
+	for _, tool := range []string{"cat", "find", "xargs", "tar", "rm", "wc", "mkdir", "chmod", "ln", "sh"} {
+		found, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("required fixture tool %s is unavailable: %v", tool, err)
+		}
+		if err := os.Symlink(found, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hashTools := 0
+	for _, tool := range []string{"sha256sum", "shasum", "sha256"} {
+		found, err := exec.LookPath(tool)
+		if err != nil {
+			continue
+		}
+		if err := os.Symlink(found, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+		hashTools++
+	}
+	if hashTools == 0 {
+		t.Fatal("no SHA-256 utility is available for the restricted fixture")
+	}
+	mv := filepath.Join(bin, "mv")
+	if err := os.WriteFile(mv, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(bin, "perl")); !os.IsNotExist(err) {
+		t.Fatalf("restricted fixture unexpectedly contains Perl: %v", err)
+	}
+
+	s := newStack(t, transfercore.DefaultLimits(), []string{
+		"PATH=" + bin,
+		"SSJACK_REMOTE_SHELL=/bin/sh",
+	})
+	var c captured
+	local := []byte("local-publication-source-4cbf92")
+	remote := []byte("remote-publication-source-73e1ad")
+	WriteTree(t, s.rootDir, map[string][]byte{"upload-source.bin": local}, []string{"downloads"})
+	WriteTree(t, s.sandbox, map[string][]byte{"remote-source.bin": remote}, []string{"upload-dest"})
+	localFiles, localDirs := treeState(t, s.rootDir)
+	remoteFiles, remoteDirs := treeState(t, s.sandbox)
+
+	upload := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
+		"target": targetName, "local": "upload-source.bin", "remote": s.sandbox + "/upload-dest/new.bin",
+	}))
+	if upload.State != "failed" || upload.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatalf("unsupported upload publication status = %+v", upload)
+	}
+	download := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
+		"target": targetName, "remote": s.sandbox + "/remote-source.bin", "local": "downloads/new.bin",
+	}))
+	if download.State != "failed" || download.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatalf("unsupported download publication status = %+v", download)
+	}
+	assertTreeSnapshot(t, s.rootDir, localFiles, localDirs)
+	assertTreeSnapshot(t, s.sandbox, remoteFiles, remoteDirs)
+	AssertNoStaging(t, s.rootDir)
+	AssertNoStaging(t, s.sandbox)
+	assertNoLeaks(t, c, local)
+	assertNoLeaks(t, c, remote)
 }
 
 // scenarioManagerBounds refuses a third concurrent job and a duplicate

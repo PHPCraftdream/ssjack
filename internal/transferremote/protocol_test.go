@@ -79,7 +79,10 @@ func TestExecuteCancellation(t *testing.T) {
 	cancel()
 
 	// Success wins over late cancellation.
-	f1 := &fakeRunner{}
+	f1 := &fakeRunner{respond: func(command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+		return 0, err
+	}}
 	r1 := New(f1.run, "t", sampleLimits())
 	if err := r1.Probe(cancelled); err != nil {
 		t.Fatalf("Probe with cancelled context and success = %v, want nil", err)

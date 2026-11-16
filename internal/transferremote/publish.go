@@ -5,7 +5,26 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 )
+
+const (
+	perlRenameCommand = `perl -e 'exit(rename($ARGV[0], $ARGV[1]) ? 0 : 1)' --`
+	perlLinkCommand   = `perl -e 'exit(link($ARGV[0], $ARGV[1]) ? 0 : 1)' --`
+)
+
+// publicationTemplate keeps the original GNU command templates byte-for-byte
+// when mv -T is functional. On fallback targets only fixed command literals
+// are substituted; caller-controlled paths remain quoted shell arguments.
+func publicationTemplate(template string, caps remoteCaps) string {
+	if caps.mvT {
+		return template
+	}
+	template = strings.ReplaceAll(template, `mv -T -f`, perlRenameCommand)
+	template = strings.ReplaceAll(template, `mv -T`, perlRenameCommand)
+	template = strings.ReplaceAll(template, `ln "$src" "$dst"`, perlLinkCommand+` "$src" "$dst"`)
+	return template
+}
 
 // publishFileTemplate publishes a file without overwrite: hard-link staging
 // to the destination (atomic, fails if it exists), then unlink staging. If
@@ -125,9 +144,9 @@ func (r *remoteRunner) PublishFile(ctx context.Context, staging, dest string, ov
 	if err := checkRemotePath(dest, r.limits); err != nil {
 		return err
 	}
-	template := publishFileTemplate
+	template := publicationTemplate(publishFileTemplate, r.capabilities())
 	if overwrite {
-		template = publishFileOverwriteTemplate
+		template = publicationTemplate(publishFileOverwriteTemplate, r.capabilities())
 	}
 	command := fmt.Sprintf(template, shellQuote(staging), shellQuote(dest))
 	return r.execute(ctx, command, nil, io.Discard)
@@ -159,9 +178,9 @@ func (r *remoteRunner) PublishDir(ctx context.Context, staging, dest string, ove
 		r.mu.Lock()
 		r.created[old] = struct{}{}
 		r.mu.Unlock()
-		command := fmt.Sprintf(publishDirOverwriteTemplate, shellQuote(staging), shellQuote(dest), shellQuote(old))
+		command := fmt.Sprintf(publicationTemplate(publishDirOverwriteTemplate, r.capabilities()), shellQuote(staging), shellQuote(dest), shellQuote(old))
 		return r.execute(ctx, command, nil, io.Discard)
 	}
-	command := fmt.Sprintf(publishDirTemplate, shellQuote(staging), shellQuote(dest))
+	command := fmt.Sprintf(publicationTemplate(publishDirTemplate, r.capabilities()), shellQuote(staging), shellQuote(dest))
 	return r.execute(ctx, command, nil, io.Discard)
 }

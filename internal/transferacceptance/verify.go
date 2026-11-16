@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package transferacceptance
 
@@ -120,4 +120,27 @@ func treeState(t *testing.T, base string) (map[string][]byte, []string) {
 		t.Fatal(err)
 	}
 	return files, dirs
+}
+
+// assertTreeSnapshot requires a fixture tree to retain the same files, bytes,
+// and directories as a previously captured state.
+func assertTreeSnapshot(t *testing.T, base string, wantFiles map[string][]byte, wantDirs []string) {
+	t.Helper()
+	gotFiles, gotDirs := treeState(t, base)
+	if len(gotFiles) != len(wantFiles) || len(gotDirs) != len(wantDirs) {
+		t.Fatalf("fixture tree %s changed shape: got %d files/%d dirs, want %d files/%d dirs", filepath.Base(base), len(gotFiles), len(gotDirs), len(wantFiles), len(wantDirs))
+	}
+	for name, want := range wantFiles {
+		got, ok := gotFiles[name]
+		if !ok || !bytes.Equal(got, want) {
+			t.Fatalf("fixture file %q changed", name)
+		}
+	}
+	sort.Strings(gotDirs)
+	sort.Strings(wantDirs)
+	for i := range wantDirs {
+		if gotDirs[i] != wantDirs[i] {
+			t.Fatalf("fixture directories changed: got %v, want %v", gotDirs, wantDirs)
+		}
+	}
 }

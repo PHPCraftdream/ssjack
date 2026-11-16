@@ -117,11 +117,49 @@ jobs:
           set -o pipefail
           go test -v -mod=readonly -run '^TestTransferAcceptance$' -count=1 -timeout 600s ./internal/transferacceptance | tee "$RUNNER_TEMP/transfer-acceptance.log"
           grep -q '^--- PASS: TestTransferAcceptance ' "$RUNNER_TEMP/transfer-acceptance.log"
-          for name in roundtrip-file-both-directions roundtrip-directory-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii secrets-never-reach-results overwrite-replaces-file-and-directory overwrite-failure-leaves-old-destination refuse-path-traversal refuse-absolute-and-drive-paths refuse-symlink-in-source-tree refuse-symlink-destination refuse-download-forbidden-control-directory refuse-destination-exists refuse-overwrite-without-confirm refuse-unknown-root refuse-no-registered-roots refuse-over-limit-size-and-entries refuse-unapproved-target failure-connection-killed-mid-stream failure-hash-mismatch-corruption failure-cancel-mid-transfer failure-unsupported-remote manager-concurrency-and-duplicate-destination; do
+          for name in roundtrip-file-both-directions roundtrip-directory-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii secrets-never-reach-results overwrite-replaces-file-and-directory overwrite-failure-leaves-old-destination refuse-path-traversal refuse-absolute-and-drive-paths refuse-symlink-in-source-tree refuse-symlink-destination refuse-download-forbidden-control-directory refuse-destination-exists refuse-overwrite-without-confirm refuse-unknown-root refuse-no-registered-roots refuse-over-limit-size-and-entries refuse-unapproved-target failure-connection-killed-mid-stream failure-hash-mismatch-corruption failure-cancel-mid-transfer failure-unsupported-remote failure-unsupported-publication-primitive manager-concurrency-and-duplicate-destination; do
             grep -q -- "--- PASS: TestTransferAcceptance/$name " "$RUNNER_TEMP/transfer-acceptance.log" || { echo "File transfer acceptance did not report PASS: $name"; exit 1; }
           done
           if grep -Eq '^[[:space:]]*--- SKIP: TestTransferAcceptance(/| )' "$RUNNER_TEMP/transfer-acceptance.log"; then
             echo 'File transfer acceptance reported a skipped scenario'
+            exit 1
+          fi
+      - name: File transfer acceptance on the real stack (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -run '^TestTransferAcceptance$' -count=1 -timeout 600s ./internal/transferacceptance | tee "$RUNNER_TEMP/transfer-acceptance-macos.log"
+          grep -q '^--- PASS: TestTransferAcceptance ' "$RUNNER_TEMP/transfer-acceptance-macos.log"
+          for name in roundtrip-file-both-directions roundtrip-directory-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii secrets-never-reach-results overwrite-replaces-file-and-directory overwrite-failure-leaves-old-destination refuse-path-traversal refuse-absolute-and-drive-paths refuse-symlink-in-source-tree refuse-symlink-destination refuse-download-forbidden-control-directory refuse-destination-exists refuse-overwrite-without-confirm refuse-unknown-root refuse-no-registered-roots refuse-over-limit-size-and-entries refuse-unapproved-target failure-connection-killed-mid-stream failure-hash-mismatch-corruption failure-cancel-mid-transfer failure-unsupported-remote failure-unsupported-publication-primitive manager-concurrency-and-duplicate-destination; do
+            grep -q -- "--- PASS: TestTransferAcceptance/$name " "$RUNNER_TEMP/transfer-acceptance-macos.log" || { echo "File transfer acceptance did not report PASS: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestTransferAcceptance(/| )' "$RUNNER_TEMP/transfer-acceptance-macos.log"; then
+            echo 'File transfer acceptance reported a skipped scenario'
+            exit 1
+          fi
+      - name: File transfer acceptance subset under busybox userland (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! command -v busybox >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends busybox-static
+          fi
+          bin="$RUNNER_TEMP/busybox-bin"
+          rm -rf "$bin"
+          mkdir -p "$bin"
+          for applet in $(busybox --list); do
+            ln -s "$(command -v busybox)" "$bin/$applet"
+          done
+          SSJACK_TRANSFER_BUSYBOX_BIN="$bin" go test -v -mod=readonly -run '^TestTransferBusyboxAcceptance$' -count=1 -timeout 900s ./internal/transferacceptance | tee "$RUNNER_TEMP/transfer-acceptance-busybox.log"
+          grep -q '^--- PASS: TestTransferBusyboxAcceptance ' "$RUNNER_TEMP/transfer-acceptance-busybox.log"
+          for name in roundtrip-file-both-directions roundtrip-directory-basic-both-directions roundtrip-zero-byte-and-empty-directory roundtrip-names-with-spaces-and-non-ascii overwrite-replaces-file-and-directory refuse-symlink-destination overwrite-failure-leaves-old-destination refuse-destination-exists failure-hash-mismatch-corruption failure-unsupported-remote; do
+            grep -q -- "--- PASS: TestTransferBusyboxAcceptance/$name " "$RUNNER_TEMP/transfer-acceptance-busybox.log" || { echo "BusyBox file transfer acceptance did not report PASS: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestTransferBusyboxAcceptance(/| )' "$RUNNER_TEMP/transfer-acceptance-busybox.log"; then
+            echo 'BusyBox file transfer acceptance reported a skipped scenario'
             exit 1
           fi
       - name: File transfer full-profile keeper with production KDF

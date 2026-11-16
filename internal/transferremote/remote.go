@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
@@ -37,6 +38,7 @@ type remoteRunner struct {
 	run     remote.StreamRunner
 	target  string
 	limits  transfercore.Limits
+	caps    atomic.Pointer[remoteCaps]
 	mu      sync.Mutex
 	created map[string]struct{}
 }
@@ -46,6 +48,15 @@ var _ Remote = (*remoteRunner)(nil)
 // New returns a Remote that runs fixed templates against target via run.
 func New(run remote.StreamRunner, target string, limits transfercore.Limits) Remote {
 	return &remoteRunner{run: run, target: target, limits: limits, created: map[string]struct{}{}}
+}
+
+// capabilities returns the probe verdict, or the GNU-compatible default
+// before Probe ran (unit tests with fake runners never probe).
+func (r *remoteRunner) capabilities() remoteCaps {
+	if caps := r.caps.Load(); caps != nil {
+		return *caps
+	}
+	return remoteCaps{hash: hashSha256sum, mvT: true, tarGNU: true}
 }
 
 // Remote exit codes used by the fixed command templates.

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package transferacceptance
 
@@ -71,7 +71,15 @@ func (s *ExecServer) runExec(conn net.Conn, ch ssh.Channel, command string) {
 		stdin = &killingStream{reader: stdin, conn: conn, limit: kill.amount}
 		stdout = &killingStream{writer: stdout, conn: conn, limit: kill.amount}
 	}
-	cmd := exec.Command("sh", "-c", command)
+	// SSJACK_REMOTE_SHELL overrides the fixture shell for the userland harness.
+	shell := "sh"
+	for _, entry := range s.env {
+		if value, ok := strings.CutPrefix(entry, "SSJACK_REMOTE_SHELL="); ok {
+			shell = value
+			break
+		}
+	}
+	cmd := exec.Command(shell, "-c", command)
 	cmd.Dir = s.sandbox
 	if s.env != nil {
 		cmd.Env = s.env

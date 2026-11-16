@@ -68,6 +68,20 @@ func (r *remoteRunner) WriteFile(ctx context.Context, path string, src io.Reader
 	return cr.n.Load(), err
 }
 
+// statHashCommand returns the one-file command that prints the GNU
+// sha256sum line "<64 hex>  <path>" for the probed hash variant.
+func statHashCommand(hash string) string {
+	switch hash {
+	case hashShasum:
+		return `shasum -a 256 "$path"`
+	case hashSha256q:
+		return `hash=$(sha256 -q "$path") || exit 24
+printf '%s  %s\n' "$hash" "$path"`
+	default:
+		return `sha256sum "$path"`
+	}
+}
+
 // statFileTemplate reports size and SHA-256 of a regular file.
 const statFileTemplate = `set -eu
 path=%s
@@ -75,7 +89,7 @@ if [ -L "$path" ] || [ ! -f "$path" ]; then
 	exit 21
 fi
 wc -c < "$path"
-sha256sum "$path"
+%s
 `
 
 // StatFile returns the size and SHA-256 of a remote regular file. Symlinks
@@ -87,7 +101,7 @@ func (r *remoteRunner) StatFile(ctx context.Context, path string) (int64, [32]by
 	if err := checkRemotePath(path, r.limits); err != nil {
 		return 0, [32]byte{}, err
 	}
-	data, err := r.runListed(ctx, fmt.Sprintf(statFileTemplate, shellQuote(path)), 8192)
+	data, err := r.runListed(ctx, fmt.Sprintf(statFileTemplate, shellQuote(path), statHashCommand(r.capabilities().hash)), 8192)
 	if err != nil {
 		return 0, [32]byte{}, err
 	}

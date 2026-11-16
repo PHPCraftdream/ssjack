@@ -1,9 +1,12 @@
 package transferremote
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 )
@@ -34,8 +37,22 @@ root=%s
 if [ ! -d "$root" ] || [ -L "$root" ]; then
 	exit %d
 fi
-find "$root" -type f -print0 | xargs -0 sha256sum
+find "$root" -type f -print0 | %s
 `
+
+// treeHashTail returns the xargs pipeline tail that prints one GNU
+// sha256sum line per file for the probed hash variant. sha256 -q has no
+// name in its output, so each file is wrapped by a one-argument sh -c.
+func treeHashTail(hash string) string {
+	switch hash {
+	case hashShasum:
+		return `xargs -0 shasum -a 256`
+	case hashSha256q:
+		return `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; hash=$(sha256 -q "$f") || exit 24; printf "%s  %s\n" "$hash" "$f"' _`
+	default:
+		return `xargs -0 sha256sum`
+	}
+}
 
 const treeSizesTemplate = `set -eu
 root=%s
@@ -65,7 +82,7 @@ func (r *remoteRunner) PreflightTree(ctx context.Context, root string) (transfer
 	if err != nil {
 		return transfercore.Manifest{}, err
 	}
-	filesData, err := r.runListed(ctx, fmt.Sprintf(treeFilesTemplate, shellQuote(root), exitRefusedPath), bound)
+	filesData, err := r.runListed(ctx, fmt.Sprintf(treeFilesTemplate, shellQuote(root), exitRefusedPath, treeHashTail(r.capabilities().hash)), bound)
 	if err != nil {
 		return transfercore.Manifest{}, err
 	}
@@ -129,7 +146,7 @@ func (r *remoteRunner) VerifyTree(ctx context.Context, root string, manifest tra
 	if err != nil {
 		return err
 	}
-	filesData, err := r.runListed(ctx, fmt.Sprintf(treeFilesTemplate, shellQuote(root), exitIntegrity), bound)
+	filesData, err := r.runListed(ctx, fmt.Sprintf(treeFilesTemplate, shellQuote(root), exitIntegrity, treeHashTail(r.capabilities().hash)), bound)
 	if err != nil {
 		return err
 	}
@@ -205,6 +222,62 @@ func (r *remoteRunner) TarOut(ctx context.Context, root string, dst io.Writer) e
 	return r.execute(ctx, fmt.Sprintf(tarOutTemplate, shellQuote(root)), nil, dst)
 }
 
+const tarInEmptyTemplate = `set -eu
+root=%s
+if [ ! -d "$root" ] || [ -L "$root" ]; then
+	exit 21
+fi
+`
+
+// tarInSourceReadFailed is deliberately content-free: raw source errors must
+// not escape through the stream runner or into a returned error.
+var tarInSourceReadFailed = errors.New("tar input source read failed")
+
+// tarInSource records source read failures without retaining or exposing their
+// text. TarIn reads the prefix and the stream runner may consume the remainder
+// concurrently, so the state is protected by a mutex.
+type tarInSource struct {
+	reader io.Reader
+	mu     sync.Mutex
+	failed bool
+	eof    bool
+}
+
+func (s *tarInSource) Read(p []byte) (int, error) {
+	n, err := s.reader.Read(p)
+	if err != nil {
+		s.mu.Lock()
+		if err == io.EOF {
+			s.eof = true
+		} else {
+			s.failed = true
+			err = tarInSourceReadFailed
+		}
+		s.mu.Unlock()
+	}
+	return n, err
+}
+
+func (s *tarInSource) state() (failed, eof bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed, s.eof
+}
+
+type tarInReplayError struct {
+	err  error
+	next io.Reader
+}
+
+func (r *tarInReplayError) Read(p []byte) (int, error) {
+	if r.err != nil {
+		err := r.err
+		r.err = nil
+		return 0, err
+	}
+	return r.next.Read(p)
+}
+
 // TarIn extracts a tar stream into root with --no-same-owner
 // --no-same-permissions so ownership and special bits are not restored.
 func (r *remoteRunner) TarIn(ctx context.Context, root string, src io.Reader) error {
@@ -214,5 +287,42 @@ func (r *remoteRunner) TarIn(ctx context.Context, root string, src io.Reader) er
 	if err := checkRemotePath(root, r.limits); err != nil {
 		return err
 	}
-	return r.execute(ctx, fmt.Sprintf(tarInTemplate, shellQuote(root)), src, io.Discard)
+
+	if src == nil {
+		return r.execute(ctx, fmt.Sprintf(tarInTemplate, shellQuote(root)), nil, io.Discard)
+	}
+
+	tracked := &tarInSource{reader: src}
+	var prefix [1025]byte
+	n, _ := io.ReadFull(tracked, prefix[:])
+	failed, eof := tracked.state()
+	if n == 1024 && eof && !failed {
+		empty := true
+		for _, b := range prefix[:n] {
+			if b != 0 {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			return r.execute(ctx, fmt.Sprintf(tarInEmptyTemplate, shellQuote(root)), nil, io.Discard)
+		}
+	}
+
+	var replayErr error
+	if failed {
+		replayErr = tarInSourceReadFailed
+	}
+	stdin := io.MultiReader(bytes.NewReader(prefix[:n]), &tarInReplayError{err: replayErr, next: tracked})
+	if err := r.execute(ctx, fmt.Sprintf(tarInTemplate, shellQuote(root)), stdin, io.Discard); err != nil {
+		return err
+	}
+	failed, _ = tracked.state()
+	if failed {
+		if ctx.Err() != nil {
+			return classed(transfercore.ClassCancelled, msgCancelled, -1)
+		}
+		return classed(transfercore.ClassRemoteFailed, msgRemoteFailed, -1)
+	}
+	return nil
 }

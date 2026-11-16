@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package transferacceptance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -51,6 +52,27 @@ func newStack(t *testing.T, limits transfercore.Limits, env []string) *stack {
 	return newStackRoots(t, limits, env, true)
 }
 
+// sandboxEnv returns the environment used by the exec fixture. Explicit
+// scenario environments take precedence; otherwise BusyBox CI gets its
+// restricted applet PATH, while macOS uses only its stock system tools.
+func sandboxEnv(t *testing.T, env []string) []string {
+	t.Helper()
+	if env != nil {
+		return env
+	}
+	if dir := os.Getenv("SSJACK_TRANSFER_BUSYBOX_BIN"); dir != "" {
+		shell := filepath.Join(dir, "sh")
+		if _, err := os.Stat(shell); err != nil {
+			t.Fatalf("busybox shell %s is missing: %v", shell, err)
+		}
+		return []string{"PATH=" + dir, "SSJACK_REMOTE_SHELL=" + shell}
+	}
+	if runtime.GOOS == "darwin" {
+		return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "SSJACK_REMOTE_SHELL=/bin/sh"}
+	}
+	return nil
+}
+
 // newStackRoots builds a stack; withRoots=false registers no transfer root,
 // so every operation must fail closed.
 func newStackRoots(t *testing.T, limits transfercore.Limits, env []string, withRoots bool) *stack {
@@ -58,7 +80,7 @@ func newStackRoots(t *testing.T, limits transfercore.Limits, env []string, withR
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	rootDir, sandbox := evalDir(t), evalDir(t)
-	server := StartExecServer(t, sandbox, env)
+	server := StartExecServer(t, sandbox, sandboxEnv(t, env))
 	config := &ssh.ClientConfig{
 		User:            "acceptance",
 		Auth:            []ssh.AuthMethod{sshauth.PublicKey(server.ClientSigner())},
@@ -211,9 +233,9 @@ func assertSHA(t *testing.T, payload []byte, got string) {
 	}
 }
 
-// TestTransferAcceptance runs every acceptance scenario of
-// docs/FILE-TRANSFER.md against the real stack. Each subtest owns a fresh
-// fixture; the names are stable because CI greps every PASS line.
+// TestTransferAcceptance runs every Linux acceptance scenario against the
+// real stack on both Linux and macOS. Each subtest owns a fresh fixture; the
+// names are stable because CI requires every PASS line.
 func TestTransferAcceptance(t *testing.T) {
 	t.Run("roundtrip-file-both-directions", scenarioRoundTripFile)
 	t.Run("roundtrip-directory-both-directions", scenarioRoundTripDirectory)
@@ -237,5 +259,6 @@ func TestTransferAcceptance(t *testing.T) {
 	t.Run("failure-hash-mismatch-corruption", scenarioFailureCorruption)
 	t.Run("failure-cancel-mid-transfer", scenarioFailureCancel)
 	t.Run("failure-unsupported-remote", scenarioFailureUnsupportedRemote)
+	t.Run("failure-unsupported-publication-primitive", scenarioFailureUnsupportedPublicationPrimitive)
 	t.Run("manager-concurrency-and-duplicate-destination", scenarioManagerBounds)
 }

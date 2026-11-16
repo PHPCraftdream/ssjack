@@ -13,7 +13,10 @@ import (
 )
 
 func TestProbe(t *testing.T) {
-	f := &fakeRunner{}
+	f := &fakeRunner{respond: func(command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+		return 0, err
+	}}
 	if err := New(f.run, "t", sampleLimits()).Probe(context.Background()); err != nil {
 		t.Fatalf("Probe = %v, want nil", err)
 	}
@@ -21,7 +24,7 @@ func TestProbe(t *testing.T) {
 	if len(cmds) != 1 {
 		t.Fatalf("Probe ran %d commands, want 1", len(cmds))
 	}
-	for _, want := range []string{"set -eu", "command -v", "xargs -0", "mv -T"} {
+	for _, want := range []string{"set -eu", "command -v", "xargs -0", "mv -T", "SSJACK-CAPS"} {
 		if !strings.Contains(cmds[0], want) {
 			t.Errorf("probe command missing %q:\n%s", want, cmds[0])
 		}
