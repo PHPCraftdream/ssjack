@@ -17,7 +17,7 @@ import (
 
 // Regression for the 2026-11-15 drop: Claude Code probes stdio servers with
 // server/discover before initialize and offers protocol 2025-11-25. The bridge
-// closed stdio on both, spending its single-use token.
+// must preserve the session while answering supported modern discovery requests.
 
 // assertMethodNotFound checks one reply: the given ids, each carrying exactly
 // the standard method-not-found error and no result.
@@ -68,7 +68,7 @@ func readRequest(t *testing.T, connection *mcpStdioConnection, method string, id
 	}
 }
 
-func TestMCPStdioConnectionAnswersProbeAndDropsUnknownNotification(t *testing.T) {
+func TestMCPStdioConnectionPassesDiscoverAndDropsUnknownNotification(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`,
@@ -76,15 +76,21 @@ func TestMCPStdioConnectionAnswersProbeAndDropsUnknownNotification(t *testing.T)
 	}, "\n") + "\n"
 	out := bytes.NewBuffer(nil)
 	connection := newMCPStdioTransport(io.NopCloser(strings.NewReader(stream)), nopWriteCloser{out})
+	readRequest(t, connection, "server/discover", int64(7))
+	if out.Len() != 0 {
+		t.Fatalf("connection refused discover before the SDK could handle it: %q", out.String())
+	}
 	readRequest(t, connection, "ping", int64(8))
-	assertMethodNotFound(t, out.String(), false, 7)
+	if out.Len() != 0 {
+		t.Fatalf("connection replied to an admitted request: %q", out.String())
+	}
 	if _, err := connection.Read(context.Background()); err != io.EOF {
 		t.Fatalf("connection did not end at EOF: %v", err)
 	}
 }
 
 func TestMCPStdioConnectionRefusesEveryOutsideMethod(t *testing.T) {
-	for i, method := range []string{"server/discover", "subscriptions/listen", "resources/list", "resources/read", "prompts/list", "completion/complete", "logging/setLevel", "$/arbitrary"} {
+	for i, method := range []string{"subscriptions/listen", "resources/list", "resources/read", "prompts/list", "completion/complete", "logging/setLevel", "$/arbitrary"} {
 		id := int64(100 + i)
 		stream := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":%q}`+"\n"+`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n", id, method)
 		out := bytes.NewBuffer(nil)
@@ -146,32 +152,31 @@ func TestMCPStdioCauseNamesBridgeRefusals(t *testing.T) {
 	}
 }
 
-// The incident end to end through the pinned SDK server: the probe is refused,
-// the session survives, every supported version negotiates to itself, and a
-// newer or stateless-era one negotiates down to the latest the bridge serves.
-func TestMCPStdioSDKSurvivesDiscoverProbeAndNegotiatesVersions(t *testing.T) {
+// Raw legacy initialize requests remain supported for every initialize-era
+// protocol version. Unknown versions fall back to the newest legacy version;
+// discovery is exercised separately because a modern discover establishes
+// request-scoped state and must not be followed by initialize.
+func TestMCPStdioSDKLegacyInitializeNegotiatesVersions(t *testing.T) {
 	for _, tc := range []struct{ offered, want string }{
 		{mcpProtocol20241105, mcpProtocol20241105},
 		{mcpProtocol20250326, mcpProtocol20250326},
 		{mcpProtocol20250618, mcpProtocol20250618},
 		{mcpProtocol20251125, mcpProtocol20251125},
-		{"2026-07-28", mcpProtocol20251125},
+		{mcpProtocol20260728, mcpProtocol20251125},
+		{"2020-01-01", mcpProtocol20251125},
 		{"2099-01-01", mcpProtocol20251125},
 	} {
 		t.Run(tc.offered, func(t *testing.T) {
-			in, out, cancel, runErr := startStdioSDKFixture(t, "stdio-probe-fixture")
-			writeMCPFrame(t, in, `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"`+tc.offered+`"}}}`)
-			assertMethodNotFound(t, readMCPLine(t, out), false, 1)
-			writeMCPFrame(t, in, `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"`+tc.offered+`","capabilities":{"roots":{}},"clientInfo":{"name":"probe-client","version":"1"}}}`)
+			in, out, cancel, runErr := startStdioSDKFixture(t, "stdio-legacy-fixture")
+			writeMCPFrame(t, in, `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"`+tc.offered+`","capabilities":{"roots":{}},"clientInfo":{"name":"legacy-client","version":"1"}}}`)
 			initialized := sdkCallResults(t, readMCPLine(t, out), false, 2)
 			if initialized[2]["protocolVersion"] != tc.want {
 				t.Fatalf("offered %s negotiated %v, want %s", tc.offered, initialized[2]["protocolVersion"], tc.want)
 			}
 			writeMCPFrame(t, in, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-			writeMCPFrame(t, in, `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`)
 			writeMCPFrame(t, in, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
 			if _, ok := sdkCallResults(t, readMCPLine(t, out), false, 3)[3]["tools"]; !ok {
-				t.Fatal("tools/list after the probe carried no tools field")
+				t.Fatal("tools/list after initialize carried no tools field")
 			}
 			cancel()
 			if err := awaitSignal(t, runErr, "owned server run did not join"); !errors.Is(err, context.Canceled) {
@@ -181,22 +186,22 @@ func TestMCPStdioSDKSurvivesDiscoverProbeAndNegotiatesVersions(t *testing.T) {
 	}
 }
 
-// A future SDK bump that adds an initialize-era version must not be silently
-// negotiated down by the bridge's own tracker: every version the SDK serves
-// below the stateless era has to be declared supported here.
-func TestBridgeDeclaresEverySDKInitializeEraVersion(t *testing.T) {
-	const statelessEra = "2026-07-28"
-	for _, version := range mcp.SupportedProtocolVersions() {
-		if version < statelessEra && !supportedMCPProtocol(version) {
-			t.Errorf("SDK serves initialize-era version %s but the bridge does not declare it", version)
+// The transport's protocol surface is a fixed five-version list, newest first.
+func TestBridgeDeclaresExactSDKProtocolVersionSurface(t *testing.T) {
+	want := []string{mcpProtocol20260728, mcpProtocol20251125, mcpProtocol20250618, mcpProtocol20250326, mcpProtocol20241105}
+	got := supportedMCPProtocols()
+	if !slices.Equal(got, want) {
+		t.Fatalf("supported MCP versions = %v, want exactly %v", got, want)
+	}
+	if sdk := mcp.SupportedProtocolVersions(); !slices.Equal(sdk, want) {
+		t.Fatalf("pinned SDK versions = %v, want exactly %v", sdk, want)
+	}
+	for _, version := range want {
+		if !supportedMCPProtocol(version) {
+			t.Errorf("bridge does not admit advertised protocol version %s", version)
 		}
 	}
-	for _, version := range []string{mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618, mcpProtocol20251125} {
-		if !slices.Contains(mcp.SupportedProtocolVersions(), version) {
-			t.Errorf("bridge declares %s but the pinned SDK no longer serves it", version)
-		}
-	}
-	if negotiatedMCPVersion(statelessEra) != mcpProtocol20251125 || negotiatedMCPVersion("") != mcpProtocol20251125 {
-		t.Error("stateless or empty version did not negotiate to the latest initialize-era version")
+	if negotiatedMCPVersion(mcpProtocol20260728) != mcpProtocol20251125 || negotiatedMCPVersion("") != mcpProtocol20251125 || negotiatedMCPVersion("2020-01-01") != mcpProtocol20251125 {
+		t.Error("stateless, empty, or unknown version did not negotiate to the latest initialize-era version")
 	}
 }

@@ -167,6 +167,7 @@ func startStdioSDKFixture(t *testing.T, name string) (io.WriteCloser, io.ReadClo
 	serverIn, serverInWriter := io.Pipe()
 	clientOut, clientOutWriter := io.Pipe()
 	server := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
+	configureMCPStdioServer(server)
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr, runDone := make(chan error, 1), make(chan struct{})
 	go func() { runErr <- server.Run(ctx, newMCPStdioTransport(serverIn, clientOutWriter)); close(runDone) }()

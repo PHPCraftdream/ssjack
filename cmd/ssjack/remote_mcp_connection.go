@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const remoteMCPStdioWriteBudget = 15 * time.Second
 
 // mcpStdioConnection adapts the bounded stdio reader and stdout writer to the
 // pinned SDK Transport and Connection interfaces without weakening any bound.
@@ -22,17 +25,21 @@ type mcpStdioConnection struct {
 	writer          io.WriteCloser
 	queue           []jsonrpc.Message
 	protocolVersion string
+	writeBudget     time.Duration
 
 	writeMu sync.Mutex
 	admitMu sync.Mutex
 	closing bool
+	failure error
 	writes  sync.WaitGroup
 
 	batchMu sync.Mutex
 	batches map[jsonrpc.ID]*mcpStdioBatch
 
-	closeOnce sync.Once
-	closeErr  error
+	closeOnce       sync.Once
+	closeErr        error
+	writerCloseOnce sync.Once
+	writerCloseErr  error
 }
 
 // mcpStdioBatch tracks one inbound legacy batch so its call responses are
@@ -42,10 +49,15 @@ type mcpStdioBatch struct {
 	responses  []*jsonrpc.Response
 }
 
+var (
+	errMCPStdioBatchUnsupported = errors.New("JSON-RPC batching is not supported")
+	errMCPStdioWriteTimeout     = errors.New("MCP stdio write timed out")
+)
+
 var _ mcp.Transport = (*mcpStdioConnection)(nil)
 
 func newMCPStdioTransport(reader io.ReadCloser, writer io.WriteCloser) *mcpStdioConnection {
-	return &mcpStdioConnection{reader: newBoundedMCPStdioReader(reader), writer: writer}
+	return &mcpStdioConnection{reader: newBoundedMCPStdioReader(reader), writer: writer, writeBudget: remoteMCPStdioWriteBudget}
 }
 
 func (c *mcpStdioConnection) Connect(context.Context) (mcp.Connection, error) { return c, nil }
@@ -57,14 +69,17 @@ func (c *mcpStdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) 
 		frame := make([]byte, maxMCPStdioMessage+1)
 		n, err := c.reader.Read(frame)
 		if err != nil {
+			if failure := c.writeFailure(); failure != nil {
+				return nil, failure
+			}
 			return nil, err
 		}
 		messages, batch, err := decodeMCPFrame(frame[:n])
 		if err != nil {
 			return nil, err
 		}
-		if batch && c.protocolVersion >= mcpProtocol20250618 {
-			return nil, fmt.Errorf("JSON-RPC batching is not supported in %s and later", mcpProtocol20250618)
+		if batch && (c.protocolVersion >= mcpProtocol20250618 || batchHasModernProtocolVersion(messages)) {
+			return nil, fmt.Errorf("JSON-RPC batching is not supported in %s and later: %w", mcpProtocol20250618, errMCPStdioBatchUnsupported)
 		}
 		if batch {
 			if err := c.trackBatch(messages); err != nil {
@@ -85,15 +100,15 @@ func (c *mcpStdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) 
 // Write is either fully registered with the shutdown join or refused after
 // Close. A tracked incomplete batch response is buffered as admitted work; a
 // completed batch is emitted as one array.
-func (c *mcpStdioConnection) Write(_ context.Context, message jsonrpc.Message) error {
-	if !c.admitWrite() {
-		return errMCPStdioWriterClosed
+func (c *mcpStdioConnection) Write(ctx context.Context, message jsonrpc.Message) error {
+	if err := c.admitWrite(); err != nil {
+		return err
 	}
 	defer c.writes.Done()
 	if resp, ok := message.(*jsonrpc.Response); ok {
 		batch, complete := c.updateBatch(resp)
 		if complete && len(batch) > 0 {
-			return c.writeBatch(batch)
+			return c.writeBatch(ctx, batch)
 		}
 		if complete {
 			return nil
@@ -104,7 +119,7 @@ func (c *mcpStdioConnection) Write(_ context.Context, message jsonrpc.Message) e
 		return err
 	}
 	data = append(data, '\n')
-	return c.writeAll(data)
+	return c.writeAll(ctx, data)
 }
 
 // Close flips the guarded closing flag before waiting, so a Write is either
@@ -116,7 +131,7 @@ func (c *mcpStdioConnection) Close() error {
 		c.admitMu.Lock()
 		c.closing = true
 		c.admitMu.Unlock()
-		writeErr := c.writer.Close()
+		writeErr := c.closeWriter()
 		c.writes.Wait()
 		readErr := c.reader.Close()
 		c.closeErr = errors.Join(writeErr, readErr)
@@ -128,29 +143,97 @@ func (*mcpStdioConnection) SessionID() string { return "" }
 
 // admitWrite registers one Write with the shutdown join under admitMu, so the
 // registration cannot interleave with Close flipping the closing flag.
-func (c *mcpStdioConnection) admitWrite() bool {
+func (c *mcpStdioConnection) admitWrite() error {
 	c.admitMu.Lock()
 	defer c.admitMu.Unlock()
 	if c.closing {
-		return false
+		if c.failure != nil {
+			return c.failure
+		}
+		return errMCPStdioWriterClosed
 	}
 	c.writes.Add(1)
-	return true
+	return nil
 }
 
-// writeAll serializes the underlying write under writeMu, which Close never
-// takes; admission and join accounting happened in Write.
-func (c *mcpStdioConnection) writeAll(data []byte) error {
+func (c *mcpStdioConnection) writeFailure() error {
+	c.admitMu.Lock()
+	defer c.admitMu.Unlock()
+	return c.failure
+}
+
+func (c *mcpStdioConnection) failWrites(err error) error {
+	c.admitMu.Lock()
+	c.closing = true
+	if c.failure == nil {
+		c.failure = err
+	}
+	failure := c.failure
+	c.admitMu.Unlock()
+	return failure
+}
+
+func (c *mcpStdioConnection) closeWriter() error {
+	c.writerCloseOnce.Do(func() { c.writerCloseErr = c.writer.Close() })
+	return c.writerCloseErr
+}
+
+// interruptWrites latches the failure and closes only owned I/O; callers must
+// not join admitted writes here because a writer failure may be self-owned.
+func (c *mcpStdioConnection) interruptWrites(err error) error {
+	failure := c.failWrites(err)
+	c.closeWriter()
+	_ = c.reader.Close()
+	return failure
+}
+
+// writeAll starts the bound before waiting for writeMu; a timeout interrupts
+// the owned I/O without joining SDK writes from its callback.
+func (c *mcpStdioConnection) writeAll(ctx context.Context, data []byte) (result error) {
+	writeCtx, cancel := context.WithTimeout(ctx, c.writeBudget)
+	callbackDone := make(chan struct{})
+	stopWatch := context.AfterFunc(writeCtx, func() {
+		defer close(callbackDone)
+		c.interruptWrites(errMCPStdioWriteTimeout)
+	})
+	defer func() {
+		if !stopWatch() {
+			<-callbackDone
+		}
+		cancel()
+		if failure := c.writeFailure(); failure != nil {
+			result = failure
+		}
+	}()
+
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	c.admitMu.Lock()
+	closing, failure := c.closing, c.failure
+	c.admitMu.Unlock()
+	if failure != nil {
+		return failure
+	}
+	if closing {
+		return errMCPStdioWriterClosed
+	}
+	if writeCtx.Err() != nil {
+		return c.interruptWrites(errMCPStdioWriteTimeout)
+	}
 	n, err := c.writer.Write(data)
 	if err == nil && n != len(data) {
-		return io.ErrShortWrite
+		err = io.ErrShortWrite
 	}
-	return err
+	if err != nil {
+		// Stop queued writes before releasing writeMu: a partial frame cannot
+		// be followed by another frame on the same stream.
+		c.interruptWrites(err)
+		return err
+	}
+	return nil
 }
 
-func (c *mcpStdioConnection) writeBatch(batch []*jsonrpc.Response) error {
+func (c *mcpStdioConnection) writeBatch(ctx context.Context, batch []*jsonrpc.Response) error {
 	encoded := make([]json.RawMessage, 0, len(batch))
 	for _, response := range batch {
 		raw, err := jsonrpc.EncodeMessage(response)
@@ -164,7 +247,7 @@ func (c *mcpStdioConnection) writeBatch(batch []*jsonrpc.Response) error {
 		return err
 	}
 	data = append(data, '\n')
-	return c.writeAll(data)
+	return c.writeAll(ctx, data)
 }
 
 // trackBatch records the call identifiers of one inbound legacy batch so their
@@ -220,6 +303,63 @@ func (c *mcpStdioConnection) updateBatch(resp *jsonrpc.Response) ([]*jsonrpc.Res
 	return nil, true
 }
 
+func batchHasModernProtocolVersion(messages []jsonrpc.Message) bool {
+	for _, message := range messages {
+		req, ok := message.(*jsonrpc.Request)
+		if !ok {
+			continue
+		}
+
+		if len(req.Params) == 0 {
+			if req.Method == "initialize" && negotiatedMCPVersion("") >= mcpProtocol20250618 {
+				return true
+			}
+			continue
+		}
+
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &params); err != nil || params == nil {
+			return true
+		}
+
+		malformed := false
+		modern := false
+		if rawVersion, present := params["protocolVersion"]; present {
+			var version string
+			if err := json.Unmarshal(rawVersion, &version); err != nil || version == "" {
+				malformed = true
+			} else if parsed, err := time.Parse("2006-01-02", version); err != nil || parsed.Format("2006-01-02") != version {
+				malformed = true
+			} else if req.Method == "initialize" && negotiatedMCPVersion(version) >= mcpProtocol20250618 {
+				modern = true
+			}
+		} else if req.Method == "initialize" && negotiatedMCPVersion("") >= mcpProtocol20250618 {
+			modern = true
+		}
+
+		if rawMeta, present := params["_meta"]; present {
+			var meta map[string]json.RawMessage
+			if err := json.Unmarshal(rawMeta, &meta); err != nil || meta == nil {
+				malformed = true
+			} else if rawVersion, present := meta["io.modelcontextprotocol/protocolVersion"]; present {
+				var version string
+				if err := json.Unmarshal(rawVersion, &version); err != nil || version == "" {
+					malformed = true
+				} else if parsed, err := time.Parse("2006-01-02", version); err != nil || parsed.Format("2006-01-02") != version {
+					malformed = true
+				} else if version >= mcpProtocol20250618 {
+					modern = true
+				}
+			}
+		}
+
+		if malformed || modern {
+			return true
+		}
+	}
+	return false
+}
+
 // trackNegotiatedVersion derives the negotiated protocol version from the
 // initialize request visible on this connection, mirroring the SDK server's
 // own version update without any unexported SDK hook.
@@ -240,7 +380,7 @@ func (c *mcpStdioConnection) trackNegotiatedVersion(messages []jsonrpc.Message) 
 }
 
 func negotiatedMCPVersion(version string) string {
-	if !supportedMCPProtocol(version) {
+	if !supportedMCPProtocol(version) || version >= mcpProtocol20260728 {
 		return mcpProtocol20251125
 	}
 	return version

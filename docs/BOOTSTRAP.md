@@ -24,25 +24,41 @@ The database password, private key, Argon2id outputs, and database master never 
 ## When the bridge drops
 
 The token is single-use and the keeper's channel ends with the one connection
-that claimed it. If the harness stops or restarts its `ssjack mcp` child, the
-new child cannot attach: the listener is already closed and the token is spent.
-The harness then reports the `ssjack` MCP server as disconnected. This is by
-design, not a fault to retry around. The only recovery is to leave the harness
-and start it again through `ssjack run`, which creates a new channel. A
-re-attach path would widen the trust boundary and is not implemented.
+that claimed it. The keeper consumes the token when that connection attaches,
+before any MCP discovery request. `server/discover` does not consume another
+token or cause a restart. If the harness stops or restarts its `ssjack mcp`
+child, the new child cannot attach: the listener is already closed and the
+token is spent. The only recovery is to leave the harness and start it again
+through `ssjack run`, which creates a new channel. A re-attach path would widen
+the trust boundary and is not implemented.
 
-So the bridge must never end its stdio over a message it merely does not
-support. It hands the SDK only `initialize`, `notifications/initialized`,
-`notifications/cancelled`, `tools/list`, `tools/call` and `ping`; any other
-call is answered with JSON-RPC `-32601 method not found` and any other
-notification is dropped. Claude Code probes stdio servers with
-`server/discover` before `initialize` and respawns a server that closes on it,
-which used to spend the token at startup. An `initialize` offering a protocol
-version newer than the bridge serves (`2024-11-05`, `2025-03-26`,
-`2025-06-18` and `2025-11-25` are served natively) is negotiated down to
-`2025-11-25` instead of refused. The stateless `2026-07-28` era
-(`server/discover`, `subscriptions/listen`) is not served; Claude Code falls
-back to `initialize`.
+The bridge keeps stdio open for unsupported requests: it responds with JSON-RPC
+`-32601 method not found`; unsupported notifications are dropped. Served MCP
+protocol versions are preferred in this order: `2026-07-28`, `2025-11-25`,
+`2025-06-18`, `2025-03-26`, `2024-11-05`. For modern clients, the bridge handles
+`server/discover` natively, returning `resultType` and cache information at the
+result root, with `serverInfo` in `result._meta` (not as a normal root field),
+without requiring `initialize`. If a legacy
+client instead sends `initialize` with an unknown or modern protocol version,
+the bridge falls back to its newest legacy version, `2025-11-25`; the older
+served versions remain available. A `_meta` protocol mismatch returns
+`-32022` with `data` identifying the supported and requested versions. The
+client must not retry the spent token or re-attach.
+
+The bridge is tools-only: tasks, extensions, MRTR, roots, sampling, resources,
+and prompts are not implemented. Modern logging and `ping` are removed; legacy
+`ping` remains available. JSON-RPC `-32020` through `-32099` are reserved, so
+the bridge defines no custom errors in that range beyond the stated
+`-32022` mismatch response.
+
+`subscriptions/listen` acknowledges only requested notification types that
+are allowed. A genuine asynchronous tool-list registration can enable tool-list
+change notifications; there are no invented streams or secret-bearing events.
+If nothing is both requested and available, the SDK acknowledges with `{}` and
+the listen completes. At most one listen is active, for up to one minute; the
+client may renew it. A listen does not block other requests and is cancelled on
+shutdown. The upstream SDK is untouched; its internally pinned protocol
+baseline is `2025-06-18`.
 
 To find out why a bridge dropped, the keeper and the bridge append fixed
 lifecycle events to `.claude/ssjack/lifecycle.log` in the project (owner-only
@@ -77,7 +93,15 @@ request or reply data, a path or error text. Every value is reduced to
 `[A-Za-z0-9_.:-]` and at most 64 bytes, and an error is recorded only as one of
 a fixed set of classes (`eof`, `timeout`, `reset`, `closed`, `cancelled`,
 `other` and similar; `stdio-end` also names the bridge's own refusals:
-`invalid-message`, `unsupported-message`, `stdio-limit`, `concurrent-read`).
+`invalid-message`, `unsupported-message`, `stdio-limit`, `concurrent-read`,
+`unsupported-batch`, `stdio-write-timeout`). Each acknowledgement, ordinary
+response, and legacy batch response has a 15-second stdio write bound; when it
+expires the bridge closes its output, ends the session and logs
+`stdio-write-timeout`. The bound relies on closing the output to release the
+blocked write, which holds for pipes the Go runtime can interrupt but not for an
+inherited blocking descriptor: there a client that keeps stdin open and stops
+reading stdout can delay shutdown until it reads or the process is ended. That
+limit predates the stdio bound and is tracked separately.
 Operation names (`op`) are recorded; their arguments are
 not. The file is diagnostic only: nothing reads it back to make a decision, so
 editing it grants nothing. Failing to write it never fails a launch. The

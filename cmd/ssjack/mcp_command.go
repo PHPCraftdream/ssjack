@@ -74,6 +74,7 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 	if err != nil {
 		return 1, "registry", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
+	configureMCPStdioServer(server)
 	connCtx, cancel := context.WithCancel(ctx)
 	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
 	life.Event("serving")
@@ -96,6 +97,8 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 // would all record as other.
 func stdioCause(err error) string {
 	switch {
+	case errors.Is(err, errMCPStdioBatchUnsupported):
+		return "unsupported-batch"
 	case errors.Is(err, errMCPStdioMessageLimit), errors.Is(err, errMCPStdioMessageCountLimit):
 		return "stdio-limit"
 	case errors.Is(err, errMCPStdioInvalidMessage):
@@ -104,6 +107,8 @@ func stdioCause(err error) string {
 		return "unsupported-message"
 	case errors.Is(err, errMCPStdioConcurrentRead):
 		return "concurrent-read"
+	case errors.Is(err, errMCPStdioWriteTimeout):
+		return "stdio-write-timeout"
 	}
 	return lifelog.Cause(err)
 }

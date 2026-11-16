@@ -17,6 +17,7 @@ const (
 	mcpProtocol20250326 = "2025-03-26"
 	mcpProtocol20250618 = "2025-06-18"
 	mcpProtocol20251125 = "2025-11-25"
+	mcpProtocol20260728 = "2026-07-28"
 )
 
 var (
@@ -175,24 +176,30 @@ func validateMCPStdioMessage(frame []byte) error {
 	return nil
 }
 
-// supportedMCPMethod is the whole surface the bridge hands to the SDK.
+// supportedMCPMethod is the whole surface the bridge admits to the SDK.
 func supportedMCPMethod(method string) bool {
 	switch method {
-	case "initialize", "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping":
+	case "initialize", "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping", "server/discover", "subscriptions/listen":
 		return true
 	}
 	return false
 }
 
-// supportedMCPProtocol lists the initialize-era versions the bridge serves
-// natively. The stateless 2026-07-28 era (server/discover, subscriptions/listen)
-// is not served: the pinned SDK negotiates an initialize offering it down.
+// supportedMCPProtocol lists protocol versions accepted by the stdio transport.
 func supportedMCPProtocol(version string) bool {
 	switch version {
-	case mcpProtocol20241105, mcpProtocol20250326, mcpProtocol20250618, mcpProtocol20251125:
+	case mcpProtocol20260728, mcpProtocol20251125, mcpProtocol20250618, mcpProtocol20250326, mcpProtocol20241105:
 		return true
 	}
 	return false
+}
+
+func supportedMCPProtocols() []string {
+	return []string{mcpProtocol20260728, mcpProtocol20251125, mcpProtocol20250618, mcpProtocol20250326, mcpProtocol20241105}
+}
+
+func (*mcpStdioConnection) SupportsProtocolVersion(version string) bool {
+	return supportedMCPProtocol(version)
 }
 
 func (r *boundedMCPStdioReader) Close() error {

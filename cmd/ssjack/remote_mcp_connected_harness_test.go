@@ -118,12 +118,16 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal("connected harness could not attach to the real stdio bridge")
 	}
+	initializeResult := session.InitializeResult()
 	closed := false
 	defer func() {
 		if !closed {
 			_ = session.Close()
 		}
 	}()
+	if initializeResult == nil || initializeResult.ProtocolVersion != mcpProtocol20260728 {
+		t.Fatal("connected bridge did not negotiate the latest protocol")
+	}
 	listing := remoteMCPConnectedList(ctx, t, session, scenario != "connected-empty")
 	if scenario != "connected-empty" {
 		remoteMCPConnectedCapabilityNegativeControl(t, ctx, encodedChannels, session)
