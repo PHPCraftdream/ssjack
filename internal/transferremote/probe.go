@@ -17,6 +17,8 @@ type remoteCaps struct {
 	hash   string // "sha256sum", "shasum" or "sha256q"
 	mvT    bool   // mv -T is functional; false selects Perl rename/link
 	tarGNU bool   // tar -x --no-same-owner --no-same-permissions is functional
+	// wcNames is functional; false selects the stdin-based portable size listing.
+	wcNames bool
 }
 
 // probeTemplate verifies POSIX sh and the fixed tools cat find xargs tar rm
@@ -45,6 +47,16 @@ actual="$(umask 0077 && mask=$(umask) && printf '%%o' "$((0777 & ~mask))")" || e
 printf '\000' > "$d/nul" || exit 20
 bytes="$(wc -c < "$d/nul")" || exit 20
 [ "$bytes" -eq 1 ] || exit 20
+wc_path="$d/wc name ' $(printf '\303\274 \303\261')"
+printf 'abc' > "$wc_path" || exit 20
+count="$(wc -c < "$wc_path")" || exit 20
+while [ "${count# }" != "$count" ]; do count=${count# }; done
+case "$count" in ''|*[!0-9]*) exit 20 ;; esac
+[ "$count" = 3 ] || exit 20
+out="$(wc -c "$wc_path")" || exit 20
+while [ "${out# }" != "$out" ]; do out=${out# }; done
+wc='stdin'
+if [ "$out" = "3 $wc_path" ]; then wc='names'; fi
 : > "$d/name with ' quote" || exit 20
 if ! printf '%%s\000' "$d/name with ' quote" | xargs -0 sh -c 'test "$#" -eq 1 && test "$1" = "$0"' "$d/name with ' quote"; then
 	exit 20
@@ -242,7 +254,7 @@ mode="$(find "$d/y/f" -type f -perm 0700 -print)" || exit 20
 [ "$mode" = "$d/y/f" ] || exit 20
 rm -rf "$d" || exit 20
 trap - 0
-printf 'SSJACK-CAPS %%s %%s gnu\n' "$hash" "$rename"
+printf 'SSJACK-CAPS %%s %%s gnu %%s\n' "$hash" "$rename" "$wc"
 `
 
 // Probe checks that the remote target has every tool the transfer needs.
@@ -264,14 +276,15 @@ func (r *remoteRunner) Probe(ctx context.Context) error {
 		return classedUnsupportedProbe()
 	}
 	fields := strings.Split(strings.TrimSuffix(line, "\n"), " ")
-	if len(fields) != 4 || fields[0] != "SSJACK-CAPS" {
+	if len(fields) != 5 || fields[0] != "SSJACK-CAPS" {
 		return classedUnsupportedProbe()
 	}
 	if (fields[1] != hashSha256sum && fields[1] != hashShasum && fields[1] != hashSha256q) ||
-		(fields[2] != "t" && fields[2] != "p") || fields[3] != "gnu" {
+		(fields[2] != "t" && fields[2] != "p") || fields[3] != "gnu" ||
+		(fields[4] != "names" && fields[4] != "stdin") {
 		return classedUnsupportedProbe()
 	}
-	r.caps.Store(&remoteCaps{hash: fields[1], mvT: fields[2] == "t", tarGNU: true})
+	r.caps.Store(&remoteCaps{hash: fields[1], mvT: fields[2] == "t", tarGNU: true, wcNames: fields[4] == "names"})
 	return nil
 }
 

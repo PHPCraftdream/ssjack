@@ -80,7 +80,7 @@ func TestExecuteCancellation(t *testing.T) {
 
 	// Success wins over late cancellation.
 	f1 := &fakeRunner{respond: func(command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 		return 0, err
 	}}
 	r1 := New(f1.run, "t", sampleLimits())

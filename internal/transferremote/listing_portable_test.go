@@ -83,6 +83,9 @@ func TestPortableListingParsersPreservePathBytesAndRefuseUnsafeNames(t *testing.
 	if err != nil || len(sizes) != 1 || sizes[relFile] != 17 {
 		t.Fatalf("parseSizeListing = (%v, %v), want BSD-padded count 17 for %q", sizes, err, relFile)
 	}
+	if _, err := parseSizeListing([]byte("17 /srv/remote names/?????? ???????/draft v2.bin\n"), root, limits, transfercore.ClassRefusedPath); err == nil {
+		t.Errorf("parseSizeListing accepted mangled nonmatching UTF-8 path")
+	}
 
 	badDirNames := []string{"/srv/elsewhere/a", root + "/bad\\name", root + "/bad\x01name"}
 	for _, name := range badDirNames {
@@ -99,7 +102,7 @@ func TestPortableListingParsersPreservePathBytesAndRefuseUnsafeNames(t *testing.
 			t.Errorf("parseFileListing accepted unsafe/mismatched path %q", name)
 		}
 	}
-	badSizeNames := []string{"/srv/elsewhere/a", root + "/bad\\name", root + "/bad\x01name"}
+	badSizeNames := []string{"/srv/elsewhere/a", "/srv/remote names/?????? ???????/draft v2.bin", root + "/bad\\name", root + "/bad\x01name"}
 	for _, name := range badSizeNames {
 		_, err := parseSizeListing([]byte("17 "+name+"\n"), root, limits, transfercore.ClassRefusedPath)
 		if err == nil {
@@ -135,7 +138,7 @@ func TestPreflightTreePortableListingsPreserveOriginalPaths(t *testing.T) {
 		return 0, nil
 	}}
 	r := New(f.run, "t", sampleLimits()).(*remoteRunner)
-	r.caps.Store(&remoteCaps{hash: hashShasum, mvT: true, tarGNU: true})
+	r.caps.Store(&remoteCaps{hash: hashShasum, mvT: true, tarGNU: true, wcNames: false})
 	manifest, err := r.PreflightTree(context.Background(), root)
 	if err != nil {
 		t.Fatalf("PreflightTree = %v, want nil", err)
@@ -152,25 +155,161 @@ func TestPreflightTreePortableListingsPreserveOriginalPaths(t *testing.T) {
 	}
 }
 
-func TestPortableSizeCommandIsSelectedForNonGNUHash(t *testing.T) {
+func TestSHA256sumWithStdinWcPreservesUnicodeManifestPaths(t *testing.T) {
 	const root = "/srv/remote names/дерево целиком"
+	const path = root + "/draft v2.bin"
+	payloadHash := sha256.Sum256([]byte("unicode file contents"))
+	hashText := hex.EncodeToString(payloadHash[:])
 	f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
-		if strings.Contains(command, "read -r x") || strings.Contains(command, "-type d -print0") || strings.Contains(command, "-type f -print0") || strings.Contains(command, "wc -c < \"$f\"") {
-			return 0, nil
+		switch {
+		case strings.Contains(command, "SSJACK-CAPS"):
+			_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu stdin\n")
+		case strings.Contains(command, "-type d -print0"):
+			_, _ = io.WriteString(stdout, root+"\x00")
+		case strings.Contains(command, "-type f -print0") && !strings.Contains(command, "wc -c"):
+			_, _ = fmt.Fprintf(stdout, "%s  %s\n", hashText, path)
+		case strings.Contains(command, "wc -c < \"$f\""):
+			_, _ = fmt.Fprintf(stdout, "131072 %s\n", path)
+		case strings.Contains(command, "wc -c"):
+			_, _ = io.WriteString(stdout, "  131072 /srv/remote names/?????? ???????/draft v2.bin\n")
 		}
 		return 0, nil
 	}}
 	r := New(f.run, "t", sampleLimits()).(*remoteRunner)
-	r.caps.Store(&remoteCaps{hash: hashShasum, mvT: true, tarGNU: true})
-	if _, err := r.PreflightTree(context.Background(), root); err != nil {
-		t.Fatalf("PreflightTree = %v, want nil", err)
+	if err := r.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe = %v", err)
 	}
-	commands := f.recorded()
-	if len(commands) != 4 {
-		t.Fatalf("recorded %d commands, want tree check plus three listings", len(commands))
+	manifest, err := r.PreflightTree(context.Background(), root)
+	if err != nil {
+		t.Fatalf("PreflightTree = %v", err)
 	}
-	last := commands[3]
-	if strings.Contains(last, "%!") || !strings.Contains(last, `printf "%s %s\n" "$size" "$f"`) {
-		t.Errorf("non-GNU size command is malformed:\n%s", last)
+	if len(manifest.Files) != 1 || manifest.Files[0].Path != "draft v2.bin" || manifest.Files[0].Size != 131072 || manifest.Files[0].SHA256 != payloadHash {
+		t.Fatalf("manifest = %+v, want exact Unicode path, size 131072 and digest %x", manifest, payloadHash)
+	}
+	for _, command := range f.recorded() {
+		if strings.Contains(command, "xargs -0 -n 1 wc -c") {
+			t.Fatalf("stdin wc capability selected a direct filename wc command:\n%s", command)
+		}
+	}
+
+	mangled := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+		switch {
+		case strings.Contains(command, "SSJACK-CAPS"):
+			_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu names\n")
+		case strings.Contains(command, "-type d -print0"):
+			_, _ = io.WriteString(stdout, root+"\x00")
+		case strings.Contains(command, "-type f -print0") && !strings.Contains(command, "wc -c"):
+			_, _ = fmt.Fprintf(stdout, "%s  %s\n", hashText, path)
+		case strings.Contains(command, "wc -c"):
+			_, _ = io.WriteString(stdout, "  131072 /srv/remote names/?????? ???????/draft v2.bin\n")
+		}
+		return 0, nil
+	}}
+	rMangled := New(mangled.run, "t", sampleLimits()).(*remoteRunner)
+	if err := rMangled.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe(mangled wc filename) = %v", err)
+	}
+	_, err = rMangled.PreflightTree(context.Background(), root)
+	testWantErr(t, err, transfercore.ClassRefusedPath, msgListingMalformed, -1)
+}
+func TestSizeAndPublicationCapabilitiesAreIndependentOfHash(t *testing.T) {
+	const root = "/srv/remote names/дерево целиком"
+	const path = root + "/draft v2.bin"
+	payload := []byte("portable payload")
+	hashBytes := sha256.Sum256(payload)
+	hashText := hex.EncodeToString(hashBytes[:])
+	dirsOut := root + "\x00"
+	hashesOut := hashText + "  " + path + "\n"
+	sizesOut := fmt.Sprintf("      %d %s\n", len(payload), path)
+
+	for _, hash := range []string{hashSha256sum, hashShasum, hashSha256q} {
+		for _, wc := range []string{"names", "stdin"} {
+			for _, rename := range []string{"t", "p"} {
+				hash, wc, rename := hash, wc, rename
+				t.Run(hash+"/"+wc+"/"+rename, func(t *testing.T) {
+					report := fmt.Sprintf("SSJACK-CAPS %s %s gnu %s\n", hash, rename, wc)
+					f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+						switch {
+						case strings.Contains(command, "SSJACK-CAPS"):
+							_, _ = io.WriteString(stdout, report)
+						case strings.Contains(command, `wc -c < "$path"`):
+							_, _ = fmt.Fprintf(stdout, "%d\n%s  %s\n", len(payload), hashText, path)
+						case strings.Contains(command, "-type d -print0"):
+							_, _ = io.WriteString(stdout, dirsOut)
+						case strings.Contains(command, "wc -c"):
+							_, _ = io.WriteString(stdout, sizesOut)
+						case strings.Contains(command, "-type f -print0") && !strings.Contains(command, "wc -c"):
+							_, _ = io.WriteString(stdout, hashesOut)
+						}
+						return 0, nil
+					}}
+					r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+					if err := r.Probe(context.Background()); err != nil {
+						t.Fatalf("Probe = %v", err)
+					}
+					if gotSize, gotHash, err := r.StatFile(context.Background(), path); err != nil || gotSize != int64(len(payload)) || gotHash != hashBytes {
+						t.Fatalf("StatFile = (%d, %x, %v); want (%d, %x, nil)", gotSize, gotHash, err, len(payload), hashBytes)
+					}
+					manifest, err := r.PreflightTree(context.Background(), root)
+					if err != nil {
+						t.Fatalf("PreflightTree = %v", err)
+					}
+					if len(manifest.Files) != 1 || manifest.Files[0].Path != "draft v2.bin" || manifest.Files[0].Size != int64(len(payload)) || manifest.Files[0].SHA256 != hashBytes {
+						t.Fatalf("manifest = %+v, want exact path, size and digest", manifest)
+					}
+					if err := r.PublishFile(context.Background(), "/srv/staging", "/srv/dest", false); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.PublishFile(context.Background(), "/srv/staging", "/srv/dest", true); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.PublishDir(context.Background(), "/srv/staging", "/srv/dest", false); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.PublishDir(context.Background(), "/srv/staging", "/srv/dest", true); err != nil {
+						t.Fatal(err)
+					}
+					commands := f.recorded()
+					if len(commands) != 10 {
+						t.Fatalf("recorded %d commands, want probe, stat, four preflight and four publication commands", len(commands))
+					}
+					if !strings.HasSuffix(commands[1], statHashCommand(hash)+"\n") {
+						t.Errorf("StatFile selected wrong independent hash command:\n%s", commands[1])
+					}
+					if !strings.HasSuffix(commands[4], treeHashTail(hash)+"\n") {
+						t.Errorf("tree listing selected wrong independent hash command:\n%s", commands[4])
+					}
+					var wantSizes string
+					if wc == "names" {
+						wantSizes = `set -eu
+root='/srv/remote names/дерево целиком'
+if [ ! -d "$root" ] || [ -L "$root" ]; then
+	exit 21
+fi
+find "$root" -type f -print0 | xargs -0 -n 1 wc -c
+`
+					} else {
+						wantSizes = `set -eu
+root='/srv/remote names/дерево целиком'
+if [ ! -d "$root" ] || [ -L "$root" ]; then
+	exit 21
+fi
+find "$root" -type f -print0 | xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; size=$(wc -c < "$f") || exit 24; printf "%s %s\n" "$size" "$f"' _
+`
+					}
+					if commands[5] != wantSizes {
+						t.Errorf("wc=%s size command differs:\n got: %q\nwant: %q", wc, commands[5], wantSizes)
+					}
+					for i, command := range commands[6:] {
+						if rename == "t" && !strings.Contains(command, "mv -T") {
+							t.Errorf("publication %d with rename=%s lacks mv -T: %s", i, rename, command)
+						}
+						if rename == "p" && !strings.Contains(command, perlRenameCommand) {
+							t.Errorf("publication %d with rename=%s lacks Perl rename: %s", i, rename, command)
+						}
+					}
+				})
+			}
+		}
 	}
 }

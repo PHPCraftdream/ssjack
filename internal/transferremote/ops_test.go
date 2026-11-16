@@ -14,7 +14,7 @@ import (
 
 func TestProbe(t *testing.T) {
 	f := &fakeRunner{respond: func(command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+		_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 		return 0, err
 	}}
 	if err := New(f.run, "t", sampleLimits()).Probe(context.Background()); err != nil {

@@ -15,7 +15,7 @@ func TestPerlPublicationCapsRenderFixedCommandsAndQuotedPaths(t *testing.T) {
 	dest := "/srv/destination path ' $(touch should-not-run)"
 	f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 		if strings.Contains(command, "SSJACK-CAPS") {
-			_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu\n")
+			_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu names\n")
 			return 0, err
 		}
 		return 0, nil
@@ -103,7 +103,7 @@ func TestPerlPublicationExitCodeMapping(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-code-%d", op.name, tc.code), func(t *testing.T) {
 				f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 					if strings.Contains(command, "SSJACK-CAPS") {
-						_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu\n")
+						_, err := io.WriteString(stdout, "SSJACK-CAPS sha256sum p gnu names\n")
 						return 0, err
 					}
 					return tc.code, nil
@@ -121,7 +121,7 @@ func TestPerlPublicationExitCodeMapping(t *testing.T) {
 }
 
 func TestGNUPublicationTemplatesRemainUnchanged(t *testing.T) {
-	caps := remoteCaps{hash: hashSha256sum, mvT: true, tarGNU: true}
+	caps := remoteCaps{hash: hashSha256sum, mvT: true, tarGNU: true, wcNames: true}
 	for name, template := range map[string]string{
 		"file-no-overwrite": publishFileTemplate,
 		"file-overwrite":    publishFileOverwriteTemplate,

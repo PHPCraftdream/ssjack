@@ -21,19 +21,19 @@ func TestCapsSelectVariants(t *testing.T) {
 	}{
 		{
 			name:   "sha256sum",
-			report: "SSJACK-CAPS sha256sum t gnu\n",
+			report: "SSJACK-CAPS sha256sum t gnu names\n",
 			stat:   `sha256sum "$path"`,
 			tree:   `xargs -0 sha256sum`,
 		},
 		{
 			name:   "shasum",
-			report: "SSJACK-CAPS shasum t gnu\n",
+			report: "SSJACK-CAPS shasum t gnu names\n",
 			stat:   "out=$(shasum -a 256 < \"$path\") || exit 24\nhash=${out%% *}\n[ \"$out\" = \"$hash  -\" ] || exit 24\nprintf '%s  %s\\n' \"$hash\" \"$path\"",
 			tree:   `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; out=$(shasum -a 256 < "$f") || exit 24; hash=${out%% *}; [ "$out" = "$hash  -" ] || exit 24; printf "%s  %s\n" "$hash" "$f"' _`,
 		},
 		{
 			name:   "sha256q",
-			report: "SSJACK-CAPS sha256q t gnu\n",
+			report: "SSJACK-CAPS sha256q t gnu names\n",
 			stat:   "hash=$(sha256 -q \"$path\") || exit 24\nprintf '%s  %s\\n' \"$hash\" \"$path\"",
 			tree:   `xargs -0 -n 1 sh -c '[ "$#" -gt 0 ] || exit 0; f="$1"; hash=$(sha256 -q "$f") || exit 24; printf "%s  %s\n" "$hash" "$f"' _`,
 		},
@@ -171,17 +171,68 @@ func TestTarInNilSourcePreservesGNUCommand(t *testing.T) {
 	}
 }
 
+func TestProbeSelectsWCFilenameCapability(t *testing.T) {
+	probe := fmt.Sprintf(probeTemplate, shellQuote("/.ssjack-probe-0123456789abcdef"))
+	utf8Fixture := `wc_path="$d/wc name ' $(printf '\303\274 \303\261')"`
+	if !strings.Contains(probe, utf8Fixture) {
+		t.Errorf("probe does not exercise wc with the funky UTF-8 filename (literal or octal escaped)")
+	}
+	for _, want := range []string{
+		"SSJACK-CAPS ",
+		"wc_path=",
+		`wc -c "$wc_path"`,
+		`while [ "${count# }" != "$count" ]; do count=${count# }; done`,
+		`while [ "${out# }" != "$out" ]; do out=${out# }; done`,
+		`printf 'SSJACK-CAPS %s %s gnu %s\n' "$hash" "$rename" "$wc"`,
+	} {
+		if !strings.Contains(probe, want) {
+			t.Errorf("probe lacks wc capability check %q", want)
+		}
+	}
+}
+
+func TestCapsAcceptsAllCapabilityCombinations(t *testing.T) {
+	for _, hash := range []string{hashSha256sum, hashShasum, hashSha256q} {
+		for _, rename := range []string{"t", "p"} {
+			for _, wc := range []string{"names", "stdin"} {
+				t.Run(hash+"/"+rename+"/"+wc, func(t *testing.T) {
+					report := fmt.Sprintf("SSJACK-CAPS %s %s gnu %s\n", hash, rename, wc)
+					f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+						if strings.Contains(command, "SSJACK-CAPS") {
+							_, err := io.WriteString(stdout, report)
+							return 0, err
+						}
+						return 0, nil
+					}}
+					r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+					if err := r.Probe(context.Background()); err != nil {
+						t.Fatalf("Probe(%q) = %v", report, err)
+					}
+					got := r.capabilities()
+					if got.hash != hash || got.mvT != (rename == "t") || got.wcNames != (wc == "names") || !got.tarGNU {
+						t.Errorf("capabilities = %#v, want hash %q, mvT %t, wcNames %t, tarGNU true", got, hash, rename == "t", wc == "names")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestCapsRejectMalformedReports(t *testing.T) {
 	reports := []string{
 		"",
 		"garbage\n",
-		"SSJACK-CAPS sha256sum t\n",
-		"SSJACK-CAPS bogus t gnu\n",
-		"SSJACK-CAPS sha256sum x gnu\n",
-		"SSJACK-CAPS sha256sum n gnu\n",
-		"SSJACK-CAPS sha256sum t o\n",
-		"SSJACK-CAPS sha256sum t gnu",
-		"SSJACK-CAPS sha256sum t gnu\nextra\n",
+		"SSJACK-CAPS sha256sum t gnu\n", // missing wc token
+		"SSJACK-CAPS bogus t gnu names\n",
+		"SSJACK-CAPS sha256sum x gnu names\n",
+		"SSJACK-CAPS sha256sum n gnu names\n",
+		"SSJACK-CAPS sha256sum t o names\n",
+		"SSJACK-CAPS sha256sum t gnu unknown\n",
+		"SSJACK-CAPS sha256sum t gnu names",
+		"SSJACK-CAPS sha256sum t gnu names extra\n",
+		"SSJACK-CAPS sha256sum t gnu names\nextra\n",
+		"SSJACK-CAPS  sha256sum t gnu names\n",
+		"SSJACK-CAPS sha256sum t gnu names\nSSJACK-CAPS sha256sum t gnu names\n",
 	}
 	for i, report := range reports {
 		t.Run(fmt.Sprintf("report-%d", i), func(t *testing.T) {
@@ -199,7 +250,7 @@ func TestCapsRejectMalformedReports(t *testing.T) {
 	t.Run("valid report with failure code", func(t *testing.T) {
 		f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 			if strings.Contains(command, "SSJACK-CAPS") {
-				_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+				_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 			}
 			return 20, nil
 		}}
@@ -245,7 +296,7 @@ func TestCapsPublishExitCodeMapping(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-code-%d", op.name, tc.code), func(t *testing.T) {
 				f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 					if strings.Contains(command, "SSJACK-CAPS") {
-						_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu\n")
+						_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 						return 0, nil
 					}
 					return tc.code, nil

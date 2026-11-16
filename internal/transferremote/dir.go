@@ -96,7 +96,7 @@ func (r *remoteRunner) PreflightTree(ctx context.Context, root string) (transfer
 		return transfercore.Manifest{}, err
 	}
 	sizesTemplate := treeSizesTemplate
-	if r.capabilities().hash != hashSha256sum {
+	if !r.capabilities().wcNames {
 		sizesTemplate = treePortableSizesTemplate
 	}
 	sizesData, err := r.runListed(ctx, fmt.Sprintf(sizesTemplate, shellQuote(root), exitRefusedPath), bound)
