@@ -50,12 +50,13 @@ type testConnection struct {
 	request  chan struct{}
 	response chan struct{}
 	version  string
+	served   int // responses served, incremented in Read
 	once     atomic.Bool
 	closeErr error
 }
 
 func newTestConnection(version string) *testConnection {
-	return &testConnection{started: make(chan struct{}), closed: make(chan struct{}), ids: make(chan jsonrpc.ID, 1), request: make(chan struct{}), response: make(chan struct{}), version: version}
+	return &testConnection{started: make(chan struct{}), closed: make(chan struct{}), ids: make(chan jsonrpc.ID, 4), request: make(chan struct{}), response: make(chan struct{}), version: version}
 }
 func (c *testConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	select {
@@ -66,6 +67,10 @@ func (c *testConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	if c.version != "" {
 		select {
 		case id := <-c.ids:
+			c.served++
+			if c.served == 1 {
+				return &jsonrpc.Response{ID: id, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "method not found"}}, nil
+			}
 			close(c.request)
 			<-c.response
 			body, _ := json.Marshal(mcp.InitializeResult{ProtocolVersion: c.version, Capabilities: &mcp.ServerCapabilities{}, ServerInfo: &mcp.Implementation{Name: "fixture", Version: "1"}})

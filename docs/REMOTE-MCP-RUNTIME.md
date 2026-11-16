@@ -29,16 +29,40 @@ Streamable HTTP transport with fixed `errExchange` diagnostics. The SDK's
 private `sessionUpdated` hook and its background SSE listener are therefore
 never engaged; there is no SDK-managed stream to leak.
 
+For modern upstream POSTs, the outbound allowlist adds only `Mcp-Method` and
+`Mcp-Name` routing headers; each must have one value and case-insensitive
+duplicate names reject. No `Mcp-Param-*` headers are allowed. Exchange derives
+both headers from JSON-RPC `method` and `params.name`, never `arguments` or
+caller-supplied headers; the decoded header name equals the body name. Local
+ssjack policy caps method at 256 ASCII `[A-Za-z0-9_./-]`, decoded UTF-8 name at
+256 bytes and encoded name at 355 bytes. Safe printable ASCII names may be raw
+(internal spaces allowed, no leading/trailing whitespace); controls/non-ASCII,
+edge whitespace and sentinel-looking names are encoded as `=?base64?…?=` with
+padded standard Base64 per [SEP-2243](https://modelcontextprotocol.io/seps/2243-http-standardization.md).
+These numerical caps are local policy; SEP-2243 sets none. Response headers
+remain `Content-Type`, `Mcp-Protocol-Version` and `Mcp-Session-Id`; modern
+identity, capabilities, `resultType`, `ttlMs` and `cacheScope` remain in JSON.
+This describes these header rules only, not full MCP conformance.
+
 The only wrapper is `capturingTransport` (`internal/mcpbridge/lifecycle.go`):
 it wraps solely our `mcpexchange` transport and records the returned
 `mcp.Connection` on the slot so cleanup can close it even if initialization
-fails before a session is stored. It does not alter or re-wrap the connection.
+fails before a session is stored. The captured observed connection preserves `Close` errors and maps discovery transport refusals to a fixed local rejected error so the pinned fallback can run.
 Initialization is bounded by an 18 s `ConnectWait` timeout on a derived init
 context, while the established connection lives on the slot context, which is
 bounded by the 10-minute `RuntimeLease` — the connection outlives the init
-bound for the slot's lifetime. Inventory is discovered once per binding and
+bound for the slot's lifetime. The runtime prefers stateless protocol
+`2026-07-28` through the pinned SDK's `server/discover`, bounded to at most two
+attempts (one SDK retry). Discovery refusal falls back to initialize-era
+negotiation, offering pinned `2025-06-18`; negotiated `2025-03-26` and
+`2024-11-05` are also accepted. Modern requests carry the protocol version in
+`_meta` and MCP headers without session IDs; the older era retains session-ID
+and negotiated-version semantics. The stateless era has no ping; neither era has a GET
+listener/subscriptions, session resume, automatic tool-call replay or SDK
+multi-round-trip support. Inventory remains discovered once per binding and
 frozen for the launch; partial, empty or oversized inventory permanently
-refuses the binding instead of silently hiding tools.
+refuses the binding instead of silently hiding tools. Child stdio behavior is
+unchanged.
 
 The parsed-result guard masks text content, structured-content string leaves
 and inventory prose. In full mode, `main` passes

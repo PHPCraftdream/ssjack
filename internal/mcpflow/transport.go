@@ -3,12 +3,14 @@ package mcpflow
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -18,6 +20,11 @@ const (
 	MaxActive   = 4
 	MaxMessages = 4096
 	MaxLease    = 10 * time.Minute
+
+	// These metadata limits are local policy, not numeric limits in the SEP.
+	metadataValueMaxBytes = 256
+	metadataNameMaxBytes  = metadataValueMaxBytes
+	metadataNameWireMax   = len("=?base64?") + ((metadataNameMaxBytes+2)/3)*4 + len("?=")
 )
 
 var ErrExchange = errors.New("remote MCP exchange unavailable; do not replay uncertain operations")
@@ -81,6 +88,43 @@ func headerBytes(header http.Header) bool {
 	return true
 }
 
+func validMetadataMethod(value string) bool {
+	if len(value) == 0 || len(value) > metadataValueMaxBytes {
+		return false
+	}
+	for _, b := range []byte(value) {
+		if b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || strings.ContainsRune("_./-", rune(b)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validMetadataName(value string) bool {
+	if len(value) == 0 || len(value) > metadataNameWireMax {
+		return false
+	}
+	const prefix, suffix = "=?base64?", "?="
+	if strings.HasPrefix(value, prefix) && strings.HasSuffix(value, suffix) {
+		if len(value) < len(prefix)+len(suffix) {
+			return false
+		}
+		payload := value[len(prefix) : len(value)-len(suffix)]
+		decoded, err := base64.StdEncoding.Strict().DecodeString(payload)
+		return err == nil && len(decoded) > 0 && len(decoded) <= metadataNameMaxBytes && utf8.Valid(decoded) && base64.StdEncoding.EncodeToString(decoded) == payload
+	}
+	if len(value) > metadataNameMaxBytes || value[0] == ' ' || value[len(value)-1] == ' ' {
+		return false
+	}
+	for _, b := range []byte(value) {
+		if b < 0x20 || b > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 func inputAllowed(request *http.Request) bool {
 	if request == nil || request.URL == nil || request.Response != nil || request.ContentLength < 0 || request.ContentLength > MaxRequest || len(request.Trailer) != 0 || len(request.TransferEncoding) != 0 || !headerBytes(request.Header) {
 		return false
@@ -97,6 +141,14 @@ func inputAllowed(request *http.Request) bool {
 		seen[name] = true
 		switch name {
 		case "accept", "content-type", "mcp-protocol-version", "mcp-session-id":
+		case "mcp-method":
+			if request.Method != http.MethodPost || !validMetadataMethod(values[0]) {
+				return false
+			}
+		case "mcp-name":
+			if request.Method != http.MethodPost || !validMetadataName(values[0]) {
+				return false
+			}
 		default:
 			return false
 		}

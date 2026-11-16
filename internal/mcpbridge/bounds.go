@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
@@ -153,6 +155,15 @@ func (s *slot) addCloseErrLocked(errs ...error) {
 type observedConn struct {
 	mcp.Connection
 	slot *slot
+}
+
+func (c observedConn) Write(ctx context.Context, message jsonrpc.Message) error {
+	err := c.Connection.Write(ctx, message)
+	request, ok := message.(*jsonrpc.Request)
+	if !ok || request.Method != discoverMethod || err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &jsonrpc.Error{Code: -32005, Message: "remote MCP discovery refused"}
 }
 
 func (c observedConn) Close() error {

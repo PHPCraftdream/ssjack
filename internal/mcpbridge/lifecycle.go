@@ -91,9 +91,7 @@ func sessionReady(r *Runtime, s *slot, opCtx context.Context) error {
 	return errInventory
 }
 
-// upstreamProtocolVersion pins the upstream handshake to the initialize era the
-// one-shot exchange admits. Without it the SDK client offers its latest version
-// and opens with server/discover, which the exchange refuses by design.
+// upstreamProtocolVersion pins the initialize-era fallback handshake.
 const upstreamProtocolVersion = "2025-06-18"
 
 func (r *Runtime) initialize(s *slot, initCtx context.Context, cancel context.CancelFunc, stopOperation func() bool, opCtx context.Context) {
@@ -109,8 +107,11 @@ func (r *Runtime) initialize(s *slot, initCtx context.Context, cancel context.Ca
 		return
 	}
 	stopConnect := context.AfterFunc(initCtx, s.cancel)
-	client := mcp.NewClient(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
-	session, err := client.Connect(initCtx, &capturingTransport{base: transport, slot: s}, &mcp.ClientSessionOptions{ProtocolVersion: upstreamProtocolVersion})
+	client := mcp.NewClient(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, &mcp.ClientOptions{
+		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+	})
+	client.AddSendingMiddleware(upstreamSendingMiddleware)
+	session, err := client.Connect(initCtx, &capturingTransport{base: transport, slot: s}, &mcp.ClientSessionOptions{ProtocolVersion: modernProtocolVersion})
 	r.mu.Lock()
 	s.mu.Lock()
 	valid := err == nil && session != nil && initCtx.Err() == nil && opCtx.Err() == nil && s.ctx.Err() == nil && r.ctx.Err() == nil && !r.closing

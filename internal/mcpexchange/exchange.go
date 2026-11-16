@@ -12,7 +12,12 @@
 // POST only, initialize, notifications/initialized, tools/list, tools/call,
 // notifications/cancelled, and ping; at most four in-flight/queued results and
 // 4096 requests; 64 KiB encoded requests and 256 KiB responses. No GET listener,
-// DELETE, reconnect/resume, retries, cross-endpoint requests, or replay. Session
+// DELETE, reconnect/resume, retries, cross-endpoint requests, or replay. The
+// first request selects the wire era: the initialize era stays unchanged, while
+// the stateless 2026-07-28 era uses server/discover then tools/list, tools/call,
+// and notifications/cancelled, mirrors per-request _meta protocol versions into
+// Mcp-Protocol-Version and sends Mcp-Method/Mcp-Name without session IDs or ping.
+// A refused discover reopens the initialize era on the same connection. Session
 // IDs are bounded and fixed after negotiation; only the pinned SDK's supported
 // protocol versions are accepted and the negotiated version accompanies later
 // POSTs. JSON responses and one bounded event: message SSE response are parsed

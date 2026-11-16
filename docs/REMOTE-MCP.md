@@ -242,9 +242,16 @@ shortens it. These existing bounds do not prevent environment inspection or
 inheritance.
 
 Sessions are lazy: no upstream network occurs before the child bridge first
-asks. Inventory is discovered once per binding and frozen. SDK protocol-version
-negotiation refuses unknown versions (2025-06-18, 2025-03-26 and 2024-11-05 are
-supported).
+asks. On first use, the runtime prefers stateless protocol `2026-07-28` through
+the pinned SDK's `server/discover`, with at most two bounded discover attempts
+(one SDK retry). Discovery refusal falls back to initialize-era negotiation,
+offering pinned `2025-06-18`; negotiated `2025-03-26` and `2024-11-05` are also
+accepted. Modern requests carry the protocol version in `_meta` and MCP headers,
+without session IDs; initialize-era peers retain session-ID and negotiated-version
+semantics. The stateless era has no ping; neither era has a GET listener/subscriptions,
+session resume, automatic tool-call replay or SDK multi-round-trip support.
+Inventory is still discovered once per binding and frozen for the launch; child
+stdio behavior is unchanged.
 
 Bounds: at most 16 bindings and 64 tools per binding; upstream tool names at
 most 48 bytes, descriptions at most 4096 bytes and schemas at most 16 KiB;

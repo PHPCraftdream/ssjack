@@ -16,8 +16,15 @@ Requests are finite POSTs labelled application/json or bodyless GET/DELETE; the
 private SDK, not this resource layer, constructs and validates MCP messages. Request bodies are privately
 copied and checked against exact Content-Length and 64 KiB before peer effects.
 Protocol header names are closed, duplicate/resumption/idempotency headers refuse,
-and total prepared headers are at most 16 KiB. GetBody is removed before dispatch.
-Owned request buffers are cleared after the peer RoundTrip and joined memory reads.
+and total prepared headers are at most 16 KiB. POST additionally permits the
+single-value `Mcp-Method` and `Mcp-Name` metadata headers; they remain rejected on
+GET/DELETE. Methods are nonempty ASCII `[A-Za-z0-9_./-]` up to 256 bytes. Names
+are nonempty UTF-8 up to 256 decoded bytes: printable ASCII is sent plainly
+without leading/trailing spaces, otherwise use canonical padded standard Base64
+in `=?base64?{payload}?=` form. The complete encoded value is capped at 355 bytes.
+These are local bounds, not numeric limits imposed by the SEP. GetBody is removed
+before dispatch. Owned request buffers are cleared after the peer RoundTrip and
+joined memory reads.
 
 Responses stream through a 256 KiB byte limit. Body errors and overflow use only
 fixed `ErrExchange`, never peer diagnostics. Redirects and error-status bodies are
