@@ -62,6 +62,9 @@ func linuxTestError(t *testing.T, err error, class transfercore.Class) *transfer
 }
 
 func TestProbeLinux(t *testing.T) {
+	// Other packages probe concurrently in the shared temp directory; the scan
+	// below must only see this test's own scratch directory.
+	t.Setenv("TMPDIR", t.TempDir())
 	ctx := context.Background()
 	r := New(linuxShRunner(), "t", transfercore.DefaultLimits())
 	if err := r.Probe(ctx); err != nil {
