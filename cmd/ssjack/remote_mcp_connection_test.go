@@ -134,9 +134,10 @@ func TestMCPStdioConnectionSerializesContendedWrites(t *testing.T) {
 		joinExited(t, firstExited, "first owned write worker did not exit")
 		joinExited(t, secondExited, "second owned write worker did not exit")
 	})
-	// Pre-holding writeMu delays both launches behind the mutex but does not
-	// prove either goroutine reached it before unlock; coverage is scheduler-dependent.
-	connection.writeMu.Lock()
+	// Pre-taking the write slot delays both launches behind the slot but does
+	// not prove either goroutine reached the select before the slot returned;
+	// entry coverage is scheduler-dependent.
+	<-connection.writeToken
 	go func() {
 		defer close(firstExited)
 		errs <- connection.Write(context.Background(), &jsonrpc.Request{Method: "ping"})
@@ -145,7 +146,7 @@ func TestMCPStdioConnectionSerializesContendedWrites(t *testing.T) {
 		defer close(secondExited)
 		errs <- connection.Write(context.Background(), &jsonrpc.Request{Method: "ping"})
 	}()
-	connection.writeMu.Unlock()
+	connection.writeToken <- struct{}{}
 	awaitSignal(t, writer.entries, "first owned write did not enter the underlying writer")
 	select {
 	case <-writer.entries:
@@ -249,6 +250,43 @@ func TestMCPStdioConnectionRefusesTrackedResponseAfterClose(t *testing.T) {
 	connection.batchMu.Unlock()
 	if tracked != 1 {
 		t.Fatalf("refused tracked response mutated batch state: %d entries", tracked)
+	}
+}
+
+// Ordinary writes keep frame order and the ordinary shutdown results: two
+// frames in order, Close nil, later writes refused with the fixed closed
+// error, Close idempotent.
+func TestMCPStdioConnectionOrdinaryShutdownKeepsOrderAndResults(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	connection := newMCPStdioTransport(io.NopCloser(bytes.NewReader(nil)), nopWriteCloser{buffer})
+	if err := connection.Write(context.Background(), &jsonrpc.Request{Method: "ping"}); err != nil {
+		t.Fatalf("first ordinary write failed: %v", err)
+	}
+	if err := connection.Write(context.Background(), &jsonrpc.Request{Method: "tools/list"}); err != nil {
+		t.Fatalf("second ordinary write failed: %v", err)
+	}
+	frames := bytes.Split(buffer.Bytes(), []byte("\n"))
+	if len(frames) != 3 || len(frames[0]) == 0 || len(frames[1]) == 0 || len(frames[2]) != 0 {
+		t.Fatalf("ordinary writes did not produce exactly two newline frames: %q", buffer.String())
+	}
+	for i, want := range []string{"ping", "tools/list"} {
+		message, err := jsonrpc.DecodeMessage(frames[i])
+		if err != nil {
+			t.Fatalf("frame %d did not decode: %v", i+1, err)
+		}
+		request, ok := message.(*jsonrpc.Request)
+		if !ok || request.Method != want {
+			t.Fatalf("frame %d = %#v, want method %q in order", i+1, message, want)
+		}
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("ordinary close failed: %v", err)
+	}
+	if err := connection.Write(context.Background(), &jsonrpc.Request{Method: "ping"}); !errors.Is(err, errMCPStdioWriterClosed) {
+		t.Fatalf("write after ordinary close = %v, want the fixed closed refusal", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("repeated ordinary close failed: %v", err)
 	}
 }
 

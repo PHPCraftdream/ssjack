@@ -17,9 +17,11 @@ const remoteMCPStdioWriteBudget = 15 * time.Second
 
 // mcpStdioConnection adapts the bounded stdio reader and stdout writer to the
 // pinned SDK Transport and Connection interfaces without weakening any bound.
-// Every Write path is admitted against shutdown and joined by Close; inbound
-// legacy JSON-RPC batches are split for the SDK and their call responses are
-// emitted as one JSON array.
+// Every Write path is admitted against shutdown and joined by Close; the
+// physical write runs in an abandonable worker so a writer whose Close does
+// not release a blocked write cannot hold the logical call past the budget.
+// Inbound legacy JSON-RPC batches are split for the SDK and their call
+// responses are emitted as one JSON array.
 type mcpStdioConnection struct {
 	reader          *boundedMCPStdioReader
 	writer          io.WriteCloser
@@ -27,11 +29,13 @@ type mcpStdioConnection struct {
 	protocolVersion string
 	writeBudget     time.Duration
 
-	writeMu sync.Mutex
-	admitMu sync.Mutex
-	closing bool
-	failure error
-	writes  sync.WaitGroup
+	writeToken chan struct{}
+	failed     chan struct{}
+	failedOnce sync.Once
+	admitMu    sync.Mutex
+	closing    bool
+	failure    error
+	writes     sync.WaitGroup
 
 	batchMu sync.Mutex
 	batches map[jsonrpc.ID]*mcpStdioBatch
@@ -40,6 +44,12 @@ type mcpStdioConnection struct {
 	closeErr        error
 	writerCloseOnce sync.Once
 	writerCloseErr  error
+}
+
+// mcpStdioWriteResult carries one abandoned-safe physical write outcome.
+type mcpStdioWriteResult struct {
+	n   int
+	err error
 }
 
 // mcpStdioBatch tracks one inbound legacy batch so its call responses are
@@ -57,7 +67,15 @@ var (
 var _ mcp.Transport = (*mcpStdioConnection)(nil)
 
 func newMCPStdioTransport(reader io.ReadCloser, writer io.WriteCloser) *mcpStdioConnection {
-	return &mcpStdioConnection{reader: newBoundedMCPStdioReader(reader), writer: writer, writeBudget: remoteMCPStdioWriteBudget}
+	connection := &mcpStdioConnection{
+		reader:      newBoundedMCPStdioReader(reader),
+		writer:      writer,
+		writeBudget: remoteMCPStdioWriteBudget,
+		writeToken:  make(chan struct{}, 1),
+		failed:      make(chan struct{}),
+	}
+	connection.writeToken <- struct{}{}
+	return connection
 }
 
 func (c *mcpStdioConnection) Connect(context.Context) (mcp.Connection, error) { return c, nil }
@@ -124,8 +142,10 @@ func (c *mcpStdioConnection) Write(ctx context.Context, message jsonrpc.Message)
 
 // Close flips the guarded closing flag before waiting, so a Write is either
 // fully admitted before the join or refused after it. It closes the owned
-// writer without taking writeMu, joins admitted writes and the owned blocking
-// read, and is idempotent with the same owned result on every call.
+// writer without taking the write slot, joins admitted logical writes, and
+// closes the owned reader without joining a blocked physical read: a stalled
+// peer cannot hold shutdown because abandoned physical operations are never
+// joined. It is idempotent with the same owned result on every call.
 func (c *mcpStdioConnection) Close() error {
 	c.closeOnce.Do(func() {
 		c.admitMu.Lock()
@@ -169,8 +189,15 @@ func (c *mcpStdioConnection) failWrites(err error) error {
 		c.failure = err
 	}
 	failure := c.failure
+	c.failedOnce.Do(func() { close(c.failed) })
 	c.admitMu.Unlock()
 	return failure
+}
+
+// writeRelease returns the write slot. Only the slot owner calls it; the
+// timeout path abandons the slot with its worker instead.
+func (c *mcpStdioConnection) writeRelease() {
+	c.writeToken <- struct{}{}
 }
 
 func (c *mcpStdioConnection) closeWriter() error {
@@ -187,8 +214,12 @@ func (c *mcpStdioConnection) interruptWrites(err error) error {
 	return failure
 }
 
-// writeAll starts the bound before waiting for writeMu; a timeout interrupts
-// the owned I/O without joining SDK writes from its callback.
+// writeAll starts the bound before taking the write slot; the physical write
+// runs in an abandonable worker, so a writer whose Close does not release a
+// blocked write cannot hold the logical call past the bound. On expiry the
+// worker and the slot are abandoned: the slot is never returned and the
+// latched failure refuses every later Write, so no frame can follow a
+// timed-out one.
 func (c *mcpStdioConnection) writeAll(ctx context.Context, data []byte) (result error) {
 	writeCtx, cancel := context.WithTimeout(ctx, c.writeBudget)
 	callbackDone := make(chan struct{})
@@ -205,30 +236,51 @@ func (c *mcpStdioConnection) writeAll(ctx context.Context, data []byte) (result 
 			result = failure
 		}
 	}()
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+	if writeCtx.Err() != nil {
+		return c.interruptWrites(errMCPStdioWriteTimeout)
+	}
+	select {
+	case <-c.writeToken:
+	case <-c.failed:
+		return c.writeFailure()
+	case <-writeCtx.Done():
+		return c.interruptWrites(errMCPStdioWriteTimeout)
+	}
 	c.admitMu.Lock()
 	closing, failure := c.closing, c.failure
 	c.admitMu.Unlock()
 	if failure != nil {
+		c.writeRelease()
 		return failure
 	}
 	if closing {
+		c.writeRelease()
 		return errMCPStdioWriterClosed
 	}
 	if writeCtx.Err() != nil {
+		c.writeRelease()
 		return c.interruptWrites(errMCPStdioWriteTimeout)
 	}
-	n, err := c.writer.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		// Stop queued writes before releasing writeMu: a partial frame cannot
-		// be followed by another frame on the same stream.
-		c.interruptWrites(err)
-		return err
+	done := make(chan mcpStdioWriteResult, 1)
+	go func() {
+		n, err := c.writer.Write(data)
+		done <- mcpStdioWriteResult{n: n, err: err}
+	}()
+	select {
+	case res := <-done:
+		if res.err == nil && res.n != len(data) {
+			res.err = io.ErrShortWrite
+		}
+		if res.err != nil {
+			// Stop queued writes before releasing the slot: a partial frame
+			// cannot be followed by another frame on the same stream.
+			c.interruptWrites(res.err)
+			c.writeRelease()
+			return res.err
+		}
+		c.writeRelease()
+	case <-writeCtx.Done():
+		return c.interruptWrites(errMCPStdioWriteTimeout)
 	}
 	return nil
 }

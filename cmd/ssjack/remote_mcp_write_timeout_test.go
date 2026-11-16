@@ -17,18 +17,20 @@ import (
 const mcpWriteTimeoutTestBudget = 50 * time.Millisecond
 
 type mcpWriteTimeoutWitness struct {
-	pipe       *io.PipeWriter
-	entered    chan struct{}
-	closed     chan struct{}
-	writeDone  chan struct{}
-	enterOnce  sync.Once
-	closeOnce  sync.Once
-	writes     atomic.Int32
-	closeCalls atomic.Int32
-	mu         sync.Mutex
-	writeErr   error
-	closeErr   error
-	writeData  []byte
+	pipe *io.PipeWriter
+	// hostileClose makes Close ignore the blocked pipe write.
+	hostileClose bool
+	entered      chan struct{}
+	closed       chan struct{}
+	writeDone    chan struct{}
+	enterOnce    sync.Once
+	closeOnce    sync.Once
+	writes       atomic.Int32
+	closeCalls   atomic.Int32
+	mu           sync.Mutex
+	writeErr     error
+	closeErr     error
+	writeData    []byte
 }
 
 func (w *mcpWriteTimeoutWitness) Write(p []byte) (int, error) {
@@ -47,7 +49,10 @@ func (w *mcpWriteTimeoutWitness) Write(p []byte) (int, error) {
 
 func (w *mcpWriteTimeoutWitness) Close() error {
 	w.closeCalls.Add(1)
-	err := w.pipe.Close()
+	var err error
+	if !w.hostileClose {
+		err = w.pipe.Close()
+	}
 	w.closeOnce.Do(func() { close(w.closed) })
 	w.mu.Lock()
 	w.closeErr = err
@@ -291,15 +296,12 @@ func TestMCPStdioWriteTimeoutCompletedLegacyBatchResponse(t *testing.T) {
 	}
 }
 
-func TestMCPStdioWriteTimeoutStartsBeforeContendedWriteLock(t *testing.T) {
+// The write budget lapses while another owner holds the write slot: the
+// waiter returns the fixed timeout without entering the writer, and the
+// owned writer is closed even though the slot was never released.
+func TestMCPStdioWriteTimeoutFiresWhileWriteSlotIsHeld(t *testing.T) {
 	connection, witness := newBlockedMCPWriteTimeoutConnection(t, io.NopCloser(bytes.NewReader(nil)))
-	connection.writeMu.Lock()
-	locked := true
-	t.Cleanup(func() {
-		if locked {
-			connection.writeMu.Unlock()
-		}
-	})
+	<-connection.writeToken
 	started := make(chan struct{})
 	writeDone := make(chan error, 1)
 	writeExited := make(chan struct{})
@@ -309,31 +311,21 @@ func TestMCPStdioWriteTimeoutStartsBeforeContendedWriteLock(t *testing.T) {
 		close(writeExited)
 	}()
 	t.Cleanup(func() {
-		if locked {
-			connection.writeMu.Unlock()
-			locked = false
-		}
 		_ = witness.pipe.Close()
-		joinExited(t, writeExited, "contended Write worker did not join during cleanup")
+		joinExited(t, writeExited, "held-slot Write worker did not join during cleanup")
 	})
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("contended Write worker did not start")
-	}
+	awaitSignal(t, started, "held-slot Write worker did not start")
 	select {
 	case <-witness.closed:
 	case <-time.After(2 * time.Second):
-		t.Fatal("write timeout did not close the writer while the write lock was held")
+		t.Fatal("write timeout did not close the writer while the write slot was held")
 	}
-	connection.writeMu.Unlock()
-	locked = false
-	if err := awaitSignal(t, writeDone, "contended Write did not return after unlocking"); !errors.Is(err, errMCPStdioWriteTimeout) {
-		t.Fatalf("contended Write = %v, want fixed timeout before lock acquisition", err)
+	if err := awaitSignal(t, writeDone, "held-slot Write did not return the fixed timeout"); !errors.Is(err, errMCPStdioWriteTimeout) {
+		t.Fatalf("held-slot Write = %v, want fixed timeout without entering the writer", err)
 	}
-	awaitSignal(t, writeExited, "contended Write worker did not join")
+	awaitSignal(t, writeExited, "held-slot Write worker did not join")
 	if witness.writes.Load() != 0 {
-		t.Fatal("timed-out contended Write entered the underlying writer")
+		t.Fatal("timed-out held-slot Write entered the underlying writer")
 	}
 }
 
@@ -408,6 +400,181 @@ func TestMCPStdioWriteFailureRefusesQueuedWrites(t *testing.T) {
 				t.Fatalf("failed frame allowed another underlying write: writes=%d closes=%d", tc.writer.writes.Load(), tc.writer.closes.Load())
 			}
 		})
+	}
+}
+
+// The real SDK server must end promptly against an output writer whose Write
+// blocks and whose Close does not release it: the response Write returns the
+// fixed timeout, Wait and transport Close return while the physical write
+// stays blocked, the first frame is the only one ever attempted, and cleanup
+// releases the abandoned worker.
+func TestMCPStdioHostileWriterIgnoresCloseAndRefusesFollowingFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		frame string
+	}{
+		{
+			name:  "modern subscriptions listen",
+			frame: `{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true},` + remoteMCPSubscriptionsTestMeta + `}}`,
+		},
+		{
+			name:  "real fixture tool call",
+			frame: `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeout_fixture_tool","arguments":{},` + remoteMCPSubscriptionsTestMeta + `}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serverInput, clientInput := io.Pipe()
+			clientOutput, serverOutput := io.Pipe()
+			witness := &mcpWriteTimeoutWitness{pipe: serverOutput, hostileClose: true, entered: make(chan struct{}), closed: make(chan struct{}), writeDone: make(chan struct{})}
+			transport := newMCPStdioTransport(serverInput, witness)
+			transport.writeBudget = mcpWriteTimeoutTestBudget
+			server := mcp.NewServer(&mcp.Implementation{Name: "hostile-writer-fixture", Version: "1"}, nil)
+			configureMCPStdioServer(server)
+			var toolCalls atomic.Int32
+			server.AddTool(&mcp.Tool{Name: "timeout_fixture_tool", Description: "hostile writer fixture", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				toolCalls.Add(1)
+				return &mcp.CallToolResult{}, nil
+			})
+			var session interface {
+				Wait() error
+				Close() error
+			}
+			var waitStarted, requestStarted bool
+			waitExited := make(chan struct{})
+			requestExited := make(chan struct{})
+			t.Cleanup(func() {
+				// Release the abandoned physical write first, then close the
+				// session and transport, then join every owned worker.
+				_ = clientOutput.Close()
+				_ = serverOutput.Close()
+				awaitSignal(t, witness.writeDone, "abandoned hostile physical write did not finish after release")
+				_ = clientInput.Close()
+				_ = serverInput.Close()
+				closed := make(chan struct{})
+				go func() {
+					if session != nil {
+						_ = session.Close()
+					}
+					_ = transport.Close()
+					close(closed)
+				}()
+				select {
+				case <-closed:
+				case <-time.After(2 * time.Second):
+					t.Error("hostile-writer session and transport did not close")
+				}
+				if waitStarted {
+					joinExited(t, waitExited, "hostile-writer Wait worker did not join")
+				}
+				if requestStarted {
+					joinExited(t, requestExited, "hostile-writer request writer did not join")
+				}
+			})
+			connected, err := server.Connect(context.Background(), transport, nil)
+			if err != nil {
+				t.Fatalf("hostile-writer server Connect failed: %v", err)
+			}
+			session = connected
+			waitResult := make(chan error, 1)
+			waitStarted = true
+			go func() {
+				waitResult <- session.Wait()
+				close(waitExited)
+			}()
+			requestResult := make(chan error, 1)
+			requestStarted = true
+			go func() {
+				_, writeErr := io.WriteString(clientInput, tc.frame+"\n")
+				requestResult <- writeErr
+				close(requestExited)
+			}()
+			if err := awaitSignal(t, requestResult, "server did not consume the request frame"); err != nil {
+				t.Fatalf("client request frame write failed: %v", err)
+			}
+			awaitSignal(t, requestExited, "client request writer did not join")
+			select {
+			case <-witness.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("server response never entered the blocked hostile Write")
+			}
+			waitErr := awaitSignal(t, waitResult, "hostile writer kept the server Wait blocked past the write budget")
+			if !errors.Is(waitErr, errMCPStdioWriteTimeout) {
+				t.Fatalf("hostile-writer Wait error = %v, want fixed stdio write timeout", waitErr)
+			}
+			if got := stdioCause(waitErr); got != "stdio-write-timeout" {
+				t.Fatalf("stdioCause(%v) = %q, want stdio-write-timeout", waitErr, got)
+			}
+			awaitSignal(t, waitExited, "hostile-writer Wait result was not joined")
+			payload := witness.payload()
+			switch tc.name {
+			case "modern subscriptions listen":
+				assertMCPSubscriptionsAck(t, string(payload), 1)
+			case "real fixture tool call":
+				result := sdkCallResults(t, string(payload), false, 1)[1]
+				if result["resultType"] != "complete" {
+					t.Fatalf("hostile-writer tool response resultType = %v, want complete", result["resultType"])
+				}
+			default:
+				t.Fatalf("unexpected hostile-writer case %q", tc.name)
+			}
+			if err := transport.Write(context.Background(), &jsonrpc.Request{Method: "ping"}); !errors.Is(err, errMCPStdioWriteTimeout) {
+				t.Fatalf("post-timeout Write = %v, want the fixed timeout refusal", err)
+			}
+			if witness.writes.Load() != 1 || witness.closeCalls.Load() != 1 {
+				t.Fatalf("post-timeout Write touched the hostile writer: writes=%d closes=%d", witness.writes.Load(), witness.closeCalls.Load())
+			}
+			if err := transport.Close(); err != nil {
+				t.Fatalf("hostile-writer transport Close failed while the physical write stayed blocked: %v", err)
+			}
+			if witness.closeCalls.Load() != 1 {
+				t.Fatalf("shutdown closed hostile output writer %d times, want exactly once", witness.closeCalls.Load())
+			}
+			if tc.name == "real fixture tool call" && toolCalls.Load() != 1 {
+				t.Fatalf("hostile fixture tool calls = %d, want 1", toolCalls.Load())
+			}
+		})
+	}
+}
+
+// A real SDK server whose stdio input blocks in Read and whose Close ignores
+// the blocked read must still end promptly: shutdown abandons the read
+// instead of joining it.
+func TestMCPStdioHostileReaderCannotHoldServerShutdown(t *testing.T) {
+	source := newMCPHostileReadInput()
+	clientOutput, serverOutput := io.Pipe()
+	transport := newMCPStdioTransport(source, serverOutput)
+	server := mcp.NewServer(&mcp.Implementation{Name: "hostile-reader-fixture", Version: "1"}, nil)
+	configureMCPStdioServer(server)
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	runExited := make(chan struct{})
+	go func() {
+		defer close(runExited)
+		runErr <- server.Run(ctx, transport)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		source.release()
+		_ = clientOutput.Close()
+		_ = serverOutput.Close()
+		joinExited(t, runExited, "hostile-reader server run worker did not join")
+	})
+	select {
+	case <-source.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server read loop never entered the hostile source")
+	}
+	cancel()
+	runErrValue := awaitSignal(t, runErr, "hostile reader kept server.Run blocked past cancellation")
+	if !errors.Is(runErrValue, context.Canceled) {
+		t.Fatalf("hostile-reader Run error = %v, want context cancellation", runErrValue)
+	}
+	awaitSignal(t, runExited, "hostile-reader run worker did not join")
+	if err := transport.Close(); err != nil {
+		t.Fatalf("hostile-reader transport Close failed: %v", err)
+	}
+	if source.closes.Load() != 1 {
+		t.Fatalf("hostile source was closed %d times, want exactly once", source.closes.Load())
 	}
 }
 

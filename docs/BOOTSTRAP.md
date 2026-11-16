@@ -96,12 +96,13 @@ a fixed set of classes (`eof`, `timeout`, `reset`, `closed`, `cancelled`,
 `invalid-message`, `unsupported-message`, `stdio-limit`, `concurrent-read`,
 `unsupported-batch`, `stdio-write-timeout`). Each acknowledgement, ordinary
 response, and legacy batch response has a 15-second stdio write bound; when it
-expires the bridge closes its output, ends the session and logs
-`stdio-write-timeout`. The bound relies on closing the output to release the
-blocked write, which holds for pipes the Go runtime can interrupt but not for an
-inherited blocking descriptor: there a client that keeps stdin open and stops
-reading stdout can delay shutdown until it reads or the process is ended. That
-limit predates the stdio bound and is tracked separately.
+expires the bridge latches the failure, ends the session and logs
+`stdio-write-timeout`. The bound does not depend on the peer releasing the
+blocked operation: a timed-out write and a read that outlives a close are
+abandoned instead of joined, so a client that keeps stdin open and stops
+reading stdout cannot delay session end or process exit. An abandoned
+operation may keep its goroutine until process exit and never writes a later
+frame.
 Operation names (`op`) are recorded; their arguments are
 not. The file is diagnostic only: nothing reads it back to make a decision, so
 editing it grants nothing. Failing to write it never fails a launch. The

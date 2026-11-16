@@ -40,19 +40,30 @@ type boundedMCPStdioReader struct {
 	mu        sync.Mutex
 	closing   bool
 	active    bool
-	readDone  chan struct{}
+	closed    chan struct{}
 	closeOnce sync.Once
 	closeErr  error
 }
 
+// mcpStdioReadResult carries one abandoned-safe physical read outcome.
+type mcpStdioReadResult struct {
+	n   int
+	err error
+}
+
 func newBoundedMCPStdioReader(reader io.ReadCloser) *boundedMCPStdioReader {
 	return &boundedMCPStdioReader{
-		reader:   bufio.NewReaderSize(reader, 4096),
-		source:   reader,
-		readDone: make(chan struct{}),
+		reader: bufio.NewReaderSize(reader, 4096),
+		source: reader,
+		closed: make(chan struct{}),
 	}
 }
 
+// Read frames one message through the bounded reader. The blocking source
+// read runs in an abandonable worker: a source whose Close does not release
+// a blocked read cannot hold the logical call after Close, which latches the
+// closed state and abandons the worker (its goroutine may live until process
+// exit) instead of joining it.
 func (r *boundedMCPStdioReader) Read(target []byte) (int, error) {
 	r.mu.Lock()
 	if r.closing {
@@ -72,17 +83,32 @@ func (r *boundedMCPStdioReader) Read(target []byte) (int, error) {
 	defer func() {
 		r.mu.Lock()
 		r.active = false
-		if r.closing {
-			close(r.readDone)
-		}
 		r.mu.Unlock()
 	}()
 
+	done := make(chan mcpStdioReadResult, 1)
+	go r.readFrame(target, done)
+	select {
+	case res := <-done:
+		return res.n, res.err
+	case <-r.closed:
+		return 0, errMCPStdioReaderClosed
+	}
+}
+
+// readFrame is the former Read body up to and including the framing loop. It
+// sends exactly one result; the buffered channel keeps an abandoned worker
+// from blocking on its send. Once abandoned it is the only goroutine touching
+// the framing state, and Close refuses every later logical read.
+func (r *boundedMCPStdioReader) readFrame(target []byte, done chan<- mcpStdioReadResult) {
 	if len(r.pending) != 0 {
-		return r.copyPending(target)
+		n, _ := r.copyPending(target)
+		done <- mcpStdioReadResult{n: n}
+		return
 	}
 	if r.eof {
-		return 0, io.EOF
+		done <- mcpStdioReadResult{err: io.EOF}
+		return
 	}
 	for {
 		chunk, err := r.reader.ReadSlice('\n')
@@ -92,15 +118,19 @@ func (r *boundedMCPStdioReader) Read(target []byte) (int, error) {
 			payload = chunk[:len(chunk)-1]
 		}
 		if len(r.frame)+len(payload) > maxMCPStdioMessage {
-			return 0, errMCPStdioMessageLimit
+			done <- mcpStdioReadResult{err: errMCPStdioMessageLimit}
+			return
 		}
 		r.frame = append(r.frame, payload...)
 		if complete {
 			r.frame = append(r.frame, '\n')
 			if err := r.admitFrame(); err != nil {
-				return 0, err
+				done <- mcpStdioReadResult{err: err}
+				return
 			}
-			return r.copyPending(target)
+			n, _ := r.copyPending(target)
+			done <- mcpStdioReadResult{n: n}
+			return
 		}
 		if err == bufio.ErrBufferFull {
 			continue
@@ -108,15 +138,20 @@ func (r *boundedMCPStdioReader) Read(target []byte) (int, error) {
 		if err == io.EOF {
 			r.eof = true
 			if len(r.frame) == 0 {
-				return 0, io.EOF
+				done <- mcpStdioReadResult{err: io.EOF}
+				return
 			}
 			if err := r.admitFrame(); err != nil {
-				return 0, err
+				done <- mcpStdioReadResult{err: err}
+				return
 			}
-			return r.copyPending(target)
+			n, _ := r.copyPending(target)
+			done <- mcpStdioReadResult{n: n}
+			return
 		}
 		if err != nil {
-			return 0, err
+			done <- mcpStdioReadResult{err: err}
+			return
 		}
 	}
 }
@@ -202,17 +237,17 @@ func (*mcpStdioConnection) SupportsProtocolVersion(version string) bool {
 	return supportedMCPProtocol(version)
 }
 
+// Close latches the closed state, releases the owned source if it can, and
+// returns without joining an in-flight read: the read is abandoned and its
+// worker may live until process exit. The retained source close result is
+// returned on every call.
 func (r *boundedMCPStdioReader) Close() error {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
 		r.closing = true
-		waitForRead := r.active
+		close(r.closed)
 		r.mu.Unlock()
-
 		r.closeErr = r.source.Close()
-		if waitForRead {
-			<-r.readDone
-		}
 	})
 	return r.closeErr
 }

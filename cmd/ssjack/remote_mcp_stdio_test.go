@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,118 +117,85 @@ func TestBoundedMCPStdioMessageCountAndMethods(t *testing.T) {
 	}
 }
 
-type blockedMCPInput struct {
-	reader      *io.PipeReader
-	writer      *io.PipeWriter
-	started     chan struct{}
-	awakened    chan struct{}
-	allowReturn chan struct{}
-	readDone    chan struct{}
-	closeOnce   sync.Once
-}
-
-func newBlockedMCPInput() *blockedMCPInput {
-	reader, writer := io.Pipe()
-	return &blockedMCPInput{reader: reader, writer: writer, started: make(chan struct{}), awakened: make(chan struct{}), allowReturn: make(chan struct{}), readDone: make(chan struct{})}
-}
-func (r *blockedMCPInput) Read(p []byte) (int, error) {
-	close(r.started)
-	n, err := r.reader.Read(p)
-	<-r.allowReturn
-	close(r.readDone)
-	return n, err
-}
-func (r *blockedMCPInput) Close() error {
-	var err error
-	r.closeOnce.Do(func() {
-		err = r.reader.Close()
-		_ = r.writer.Close()
-		close(r.awakened)
-	})
-	return err
-}
-
-func TestBoundedMCPStdioCloseUnblocksAndJoinsRead(t *testing.T) {
-	source := newBlockedMCPInput()
+// Close must abandon, not join, a blocked physical read: it returns while the
+// read is still blocked, later reads get the fixed closed error, and cleanup
+// releases the abandoned worker.
+func TestBoundedMCPStdioCloseAbandonsBlockedRead(t *testing.T) {
+	source := newMCPHostileReadInput()
 	reader := newBoundedMCPStdioReader(source)
-	readDone := make(chan struct{})
+	readDone := make(chan error, 1)
+	readExited := make(chan struct{})
+	go func() {
+		defer close(readExited)
+		_, err := reader.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case <-source.entered:
+	case <-time.After(time.Second):
+		t.Fatal("read did not enter the hostile source")
+	}
 	closeDone := make(chan error, 1)
-	closeFinished := make(chan struct{})
-	var closeLaunch sync.Once
-	launchClose := func() {
-		closeLaunch.Do(func() {
-			go func() {
-				defer close(closeFinished)
-				closeDone <- reader.Close()
-			}()
-		})
-	}
-	var releaseOnce sync.Once
+	closeExited := make(chan struct{})
+	go func() {
+		defer close(closeExited)
+		closeDone <- reader.Close()
+	}()
 	t.Cleanup(func() {
-		select {
-		case <-readDone:
-		case <-time.After(2 * time.Second):
-			t.Errorf("blocked reader read did not join after gate release")
-		}
+		source.release()
+		joinExited(t, readExited, "abandoned physical read did not exit after release")
+		joinExited(t, closeExited, "hostile reader close worker did not join")
 	})
-	t.Cleanup(func() {
-		select {
-		case <-closeFinished:
-		case <-time.After(2 * time.Second):
-			t.Errorf("owned reader close work did not complete after gate release")
-		}
-	})
-	t.Cleanup(launchClose)
-	t.Cleanup(func() { releaseOnce.Do(func() { close(source.allowReturn) }) })
-	go func() { _, _ = reader.Read(make([]byte, 1)); close(readDone) }()
-	select {
-	case <-source.started:
-	case <-time.After(time.Second):
-		t.Fatal("reader did not enter the blocked source")
+	if err := awaitSignal(t, closeDone, "hostile-source reader Close did not return while the read stayed blocked"); err != nil {
+		t.Fatalf("abandoning reader Close returned an error: %v", err)
 	}
-	launchClose()
-	closeReturnedEarly := false
-	var closeErr error
-	select {
-	case <-source.awakened:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not close the owned input")
+	awaitSignal(t, closeExited, "reader close worker did not join")
+	if err := awaitSignal(t, readDone, "logical Read did not return after Close abandoned it"); !errors.Is(err, errMCPStdioReaderClosed) {
+		t.Fatalf("abandoned logical Read = %v, want the fixed closed error", err)
 	}
-	select {
-	case err := <-closeDone:
-		closeReturnedEarly = true
-		closeErr = err
-	case <-time.After(20 * time.Millisecond):
-	}
-	releaseOnce.Do(func() { close(source.allowReturn) })
-	select {
-	case <-source.readDone:
-	case <-time.After(time.Second):
-		t.Fatal("source read barrier did not complete after release")
-	}
-	select {
-	case <-readDone:
-	case <-time.After(time.Second):
-		t.Fatal("blocked read did not finish after source close")
-	}
-	if !closeReturnedEarly {
-		select {
-		case err := <-closeDone:
-			closeErr = err
-		case <-time.After(time.Second):
-			t.Fatal("reader Close did not join the read")
-		}
-	}
-	if closeReturnedEarly {
-		t.Fatal("reader Close returned before its blocked read barrier joined")
-	}
-	if closeErr != nil {
-		t.Fatal("reader close failed")
+	awaitSignal(t, readExited, "logical read worker did not join")
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, errMCPStdioReaderClosed) {
+		t.Fatalf("post-abandonment Read = %v, want the fixed closed error", err)
 	}
 	if err := reader.Close(); err != nil {
-		t.Fatal("repeated reader close returned an unexpected error")
+		t.Fatalf("repeated reader close returned an unexpected error: %v", err)
+	}
+	if source.closes.Load() != 1 {
+		t.Fatalf("hostile source was closed %d times, want exactly once", source.closes.Load())
 	}
 }
+
+// mcpHostileReadInput blocks in Read and its Close ignores the blocked read.
+type mcpHostileReadInput struct {
+	reader     *io.PipeReader
+	writer     *io.PipeWriter
+	entered    chan struct{}
+	readExited chan struct{}
+	enterOnce  sync.Once
+	exitOnce   sync.Once
+	closes     atomic.Int32
+}
+
+func newMCPHostileReadInput() *mcpHostileReadInput {
+	reader, writer := io.Pipe()
+	return &mcpHostileReadInput{reader: reader, writer: writer, entered: make(chan struct{}), readExited: make(chan struct{})}
+}
+
+func (r *mcpHostileReadInput) Read(p []byte) (int, error) {
+	r.enterOnce.Do(func() { close(r.entered) })
+	n, err := r.reader.Read(p)
+	r.exitOnce.Do(func() { close(r.readExited) })
+	return n, err
+}
+
+// Close ignores the blocked read: it neither releases nor joins it.
+func (r *mcpHostileReadInput) Close() error {
+	r.closes.Add(1)
+	return nil
+}
+
+// release unblocks the abandoned physical read; only cleanup calls it.
+func (r *mcpHostileReadInput) release() { _ = r.writer.Close() }
 
 func TestMCPStdioConnectionDecodesFramesAndBatches(t *testing.T) {
 	frame := []byte(`{"jsonrpc":"2.0","id":"known-literal","method":"ping"}` + "\n")
