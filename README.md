@@ -32,7 +32,7 @@ has separate, finite authorization; unrestricted SSH output is **not** secret-sa
 | Keys and trust | Derived Ed25519 generation, key import/encrypted OpenSSH export, public-key output/install instructions, explicit server-pin replacement, SSH policy and two-phase key rotation. |
 | Native SSH | Human PTY shell with terminal resize; no external SSH client or forwarded SSH agent. `check` verifies pins/authentication without a remote command. |
 | Coding-agent access | One selected credential, pinned loopback TLS, single-use bootstrap, bounded `remote_*` jobs, read/cancel, compatible project-local command/result cards. |
-| Application operations | Opt-in Clawwright registration and finite `app_*` jobs; optional fixed Incus route. This remains trusted shell-capable application code, not a sandbox. |
+| Application operations | Opt-in registration of applications that ship an `ssjack-app.json` descriptor, and finite `app_*` jobs; optional fixed Incus route. This remains trusted shell-capable application code, not a sandbox. |
 | Application secrets | Separate encrypted versioned store, exact placeholder refs, private owner CRUD, global/server-local bindings and controlled value export/import. |
 | Text deploy/backup | Separately granted hydration and reference-only reverse copy; v1 bounded text or opt-in v2 streaming up to 64 MiB. Consumer conformance kit with real keeper/SSH acceptance ([docs](docs/CONSUMER-CONFORMANCE.md)). |
 | Declarative slice | Separate Linux/amd64 root-granted synthetic metadata and delivery paths. The general declarative driver/enrollment contract remains a proposal. |
@@ -200,7 +200,7 @@ retry, adoption claim or crash-durability guarantee follows from a receipt.
 
 [Streaming and HTTP](docs/application-store/TEXT-STREAM-HTTP.md) ·
 [Consumer conformance kit](docs/CONSUMER-CONFORMANCE.md) ·
-[General application transport](docs/APP-TRANSPORT.md)
+[Registered application contract](docs/APP-CONTRACT.md)
 
 ## Security boundaries
 

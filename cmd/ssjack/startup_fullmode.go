@@ -13,13 +13,14 @@ import (
 )
 
 type fullModeOptions struct {
-	vaultPath, profile                                                        string
-	clawwrightDirectory, clawwrightEntry, clawwrightContainer, clawwrightUser string
-	transferRoots                                                             []string
-	transferMaxBytes                                                          int64
-	transferMaxEntries                                                        int
-	noOutputFilter, named                                                     bool
-	ttl                                                                       time.Duration
+	vaultPath, profile    string
+	appRoute              string
+	appDirectories        []string
+	transferRoots         []string
+	transferMaxBytes      int64
+	transferMaxEntries    int
+	noOutputFilter, named bool
+	ttl                   time.Duration
 }
 
 type fullModeSession struct {
@@ -39,7 +40,7 @@ func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, 
 		}
 	}
 	var session fullModeSession
-	applicationOptions, err := registeredClawwright(opts.clawwrightDirectory, opts.clawwrightEntry, opts.clawwrightContainer, opts.clawwrightUser, opts.profile, nil)
+	applicationOptions, err := registeredApplications(opts.appDirectories, opts.appRoute, opts.profile, nil)
 	if err != nil {
 		return session, cleanup, err
 	}

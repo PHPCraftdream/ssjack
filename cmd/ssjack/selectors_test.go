@@ -110,7 +110,7 @@ func TestNamedCredentialSelectionNeverFallsBackAcrossAccounts(t *testing.T) {
 	}
 }
 
-func TestNamedClawwrightBindingUsesExactlyTheResolvedCredential(t *testing.T) {
+func TestNamedApplicationBindingUsesExactlyTheResolvedCredential(t *testing.T) {
 	options := &application.Options{Profile: "@production/deploy"}
 	if err := bindNamedApplication(options, []string{"resolved-credential"}); err != nil || options.Profile != "resolved-credential" {
 		t.Fatal("application retained a server label instead of the authenticated credential identity")

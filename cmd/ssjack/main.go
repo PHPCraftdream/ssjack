@@ -78,10 +78,9 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	metadataPath := flags.String("enrollment-metadata", "", "Absolute path to declarative enrollment metadata")
 	policyPath := flags.String("policy-snapshot", "", "Absolute path to human-installed deny-only policy snapshot")
 	identityPath := flags.String("enrollment-identity", "", "Absolute path to declarative enrollment identity snapshot")
-	clawwrightDirectory := flags.String("clawwright-directory", "", "Register a Clawwright deployment directory")
-	clawwrightEntry := flags.String("clawwright-entry", "", "Checked Clawwright dist/entry/bin.js (default installed package on PATH)")
-	clawwrightContainer := flags.String("clawwright-container", "", "Fixed Incus container route for Clawwright SSH commands")
-	clawwrightUser := flags.String("clawwright-user", "", "Fixed guest user for the Clawwright Incus route")
+	var appDirectories appDirectoryFlags
+	flags.Var(&appDirectories, "app", "Register an application directory containing ssjack-app.json (repeatable, full mode)")
+	appRoute := flags.String("app-route", "", "Fixed Incus route incus:CONTAINER:USER for registered applications")
 	var transferRootSpecs transferRootFlags
 	flags.Var(&transferRootSpecs, "transfer-root", "Register a transfer root as [NAME=]DIR (repeatable, full mode)")
 	transferMaxBytes := flags.Int64("transfer-max-bytes", transfercore.DefaultLimits().MaxBytes, "Maximum total bytes per transfer (full mode)")
@@ -137,6 +136,15 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	})
 	if transferFlagsSupplied && *modeFlag != string(broker.ModeFull) {
 		return 1, errors.New("--transfer-root, --transfer-max-bytes and --transfer-max-entries are only available in full mode")
+	}
+	appFlagsSupplied := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "app" || f.Name == "app-route" {
+			appFlagsSupplied = true
+		}
+	})
+	if appFlagsSupplied && *modeFlag != string(broker.ModeFull) {
+		return 1, errors.New("--app and --app-route are only available in full mode")
 	}
 	selector, named, selectionErr := startupSelection(flags, profile, *server, *account)
 	if selectionErr != nil {
@@ -223,18 +231,16 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var bootstrapOutput launch.OutputSetup
 	if *modeFlag == string(broker.ModeFull) {
 		session, cleanup, err := startFullMode(ctx, fullModeOptions{
-			vaultPath:           *vaultPath,
-			profile:             profile,
-			clawwrightDirectory: *clawwrightDirectory,
-			clawwrightEntry:     *clawwrightEntry,
-			clawwrightContainer: *clawwrightContainer,
-			clawwrightUser:      *clawwrightUser,
-			transferRoots:       transferRootSpecs,
-			transferMaxBytes:    *transferMaxBytes,
-			transferMaxEntries:  *transferMaxEntries,
-			noOutputFilter:      *noOutputFilter,
-			named:               named,
-			ttl:                 *ttl,
+			vaultPath:          *vaultPath,
+			profile:            profile,
+			appDirectories:     appDirectories,
+			appRoute:           *appRoute,
+			transferRoots:      transferRootSpecs,
+			transferMaxBytes:   *transferMaxBytes,
+			transferMaxEntries: *transferMaxEntries,
+			noOutputFilter:     *noOutputFilter,
+			named:              named,
+			ttl:                *ttl,
 		})
 		defer cleanup(&code, &result)
 		if err != nil {

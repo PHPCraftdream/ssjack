@@ -17,17 +17,17 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
-const Name = "clawwright"
-
 var (
 	containerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	userName      = regexp.MustCompile(`^[a-z_][a-z0-9_.-]{0,31}$`)
-	commandName   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	commandName   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 )
 
+// Options registers validated applications for one keeper session.
+// Container and User, when set, route every registered application's
+// transport commands through the fixed Incus route.
 type Options struct {
-	Directory string
-	Command   []string
+	Apps      []App
 	Profile   string
 	Runner    remote.StreamRunner
 	Guard     remote.GuardProvider
@@ -36,8 +36,8 @@ type Options struct {
 }
 
 type Input struct {
-	Application    string   `json:"application" jsonschema:"Registered application ID from app_list"`
-	Arguments      []string `json:"arguments" jsonschema:"Finite Clawwright command and arguments, passed without a local shell"`
+	Application    string   `json:"application" jsonschema:"Registered application name from app_list"`
+	Arguments      []string `json:"arguments" jsonschema:"Finite application command and arguments, passed without a local shell"`
 	Confirm        bool     `json:"confirm,omitempty" jsonschema:"Acknowledge a potentially mutating operation; harness authorization still applies"`
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty" jsonschema:"Operation timeout, 1 to 3600 seconds; default 600"`
 }
@@ -49,7 +49,10 @@ type Description struct {
 }
 
 // noApplicationHint is the fixed text of an empty application list.
-const noApplicationHint = "no application is registered; the owner starts the keeper with --clawwright-directory"
+const noApplicationHint = "no application is registered; the owner starts the keeper with --app DIR"
+
+// MaxApplications bounds one keeper session's registrations.
+const MaxApplications = 16
 
 type ListOutput struct {
 	Applications []Description `json:"applications"`
@@ -57,11 +60,19 @@ type ListOutput struct {
 	Hint string `json:"hint,omitempty"`
 }
 
-type Manager struct {
-	jobs        *remote.Manager
-	description Description
+type registered struct {
+	App
+	observational map[string]bool
+	refused       map[string]bool
 }
 
+type Manager struct {
+	jobs         *remote.Manager
+	apps         map[string]*registered
+	descriptions []Description
+}
+
+// ValidateRoute checks a container and guest user pair; both empty means no route.
 func ValidateRoute(container, user string) error {
 	if container == "" && user == "" {
 		return nil
@@ -72,44 +83,84 @@ func ValidateRoute(container, user string) error {
 	return nil
 }
 
+// ParseRoute parses incus:CONTAINER:USER; an empty spec means no route.
+func ParseRoute(spec string) (container, user string, err error) {
+	if spec == "" {
+		return "", "", nil
+	}
+	parts := strings.Split(spec, ":")
+	if len(parts) != 3 || parts[0] != "incus" {
+		return "", "", errors.New("--app-route must be incus:CONTAINER:USER")
+	}
+	if err := ValidateRoute(parts[1], parts[2]); err != nil {
+		return "", "", err
+	}
+	return parts[1], parts[2], nil
+}
+
+func nameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		set[name] = true
+	}
+	return set
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func register(app App) (*registered, error) {
+	if !appName.MatchString(app.Name) || !filepath.IsAbs(app.Directory) || !filepath.IsAbs(app.Workdir) || !directoryExists(app.Directory) || !directoryExists(app.Workdir) {
+		return nil, errors.New("registered application requires a name and absolute directories")
+	}
+	if !filepath.IsAbs(app.Executable) {
+		return nil, errors.New("registered application executable must be absolute")
+	}
+	if strings.IndexByte(app.Executable, 0) >= 0 {
+		return nil, errors.New("invalid registered application command")
+	}
+	for _, arg := range app.Args {
+		if strings.IndexByte(arg, 0) >= 0 {
+			return nil, errors.New("invalid registered application command")
+		}
+	}
+	app.Args = append([]string(nil), app.Args...)
+	return &registered{App: app, observational: nameSet(app.Observational), refused: nameSet(app.Refused)}, nil
+}
+
 func New(parent context.Context, options *Options) (*Manager, error) {
 	m := &Manager{}
 	if options == nil {
 		return m, nil
 	}
-	if options.Runner == nil || options.Profile == "" || options.Directory == "" || len(options.Command) == 0 {
+	if options.Runner == nil || options.Profile == "" || len(options.Apps) == 0 || len(options.Apps) > MaxApplications {
 		return nil, errors.New("incomplete registered application")
 	}
 	if err := ValidateRoute(options.Container, options.User); err != nil {
 		return nil, err
 	}
-	root, err := filepath.Abs(options.Directory)
-	if err != nil {
-		return nil, errors.New("invalid registered application directory")
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil, errors.New("registered application directory is unavailable")
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return nil, errors.New("registered application requires a directory")
-	}
-	program := append([]string(nil), options.Command...)
-	for _, arg := range program {
-		if strings.IndexByte(arg, 0) >= 0 {
-			return nil, errors.New("invalid registered application command")
+	m.apps = make(map[string]*registered, len(options.Apps))
+	names := make([]string, 0, len(options.Apps))
+	for _, app := range options.Apps {
+		entry, err := register(app)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if !filepath.IsAbs(program[0]) {
-		return nil, errors.New("registered application executable must be absolute")
+		if m.apps[entry.Name] != nil {
+			return nil, errors.New("registered application names must be unique")
+		}
+		m.apps[entry.Name] = entry
+		names = append(names, entry.Name)
+		m.descriptions = append(m.descriptions, Description{Name: entry.Name, Profile: options.Profile, Container: options.Container})
 	}
 	runner := routeRunner(options.Runner, options.Container, options.User)
 	profile := options.Profile
-	m.description = Description{Name: Name, Profile: profile, Container: options.Container}
-	m.jobs = remote.NewGuardedManager(parent, []string{Name}, func(ctx context.Context, target, encoded string, stdout, stderr io.Writer) (int, error) {
+	m.jobs = remote.NewGuardedManager(parent, names, func(ctx context.Context, target, encoded string, stdout, stderr io.Writer) (int, error) {
 		var arguments []string
-		if target != Name || wire.Decode(encoded, &arguments) != nil {
+		app := m.apps[target]
+		if app == nil || wire.Decode(encoded, &arguments) != nil {
 			return -1, errors.New("invalid registered application operation")
 		}
 		if ctx.Err() != nil {
@@ -126,9 +177,9 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 		bootstrap := scope.Bootstrap()
 		out := newSecretWriter(stdout, bootstrap.Token)
 		errOut := newSecretWriter(stderr, bootstrap.Token)
-		args := append(append([]string(nil), program[1:]...), arguments...)
-		command := exec.CommandContext(ctx, program[0], args...)
-		command.Dir = root
+		args := append(append([]string(nil), app.Args...), arguments...)
+		command := exec.CommandContext(ctx, app.Executable, args...)
+		command.Dir = app.Workdir
 		command.Env = apptransport.Environment(os.Environ(), bootstrap)
 		command.Stdout, command.Stderr = out, errOut
 		command.WaitDelay = 2 * time.Second
@@ -163,14 +214,14 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 	case "app_list":
 		out := ListOutput{Applications: []Description{}}
 		if m.jobs != nil {
-			out.Applications = append(out.Applications, m.description)
+			out.Applications = append(out.Applications, m.descriptions...)
 		} else {
 			out.Hint = noApplicationHint
 		}
 		return broker.Result(out, nil), true
 	case "app_start", "app_read", "app_cancel":
 		if m.jobs == nil {
-			return broker.Result(nil, errors.New("no application registered; start the keeper with --clawwright-directory")), true
+			return broker.Result(nil, errors.New("no application registered; start the keeper with --app DIR")), true
 		}
 	default:
 		return wire.Reply{}, false
@@ -180,14 +231,14 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 		if wire.Decode(request.Data, &input) != nil {
 			return broker.Result(nil, errors.New("invalid application arguments")), true
 		}
-		if err := validateInput(input); err != nil {
+		if err := m.validateInput(input); err != nil {
 			return broker.Result(nil, err), true
 		}
 		encoded, err := wire.Encode(input.Arguments)
 		if err != nil {
 			return broker.Result(nil, err), true
 		}
-		data, err := wire.Encode(remote.StartInput{Target: Name, Command: encoded, TimeoutSeconds: input.TimeoutSeconds})
+		data, err := wire.Encode(remote.StartInput{Target: input.Application, Command: encoded, TimeoutSeconds: input.TimeoutSeconds})
 		if err != nil {
 			return broker.Result(nil, err), true
 		}
@@ -200,45 +251,33 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 	return m.jobs.Handle(ctx, wire.Request{Operation: operation, Data: request.Data}), true
 }
 
-func validateInput(input Input) error {
-	if input.Application != Name || len(input.Arguments) == 0 || len(input.Arguments) > 128 || !commandName.MatchString(input.Arguments[0]) || input.TimeoutSeconds < 0 || input.TimeoutSeconds > 3600 {
+// validateInput applies the fixed admission rules and the descriptor's
+// command classes. Interactive stdin is refused for every application.
+func (m *Manager) validateInput(input Input) error {
+	app := m.apps[input.Application]
+	if app == nil {
+		return errors.New("unknown application; list registered applications with app_list")
+	}
+	if len(input.Arguments) == 0 || len(input.Arguments) > 128 || !commandName.MatchString(input.Arguments[0]) || input.TimeoutSeconds < 0 || input.TimeoutSeconds > 3600 {
 		return errors.New("invalid registered application command or deadline")
 	}
-	if input.Arguments[0] == "mcp-serve" || input.Arguments[0] == "control-mcp" {
-		return errors.New("application jobs accept finite CLI commands, not stdio MCP servers")
+	if app.refused[input.Arguments[0]] {
+		return errors.New("the application descriptor refuses this command")
 	}
 	size := 0
 	for _, argument := range input.Arguments {
 		size += len(argument)
-		if strings.IndexByte(argument, 0) >= 0 || argument == "--stdin" {
+		if strings.IndexByte(argument, 0) >= 0 || argument == "--stdin" || strings.HasPrefix(argument, "--stdin=") {
 			return errors.New("application jobs require argv or a local file, not interactive input")
 		}
 	}
 	if size > 8*1024 {
 		return errors.New("application argument size limit exceeded")
 	}
-	if !input.Confirm && !observational(input.Arguments) {
+	if !input.Confirm && !app.observational[input.Arguments[0]] {
 		return errors.New("this application operation requires confirm=true and applicable operator authorization")
 	}
 	return nil
-}
-
-func observational(args []string) bool {
-	switch args[0] {
-	case "help", "version", "status", "inspect", "doctor", "plan":
-		return true
-	case "bootstrap":
-		check := false
-		for _, arg := range args[1:] {
-			if arg == "--check" {
-				check = true
-			} else if arg != "--json" {
-				return false
-			}
-		}
-		return check
-	}
-	return false
 }
 
 func quote(value string) string {

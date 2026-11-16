@@ -35,15 +35,15 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 		case "cancel", "app_cancel":
 			return broker.Result(remote.CancelOutput{Cancelled: true}, nil)
 		case "app_list":
-			return broker.Result(application.ListOutput{Applications: []application.Description{{Name: "clawwright", Profile: "allowed"}}}, nil)
+			return broker.Result(application.ListOutput{Applications: []application.Description{{Name: "synthetic", Profile: "allowed"}}}, nil)
 		case "app_start":
 			var input application.Input
-			if wire.Decode(req.Data, &input) != nil || input.Application != "clawwright" || len(input.Arguments) != 1 || input.Arguments[0] != "status" {
+			if wire.Decode(req.Data, &input) != nil || input.Application != "synthetic" || len(input.Arguments) != 1 || input.Arguments[0] != "status" {
 				return wire.Reply{Error: "invalid application"}
 			}
 			return broker.Result(remote.StartOutput{JobID: "app-job"}, nil)
 		case "app_read":
-			return broker.Result(remote.ReadOutput{JobID: "app-job", Stdout: []byte("Clawwright result"), Done: true, ExitCode: 0}, nil)
+			return broker.Result(remote.ReadOutput{JobID: "app-job", Stdout: []byte("Application result"), Done: true, ExitCode: 0}, nil)
 		case "transfer_upload", "transfer_download":
 			var input transfer.StartInput
 			if wire.Decode(req.Data, &input) != nil || input.Target != "allowed" || input.Local != "a.txt" || input.Remote != "/srv/a.txt" {
@@ -92,9 +92,9 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 		{"remote_exec", map[string]any{"target": "allowed", "command": "echo hello"}, "test-job"},
 		{"remote_read", map[string]any{"job_id": "test-job"}, "Hello"},
 		{"remote_cancel", map[string]any{"job_id": "test-job"}, "true"},
-		{"app_list", map[string]any{}, "clawwright"},
-		{"app_exec", map[string]any{"application": "clawwright", "arguments": []string{"status"}}, "app-job"},
-		{"app_read", map[string]any{"job_id": "app-job"}, "Clawwright result"},
+		{"app_list", map[string]any{}, "synthetic"},
+		{"app_exec", map[string]any{"application": "synthetic", "arguments": []string{"status"}}, "app-job"},
+		{"app_read", map[string]any{"job_id": "app-job"}, "Application result"},
 		{"app_cancel", map[string]any{"job_id": "app-job"}, "true"},
 		{"remote_upload", map[string]any{"target": "allowed", "local": "a.txt", "remote": "/srv/a.txt"}, "transfer-job"},
 		{"remote_download", map[string]any{"target": "allowed", "local": "a.txt", "remote": "/srv/a.txt"}, "transfer-job"},

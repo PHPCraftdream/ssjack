@@ -12,7 +12,7 @@ Copy only. The source is never modified or deleted. There is no move, sync, delt
 
 `remote_exec` already grants arbitrary writes as the SSH principal, so the remote side gains no new authority. The new authority is **local filesystem access**. It is bounded by owner-registered transfer roots:
 
-- The owner registers roots at keeper startup with repeatable `--transfer-root [NAME=]DIR`, before the vault prompt, like `--clawwright-directory`. With no root the transfer tools refuse every call (fail closed) and the refusal names `--transfer-root` so the model can tell the owner what is missing.
+- The owner registers roots at keeper startup with repeatable `--transfer-root [NAME=]DIR`, before the vault prompt, like `--app`. With no root the transfer tools refuse every call (fail closed) and the refusal names `--transfer-root` so the model can tell the owner what is missing.
 - A root must be an absolute existing directory with no symlink or reparse point in its resolved path, must not be a filesystem root, and must not contain the vault file or any ancestor of it. Violations fail before unlocking.
 - Callers pass `root` (omitted when exactly one root exists) and a root-relative `local` path. Absolute paths, `..`, drive letters, UNC paths and alternate data streams are refused. Results never contain an absolute local path.
 - Roots should be dedicated directories. Because a download can create files that other local tooling executes, download destinations and extracted entries are additionally refused when any component is `.git`, `.hg`, `.svn`, `.ssh`, `.claude`, `.vscode`, `.husky` or `.github`. This is defense in depth, not a sandbox.

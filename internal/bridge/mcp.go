@@ -121,25 +121,25 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 			err := client.Call(ctx, "cancel", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "app_list", Description: "List the human-registered local Clawwright deployment, if enabled."},
+	mcp.AddTool(server, &mcp.Tool{Name: "app_list", Description: "List the applications the owner registered at keeper startup with --app, if any."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, application.ListOutput, error) {
 			var out application.ListOutput
 			err := client.Call(ctx, "app_list", struct{}{}, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "app_exec", Description: "Start a finite command in the registered Clawwright deployment. Arguments are passed as argv, never through a local shell. Mutating operations require confirm=true and applicable harness authorization. Returns job_id."},
+	mcp.AddTool(server, &mcp.Tool{Name: "app_exec", Description: "Start a finite command in a registered application, named as in app_list. Arguments are passed as argv, never through a local shell. Commands the application did not declare observational require confirm=true and applicable harness authorization; the application may refuse commands. Interactive stdin is never available. Returns job_id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input application.Input) (*mcp.CallToolResult, remote.StartOutput, error) {
 			var out remote.StartOutput
 			err := client.Call(ctx, "app_start", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered Clawwright operation output using returned offsets; drain both streams until done and no more output remains."},
+	mcp.AddTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered application operation output using returned offsets; drain both streams until done and no more output remains."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
 			var raw remote.ReadOutput
 			err := client.Call(ctx, "app_read", input, &raw)
 			return nil, readOutput(raw), err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "app_cancel", Description: "Cancel a Clawwright operation and revoke its child transport. A detached remote process may continue running."},
+	mcp.AddTool(server, &mcp.Tool{Name: "app_cancel", Description: "Cancel a registered application operation and revoke its child transport. A detached remote process may continue running."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.JobInput) (*mcp.CallToolResult, remote.CancelOutput, error) {
 			var out remote.CancelOutput
 			err := client.Call(ctx, "app_cancel", input, &out)

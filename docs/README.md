@@ -27,7 +27,7 @@ opening a database; global flags precede commands.
 | Rotate a key through verified remote installation | `rotate` | [Two-phase rotation](VAULT.md#two-phase-key-rotation) |
 | Diagnose local setup / test SSH authentication | `doctor` / `check` | [Diagnostics](VAULT.md#diagnostics) |
 | Launch a coding harness with one selected credential | `run HARNESS [ARGS...]` | [Bootstrap](BOOTSTRAP.md), [architecture](../SSJACK.md) |
-| Register finite Clawwright operations | `--clawwright-directory DIR [route options] run HARNESS` | [Application transport](APP-TRANSPORT.md) |
+| Register finite application operations | `--app DIR [--app-route incus:C:U] run HARNESS` | [Application contract](APP-CONTRACT.md) |
 | Provision/unlock a separate secret-store installation | `appstore setup`, `put`, `inspect`, `unlock` | [Store entry](application-store/ENTRY.md) |
 | Edit named application-secret values | Link secret store, then Global secrets / Server secrets | [Owner editor](application-store/OWNER-EDITOR.md), [coordinator](application-store/OWNER-COORDINATOR.md) |
 | Export selected credentials/settings/actual values | Export menu: all/server/account/global plus explicit MCP accounts | [Archive format](application-store/OWNER-EXPORT-FORMAT.md) |

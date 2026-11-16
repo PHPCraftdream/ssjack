@@ -111,7 +111,7 @@ func TestApplicationNativeArgumentsAndFreshScopes(t *testing.T) {
 	previous := ""
 	for i := 0; i < 2; i++ {
 		var start remote.StartOutput
-		applicationCall(t, ctx, manager, "app_start", Input{Application: Name, Arguments: args}, &start)
+		applicationCall(t, ctx, manager, "app_start", Input{Application: fixtureName, Arguments: args}, &start)
 		out := readApplication(t, ctx, manager, start.JobID)
 		if out.ExitCode != 7 || out.Error != "" || string(out.Stderr) != "***" {
 			t.Fatalf("application result: %+v", out)
@@ -123,7 +123,7 @@ func TestApplicationNativeArgumentsAndFreshScopes(t *testing.T) {
 			Pin       string
 			Token     string
 		}
-		if json.Unmarshal(out.Stdout, &report) != nil || !reflect.DeepEqual(report.Arguments, args) || report.Token != "***" || report.Directory == "" {
+		if json.Unmarshal(out.Stdout, &report) != nil || !reflect.DeepEqual(report.Arguments, args) || report.Token != "***" || !sameDirectory(report.Directory, manager.apps[fixtureName].Workdir) {
 			t.Fatal("argv, directory or redaction mismatch")
 		}
 		if report.Pin == "" || report.Pin == previous {
@@ -160,7 +160,7 @@ func TestApplicationCancellationAndDisconnect(t *testing.T) {
 			defer closeSession()
 			manager := fixtureManager(t, ctx)
 			var start remote.StartOutput
-			applicationCall(t, session, manager, "app_start", Input{Application: Name, Arguments: []string{"inspect", "wait"}}, &start)
+			applicationCall(t, session, manager, "app_start", Input{Application: fixtureName, Arguments: []string{"inspect", "wait"}}, &start)
 			ticker := time.NewTicker(5 * time.Millisecond)
 			defer ticker.Stop()
 			var endpoint *url.URL
@@ -212,64 +212,10 @@ func TestApplicationTimeout(t *testing.T) {
 	defer cancel()
 	manager := fixtureManager(t, ctx)
 	var start remote.StartOutput
-	applicationCall(t, ctx, manager, "app_start", Input{Application: Name, Arguments: []string{"inspect", "wait"}, TimeoutSeconds: 1}, &start)
+	applicationCall(t, ctx, manager, "app_start", Input{Application: fixtureName, Arguments: []string{"inspect", "wait"}, TimeoutSeconds: 1}, &start)
 	out := readApplication(t, ctx, manager, start.JobID)
 	if out.ExitCode == 0 || !strings.Contains(out.Error, "deadline exceeded") {
 		t.Fatalf("application deadline was lost: %+v", out)
-	}
-}
-
-func TestApplicationAdmissionAndDisabledRegistration(t *testing.T) {
-	for _, input := range []Input{
-		{Application: "other", Arguments: []string{"status"}},
-		{Application: Name},
-		{Application: Name, Arguments: []string{"mcp-serve"}, Confirm: true},
-		{Application: Name, Arguments: []string{"control-mcp"}, Confirm: true},
-		{Application: Name, Arguments: []string{"apply"}},
-		{Application: Name, Arguments: []string{"inspect", "--stdin"}},
-		{Application: Name, Arguments: []string{"inspect", "nul\x00"}},
-		{Application: Name, Arguments: []string{"status"}, TimeoutSeconds: 3601},
-		{Application: Name, Arguments: []string{"status", strings.Repeat("x", 8192)}},
-	} {
-		if validateInput(input) == nil {
-			t.Fatalf("accepted invalid input: %+v", input)
-		}
-	}
-	for _, args := range [][]string{{"status"}, {"bootstrap", "--check", "--json"}, {"apply"}} {
-		if err := validateInput(Input{Application: Name, Arguments: args, Confirm: true}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	manager, err := New(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Close()
-	var list ListOutput
-	applicationCall(t, context.Background(), manager, "app_list", struct{}{}, &list)
-	if len(list.Applications) != 0 {
-		t.Fatal("disabled registration advertised an application")
-	}
-	if list.Hint != noApplicationHint || !strings.Contains(list.Hint, "--clawwright-directory") {
-		t.Fatalf("empty application list did not explain how it is enabled: %q", list.Hint)
-	}
-	if reply := applicationCall(t, context.Background(), manager, "app_start", Input{}, nil); reply.OK {
-		t.Fatal("disabled application started")
-	}
-	if _, handled := manager.Handle(context.Background(), wire.Request{Operation: "targets"}); handled {
-		t.Fatal("application manager captured remote operations")
-	}
-}
-
-func TestApplicationRequiresExplicitDirectory(t *testing.T) {
-	program, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, err := New(context.Background(), &Options{Command: []string{program}, Profile: "fixed", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil }})
-	if err == nil {
-		manager.Close()
-		t.Fatal("empty directory implicitly registered the keeper working directory")
 	}
 }
 
