@@ -22,7 +22,7 @@ The fixture's metadata file has a lock and atomic replacement, but it is writabl
 
 ## Secret and trust non-goals
 
-Placeholder bytes are metadata references only. There is no resolver, secret hydration, credential release, Nix/OpenClaw/Clawwright integration, native configuration update, argv/environment injection, or proof that consuming applications receive a secret. This metadata surface releases no secrets, and a successful metadata operation grants no delivery authority. The separately registered fixed synthetic delivery and text-adapter paths have their own contracts; see [store entry](../application-store/ENTRY.md). Human verification of driver provenance and intended resource behavior must occur outside any model-controlled session.
+Placeholder bytes are metadata references only. There is no resolver, secret hydration, credential release, Nix/OpenClaw/registered-application integration, native configuration update, argv/environment injection, or proof that consuming applications receive a secret. This metadata surface releases no secrets, and a successful metadata operation grants no delivery authority. The separately registered fixed synthetic delivery and text-adapter paths have their own contracts; see [store entry](../application-store/ENTRY.md). Human verification of driver provenance and intended resource behavior must occur outside any model-controlled session.
 
 ## Authored public acceptance
 

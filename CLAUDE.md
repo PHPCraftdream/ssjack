@@ -1,6 +1,6 @@
 # Project priorities
 
-- Deliver universal secret placeholder hydration through ssjack, usable by Nix and Clawwright through external adapters. Isolated helpers are not end-to-end readiness.
+- Deliver universal secret placeholder hydration through ssjack, usable by external consumers (Nix, registered applications) through the published contracts: [docs/APP-CONTRACT.md](docs/APP-CONTRACT.md) and [docs/CONSUMER-CONFORMANCE.md](docs/CONSUMER-CONFORMANCE.md). Isolated helpers are not end-to-end readiness.
 - Never expose secret values to model context, logs, argv, environment or plaintext staging files. Preserve the agreed cryptographic profiles and authorization boundaries.
 - Owner-authorized exception: existing-vault startup may consume `--vault-password` or `SSJACK_VAULT_PASSWORD`. Never echo those values or forward them to child harness/MCP processes. This does not authorize other secret arguments, environment propagation, getters or plaintext staging. See docs/STARTUP-PASSWORD.md.
 
