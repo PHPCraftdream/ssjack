@@ -22,9 +22,15 @@ const (
 	ClassUnsupportedRemote Class = "unsupported_remote"
 	ClassIntegrity         Class = "integrity"
 	ClassRemoteFailed      Class = "remote_failed"
-	ClassCancelled         Class = "cancelled"
-	ClassInternal          Class = "internal"
+	// ClassLinkUnstable: the chunked mode gave up after repeated attempts
+	// without progress; the staging is kept and a retry resumes.
+	ClassLinkUnstable Class = "link_unstable"
+	ClassCancelled    Class = "cancelled"
+	ClassInternal     Class = "internal"
 )
+
+// MsgLinkUnstable is the fixed, content-free message of ClassLinkUnstable.
+const MsgLinkUnstable = "transfer link was too unstable to finish; a retry can resume"
 
 // Error carries a Class and a fixed, content-free message.
 type Error struct {

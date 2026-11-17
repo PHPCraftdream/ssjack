@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"os"
 	"path"
+	"sync/atomic"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/transferlocal"
+	"github.com/PHPCraftdream/ssjack/internal/transferremote"
 )
 
 // stagedFileName is the fixed inner name of the staged file inside the
@@ -27,6 +30,10 @@ const stagedFileName = "payload"
 // with a fresh bounded context. Nothing is published on any failure. The
 // staged file lives inside the staging directory under a fixed name,
 // mirroring the local layer.
+//
+// A single file whose stream drops on a link that cannot carry it within a
+// connection's lifetime continues in chunked, resumable mode inside the same
+// call (see chunkupload.go); directories always move as one whole stream.
 func (e *Engine) Upload(ctx context.Context, root *transferlocal.Root, local, remote string, overwrite bool, progress func(Progress)) (Result, error) {
 	if root == nil {
 		return Result{}, transfercore.Fail(transfercore.ClassRefusedPath, "transfer root is missing")
@@ -44,7 +51,7 @@ func (e *Engine) Upload(ctx context.Context, root *transferlocal.Root, local, re
 
 	file, sizeAtOpen, err := root.OpenSourceFile(local)
 	if err == nil {
-		return e.uploadFile(ctx, file, sizeAtOpen, remote, overwrite, progress)
+		return e.uploadFile(ctx, file, sizeAtOpen, local, remote, overwrite, progress)
 	}
 	manifest, walkErr := root.WalkSource(local, e.limits)
 	if walkErr != nil {
@@ -53,9 +60,9 @@ func (e *Engine) Upload(ctx context.Context, root *transferlocal.Root, local, re
 	return e.uploadDir(ctx, root, manifest, local, remote, overwrite, progress)
 }
 
-// uploadFile is the single-file flow: stream the opened source into the
-// staged file, verify sizes and digests on both sides, and publish.
-func (e *Engine) uploadFile(ctx context.Context, file *os.File, sizeAtOpen int64, remote string, overwrite bool, progress func(Progress)) (Result, error) {
+// uploadFile is the single-file flow: probe, then run the job, which streams
+// the opened source first and falls back to chunked mode after a link drop.
+func (e *Engine) uploadFile(ctx context.Context, file *os.File, sizeAtOpen int64, local, remote string, overwrite bool, progress func(Progress)) (Result, error) {
 	defer func() { _ = file.Close() }()
 
 	if sizeAtOpen > e.limits.MaxBytes {
@@ -66,10 +73,35 @@ func (e *Engine) uploadFile(ctx context.Context, file *os.File, sizeAtOpen int64
 	if err := e.remote.Probe(ctx); err != nil {
 		return Result{}, classify(ctx, err)
 	}
-	parent := path.Dir(remote)
-	stagingPath, err := e.remote.CreateStaging(ctx, parent)
+	j := &uploadJob{
+		e: e, ctx: ctx, file: file, size: sizeAtOpen,
+		local: local, remote: remote, parent: path.Dir(remote),
+		overwrite: overwrite, executable: executable, progress: progress,
+		mode: ModeStream,
+	}
+	if info, err := file.Stat(); err == nil {
+		j.mtimeNs = info.ModTime().UnixNano()
+		j.mtimeKnown = true
+	}
+	return j.run()
+}
+
+// streamAttempt is one whole-file stream: create staging, stream the source
+// while hashing, verify both sides, publish. The attempt's own staging is
+// always removed with a fresh context. link reports that the stream itself
+// (or the creation of its staging) ended without a remote exit status, the
+// only failure after which another attempt makes sense; the profile has then
+// been told about the drop when chunked mode is possible.
+func (j *uploadJob) streamAttempt() (res Result, link bool, err error) {
+	e := j.e
+	ctx := j.ctx
+	j.streamed = true
+	j.beginAttempt(ModeStream)
+
+	start := e.now()
+	stagingPath, err := e.remote.CreateStaging(ctx, j.parent)
 	if err != nil {
-		return Result{}, classify(ctx, err)
+		return Result{}, j.noteStreamError(err, 0, start), classify(ctx, err)
 	}
 	stagingName := path.Base(stagingPath)
 	stagedPath := stagingPath + "/" + stagedFileName
@@ -79,42 +111,82 @@ func (e *Engine) uploadFile(ctx context.Context, file *os.File, sizeAtOpen int64
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
-		_ = e.remote.CleanupStaging(cctx, parent, stagingName)
+		_ = e.remote.CleanupStaging(cctx, j.parent, stagingName)
 	}()
 
-	report(progress, transfercore.PhaseTransfer, 0)
-	reader := newHashingReader(file, e.limits.MaxBytes)
-	reader.onRead = func(n int64) { report(progress, transfercore.PhaseTransfer, n) }
-	if _, err := e.remote.WriteFile(ctx, stagedPath, reader, executable); err != nil {
-		if reader.failure() != nil {
-			return Result{}, classify(ctx, reader.failure())
+	j.emit(transfercore.PhaseTransfer, 0)
+	reader := newHashingReader(&offsetReader{f: j.file}, e.limits.MaxBytes)
+	// The SSH stdin copy may still be reading after the remote call has
+	// returned; the flag keeps a late read from reporting a stale phase.
+	var active atomic.Bool
+	active.Store(true)
+	defer active.Store(false)
+	reader.onRead = func(n int64) {
+		if active.Load() {
+			j.emit(transfercore.PhaseTransfer, n)
 		}
-		return Result{}, classify(ctx, err)
+	}
+	writeStart := e.now()
+	_, err = e.remote.WriteFile(ctx, stagedPath, reader, j.executable)
+	elapsed := e.now().Sub(writeStart)
+	if err != nil {
+		if reader.failure() != nil {
+			return Result{}, false, classify(ctx, reader.failure())
+		}
+		return Result{}, j.noteStreamError(err, reader.count(), writeStart), classify(ctx, err)
 	}
 	if reader.failure() != nil {
-		return Result{}, classify(ctx, reader.failure())
+		return Result{}, false, classify(ctx, reader.failure())
 	}
+	j.noteStreamDone(reader.count(), elapsed)
 
-	report(progress, transfercore.PhaseVerify, reader.count())
+	j.emit(transfercore.PhaseVerify, reader.count())
 	digest := reader.digest()
-	if reader.count() != sizeAtOpen {
-		return Result{}, transfercore.Fail(transfercore.ClassIntegrity, msgSourceChanged)
+	if reader.count() != j.size {
+		return Result{}, false, transfercore.Fail(transfercore.ClassIntegrity, msgSourceChanged)
 	}
 	remoteSize, remoteHash, err := e.remote.StatFile(ctx, stagedPath)
 	if err != nil {
-		return Result{}, classify(ctx, err)
+		return Result{}, false, classify(ctx, err)
 	}
 	if remoteSize != reader.count() || remoteHash != digest {
-		return Result{}, transfercore.Fail(transfercore.ClassIntegrity, msgRemoteMismatch)
+		return Result{}, false, transfercore.Fail(transfercore.ClassIntegrity, msgRemoteMismatch)
 	}
 
-	report(progress, transfercore.PhasePublish, reader.count())
-	if err := e.remote.PublishFile(ctx, stagedPath, remote, overwrite); err != nil {
-		return Result{}, classify(ctx, err)
+	j.emit(transfercore.PhasePublish, reader.count())
+	if err := e.remote.PublishFile(ctx, stagedPath, j.remote, j.overwrite); err != nil {
+		return Result{}, false, classify(ctx, err)
 	}
 
-	report(progress, transfercore.PhaseCleanup, reader.count())
-	return Result{Kind: KindFile, Files: 1, Dirs: 0, Bytes: reader.count(), SHA256: hex.EncodeToString(digest[:])}, nil
+	j.emit(transfercore.PhaseCleanup, reader.count())
+	return Result{Kind: KindFile, Files: 1, Dirs: 0, Bytes: reader.count(), SHA256: hex.EncodeToString(digest[:])}, false, nil
+}
+
+// noteStreamError reports whether err is a link failure of the stream and, if
+// chunked mode is possible, feeds the drop to the link profile: bytes is what
+// the stream read from the source, the lifetime runs from since to now.
+func (j *uploadJob) noteStreamError(err error, bytes int64, since time.Time) bool {
+	if j.ctx.Err() != nil || !transferremote.IsLinkFailure(err) {
+		return false
+	}
+	if j.chunkOK {
+		j.noteDrop(bytes, j.e.now().Sub(since))
+	}
+	return true
+}
+
+// offsetReader reads the file from an offset of its own with ReadAt, so
+// concurrent or lingering readers of earlier attempts never share a file
+// offset with it.
+type offsetReader struct {
+	f   *os.File
+	off int64
+}
+
+func (r *offsetReader) Read(p []byte) (int, error) {
+	n, err := r.f.ReadAt(p, r.off)
+	r.off += int64(n)
+	return n, err
 }
 
 // sourceExecutable reads the execute bits from the opened source handle; the

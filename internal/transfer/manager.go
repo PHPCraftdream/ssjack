@@ -45,6 +45,8 @@ func statusMessage(class transfercore.Class) string {
 		return "transfer failed verification"
 	case transfercore.ClassRemoteFailed:
 		return "remote operation failed"
+	case transfercore.ClassLinkUnstable:
+		return transfercore.MsgLinkUnstable
 	case transfercore.ClassCancelled:
 		return "transfer was cancelled"
 	default:

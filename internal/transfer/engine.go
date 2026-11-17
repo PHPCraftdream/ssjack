@@ -23,5 +23,5 @@ type Engine interface {
 
 // NewEngine builds the real engine for one approved target.
 func NewEngine(runner remote.StreamRunner, target string, limits transfercore.Limits) (Engine, error) {
-	return transferengine.New(transferremote.New(runner, target, limits), limits)
+	return transferengine.NewWithOptions(transferremote.NewChunk(runner, target, limits), limits, transferengine.Options{Target: target})
 }

@@ -281,6 +281,23 @@ func (p *Profile) BeginTransfer() {
 	p.mode = ModeStream
 }
 
+// ForceChunked puts the profile into chunked mode regardless of what it has
+// learned, seeding the stored chunk size from seed (clamped to
+// [MinChunk, MaxChunk]; seed <= 0 keeps the stored size). A job calls it when
+// a staging directory already holds parts: those bytes must not be discarded
+// by a whole-file stream, and the part sizes found there are the best guess
+// of a chunk size that worked. The survivability bound of known drops still
+// applies in Decide.
+func (p *Profile) ForceChunked(seed int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mode = ModeChunked
+	p.okStreak = 0
+	if seed > 0 {
+		p.chunk = clampChunk(float64(seed))
+	}
+}
+
 // GiveUp reports that MaxNoProgress consecutive attempts made no progress.
 // The caller then fails the job with error class link_unstable.
 func (p *Profile) GiveUp() bool {

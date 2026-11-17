@@ -41,6 +41,7 @@ type ExecServer struct {
 	password     string
 	diagnostics  []*execDiagnostic
 	droppedExecs int
+	connsChanged chan struct{} // closed and replaced whenever a connection ends
 }
 
 // injection describes one fault and the command substring that arms it.
@@ -85,9 +86,10 @@ func StartExecServer(t *testing.T, sandbox string, env []string) *ExecServer {
 	server := &ExecServer{
 		listener: listener, sandbox: sandbox, env: env,
 		hostKey: host.PublicKey(), client: client,
-		conns: make(map[net.Conn]struct{}),
-		holds: make(map[string]chan struct{}),
-		seen:  make(chan string, 64),
+		conns:        make(map[net.Conn]struct{}),
+		holds:        make(map[string]chan struct{}),
+		seen:         make(chan string, 64),
+		connsChanged: make(chan struct{}),
 	}
 	server.wg.Add(1)
 	config.PasswordCallback = func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
@@ -284,4 +286,27 @@ func (s *ExecServer) SetPassword(password string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.password = password
+}
+
+// WaitIdle blocks, without sleeping, until every accepted connection has been
+// served to its end. A command the fixture runs is part of its connection, so
+// once the server is idle no remote command of an earlier session, including
+// one whose transport was cut, is still running or about to change the
+// sandbox.
+func (s *ExecServer) WaitIdle(t *testing.T) {
+	t.Helper()
+	deadline := time.After(30 * time.Second)
+	for {
+		s.mu.Lock()
+		active, changed := len(s.conns), s.connsChanged
+		s.mu.Unlock()
+		if active == 0 {
+			return
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("exec server still serves %d connections", active)
+		}
+	}
 }

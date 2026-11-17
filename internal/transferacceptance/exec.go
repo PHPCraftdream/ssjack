@@ -18,6 +18,8 @@ func (s *ExecServer) serve(conn net.Conn, config *ssh.ServerConfig) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, conn)
+		close(s.connsChanged)
+		s.connsChanged = make(chan struct{})
 		s.mu.Unlock()
 		_ = conn.Close()
 	}()

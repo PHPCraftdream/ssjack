@@ -1,6 +1,6 @@
 # File and directory transfer
 
-Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI. The chunked resumable mode for single files ("Chunked resumable mode" below) is specified here and not implemented yet; until it is, every transfer behaves as the whole-stream mode described in the other sections.
+Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI. The chunked resumable mode for single files ("Chunked resumable mode" below) is implemented in the engine for uploads (whole-stream first attempt, automatic chunked continuation, resume from staging, assembly and publication); the chunked download, the stall watchdog of the first attempt and the manager and status wiring of the chunked-mode fields are not implemented yet, and until they are the job manager reports every transfer as a whole stream.
 
 ## Purpose
 

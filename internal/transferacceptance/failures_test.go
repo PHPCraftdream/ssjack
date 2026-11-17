@@ -15,11 +15,13 @@ import (
 
 // scenarioFailureKilledMidStream kills the transport while bytes are in
 // flight in both directions: nothing may be published and no staging may
-// survive locally or in the sandbox.
+// survive locally or in the sandbox. The uploaded file is below the size that
+// is worth chunking (two minimum chunks), so a dropped stream fails it as
+// before; the chunked continuation of larger files has its own scenarios.
 func scenarioFailureKilledMidStream(t *testing.T) {
 	s := newStack(t, transfercore.DefaultLimits(), nil)
 	var c captured
-	source := SeedPayload(2*1024*1024, 12)
+	source := SeedPayload(256*1024, 12)
 	remoteFile := SeedPayload(2*1024*1024, 13)
 	WriteTree(t, s.rootDir, map[string][]byte{"big/blob.bin": source}, []string{"big"})
 	WriteTree(t, s.sandbox, map[string][]byte{"kill-dl/f.bin": remoteFile}, []string{"kill-dl", "kill-midstream"})

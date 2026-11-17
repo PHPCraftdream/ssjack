@@ -39,6 +39,12 @@ LINUX_SCENARIOS = (
     "chunk-remote-assembly-and-publication",
     "chunk-remote-garbage-collection",
     "chunk-remote-read-stat-and-disk",
+    "chunk-upload-stream-drop-continues-chunked",
+    "chunk-upload-drop-mid-chunk",
+    "chunk-upload-drop-during-assembly",
+    "chunk-upload-resume-by-new-engine",
+    "chunk-upload-source-changed",
+    "chunk-upload-stale-staging-collected",
 )
 BUSYBOX_SCENARIOS = (
     "roundtrip-file-both-directions",
@@ -56,6 +62,12 @@ BUSYBOX_SCENARIOS = (
     "chunk-remote-assembly-and-publication",
     "chunk-remote-garbage-collection",
     "chunk-remote-read-stat-and-disk",
+    "chunk-upload-stream-drop-continues-chunked",
+    "chunk-upload-drop-mid-chunk",
+    "chunk-upload-drop-during-assembly",
+    "chunk-upload-resume-by-new-engine",
+    "chunk-upload-source-changed",
+    "chunk-upload-stale-staging-collected",
 )
 
 

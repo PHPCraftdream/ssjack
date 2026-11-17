@@ -122,7 +122,7 @@ func (r *remoteRunner) execute(ctx context.Context, command string, stdin io.Rea
 		return classed(transfercore.ClassCancelled, msgCancelled, -1)
 	}
 	if err != nil {
-		return classed(transfercore.ClassRemoteFailed, msgTransport, -1)
+		return LinkFailure()
 	}
 	return classError(code)
 }
