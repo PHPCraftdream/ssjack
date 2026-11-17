@@ -22,7 +22,7 @@ func scenarioFailureKilledMidStream(t *testing.T) {
 	s := newStack(t, transfercore.DefaultLimits(), nil)
 	var c captured
 	source := SeedPayload(256*1024, 12)
-	remoteFile := SeedPayload(2*1024*1024, 13)
+	remoteFile := SeedPayload(256*1024, 13)
 	WriteTree(t, s.rootDir, map[string][]byte{"big/blob.bin": source}, []string{"big"})
 	WriteTree(t, s.sandbox, map[string][]byte{"kill-dl/f.bin": remoteFile}, []string{"kill-dl", "kill-midstream"})
 	s.server.ArmKill("cat > ", 64*1024)
