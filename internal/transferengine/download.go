@@ -89,8 +89,12 @@ func (j *downloadJob) streamAttempt() (res Result, link bool, err error) {
 	j.emit(transfercore.PhaseTransfer, 0)
 	writer := newHashingWriter(payload, e.limits.MaxBytes)
 	writer.onWrite = func(n int64) { j.emit(transfercore.PhaseTransfer, n) }
+	// The stall watchdog gives the session its own context: a stream that
+	// delivers no byte for the limit is cut and reported as a link failure.
 	start := e.now()
-	_, err = e.remote.ReadFile(ctx, j.remote, writer)
+	wd, wctx := e.stall.start(ctx)
+	_, err = e.remote.ReadFile(wctx, j.remote, &stallWriter{w: writer, wd: wd})
+	err = j.stallError(err, wd.stop())
 	elapsed := e.now().Sub(start)
 	if err != nil {
 		_ = payload.Close()

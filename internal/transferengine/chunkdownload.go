@@ -406,7 +406,9 @@ func (j *downloadJob) fetchPart(rg transferlink.Range, planned int64) (Result, b
 	}
 	sink := &partSink{w: w}
 	start := j.e.now()
-	got, err := j.e.chunk.ReadRange(j.ctx, j.remote, rg, planned, j.size, sink)
+	wd, wctx := j.e.stall.start(j.ctx)
+	got, err := j.e.chunk.ReadRange(wctx, j.remote, rg, planned, j.size, &stallWriter{w: sink, wd: wd})
+	err = j.stallError(err, wd.stop())
 	elapsed := j.e.now().Sub(start)
 	if err != nil {
 		w.Abort()

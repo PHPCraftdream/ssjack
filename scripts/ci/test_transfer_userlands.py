@@ -53,6 +53,7 @@ LINUX_SCENARIOS = (
     "chunk-download-resume-by-new-engine",
     "chunk-download-source-changed",
     "chunk-download-stale-staging-collected",
+    "chunk-download-stall-detected-and-resumed",
 )
 BUSYBOX_SCENARIOS = (
     "roundtrip-file-both-directions",
@@ -84,6 +85,7 @@ BUSYBOX_SCENARIOS = (
     "chunk-download-resume-by-new-engine",
     "chunk-download-source-changed",
     "chunk-download-stale-staging-collected",
+    "chunk-download-stall-detected-and-resumed",
 )
 
 

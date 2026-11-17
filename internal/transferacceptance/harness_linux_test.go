@@ -43,6 +43,7 @@ func TestTransferBusyboxAcceptance(t *testing.T) {
 	t.Run("chunk-download-resume-by-new-engine", scenarioChunkDownloadResumeByNewEngine)
 	t.Run("chunk-download-source-changed", scenarioChunkDownloadSourceChanged)
 	t.Run("chunk-download-stale-staging-collected", scenarioChunkDownloadStaleStagingCollected)
+	t.Run("chunk-download-stall-detected-and-resumed", scenarioChunkDownloadStallDetectedAndResumed)
 	// Standalone BusyBox ash can resolve SHA applets independently of restricted PATH,
 	// so that fixture cannot establish that hash utilities are absent.
 }

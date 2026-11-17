@@ -10,10 +10,10 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/transferremote"
 )
 
-// DefaultStallLimit is how long a byte-moving session of an upload (the whole
-// stream or one part) may deliver no byte before the stall watchdog aborts it
-// and counts it as a drop (docs/FILE-TRANSFER.md, "First attempt and
-// measurements"). Options.StallLimit overrides it.
+// DefaultStallLimit is how long a byte-moving session of a single-file upload
+// or download (the whole stream or one part) may deliver no byte before the
+// stall watchdog aborts it and counts it as a drop (docs/FILE-TRANSFER.md,
+// "First attempt and measurements"). Options.StallLimit overrides it.
 const DefaultStallLimit = 60 * time.Second
 
 // StallTimer is the timer handle the watchdog drives. *time.Timer satisfies it.
@@ -139,17 +139,45 @@ func (s *stallReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// stallError turns the cancellation caused by the watchdog into the link
+// stallWriter reports the progress of the sink to the watchdog, the download
+// counterpart of stallReader. The remote output copy writes what the link
+// delivered, then reads again, so a write that the sink accepted means the
+// session moved a byte and re-arms the timer, while a link that delivers
+// nothing stops the writes and lets the limit run out.
+type stallWriter struct {
+	w  io.Writer
+	wd *watchdog
+}
+
+func (s *stallWriter) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if n > 0 {
+		s.wd.kick()
+	}
+	return n, err
+}
+
+// stallFailure turns the cancellation caused by the watchdog into the link
 // failure it stands for, so the planner sees a stall exactly like a drop. A
-// cancel of the job's own context keeps its class: the manager's cancel is a
-// cancel even when the watchdog fired in the same instant. An error that is
-// not a cancellation (the remote answered first) is left alone.
-func (j *uploadJob) stallError(err error, stalled bool) error {
-	if err == nil || !stalled || j.ctx.Err() != nil {
+// cancel of the job's own context (jobCtx) keeps its class: the manager's
+// cancel is a cancel even when the watchdog fired in the same instant. An
+// error that is not a cancellation (the remote answered first) is left alone.
+func stallFailure(jobCtx context.Context, err error, stalled bool) error {
+	if err == nil || !stalled || jobCtx.Err() != nil {
 		return err
 	}
 	if transfercore.ClassOf(err) != transfercore.ClassCancelled {
 		return err
 	}
 	return transferremote.LinkFailure()
+}
+
+// stallError is stallFailure for an upload session.
+func (j *uploadJob) stallError(err error, stalled bool) error {
+	return stallFailure(j.ctx, err, stalled)
+}
+
+// stallError is stallFailure for a download session.
+func (j *downloadJob) stallError(err error, stalled bool) error {
+	return stallFailure(j.ctx, err, stalled)
 }
