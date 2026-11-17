@@ -1,6 +1,6 @@
 # File and directory transfer
 
-Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI. The chunked resumable mode for single files ("Chunked resumable mode" below) is implemented in the engine for both directions (whole-stream first attempt, automatic chunked continuation, resume from staging, assembly and publication); the stall watchdog covers both directions; the profile expiry and the cleanup of leftover assembled files are part of the upload side. The manager and status wiring of the chunked-mode fields is not implemented yet, and until the wiring exists the job manager reports every transfer as a whole stream.
+Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI. The chunked resumable mode for single files ("Chunked resumable mode" below) is implemented in the engine for both directions (whole-stream first attempt, automatic chunked continuation, resume from staging, assembly and publication); the stall watchdog covers both directions; the profile expiry and the cleanup of leftover assembled files are part of the upload side. The job manager and `transfer_status` carry the chunked-mode fields, and the manager keeps one engine (and so one link profile) per target for all its jobs.
 
 ## Purpose
 
@@ -36,9 +36,34 @@ The kind (file or directory) is taken from the source, never from the caller. A 
 
 A start call returns `{"job_id": "..."}` immediately. `transfer_cancel` returns `{"cancelled": true|false}`; `false` means the job had already finished.
 
-`transfer_status` returns exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free), and for file transfers the chunked-mode fields `mode` (`stream`, `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` (all integers except `mode`; semantics in "Chunked resumable mode"). Optional fields are omitted while absent.
+`transfer_status` returns exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free), and for file transfers the chunked-mode fields `mode` (`stream`, `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` (all integers except `mode`; semantics in "Chunked resumable mode"). Optional fields are omitted while absent (an omitted count is zero).
+
+Rules of the chunked-mode fields, applied by the manager to what the engine reports:
+
+- They describe single-file transfers only; a directory never carries them, nor does a job that failed before its first attempt (a refusal in the preflight, a failed engine build).
+- An empty mode in an engine report means a plain stream with one attempt: a file job reports `mode` `stream` and `attempts` `1`, and no chunk counts, bytes per second or chunk size, until it leaves the plain first stream. A running job shows the live values of the engine's last report, so a chunked job shows its part progress while it runs; a report without a mode (the preflight, a late phase change) keeps the values already known.
+- A finished chunked job (done or failed) carries the values of the engine's result. A failed chunked job carries `bytes` (see next rule), the `link_unstable` or other error class and the chunk fields, so the caller sees how far it got and that a retry resumes.
+- `bytes` never decreases within a job: the manager publishes the larger of the value it already published and the engine's. After a failure it is therefore the larger of the verified bytes at the destination side and the bytes the last stream moved. A finished directory is the one exception: its running figure counts archive framing, so its final `bytes` is the manifest total.
+- Only a fixed mode name (`stream`, `chunked`) and plain integers are copied from the engine. The `message` is chosen from the error class alone (for `link_unstable`: `transfer link was too unstable to finish; a retry can resume`); no text of the engine, the transport or the remote ever reaches the record.
+
+A running chunked upload, after a drop switched the job from the stream to chunks:
+
+```json
+{"job_id":"…","state":"running","direction":"upload","phase":"transfer","files":0,"dirs":0,"bytes":52428800,
+ "mode":"chunked","chunk_bytes":4194304,"chunks_done":12,"chunks_total":64,"attempts":3,"bytes_per_second":1310720}
+```
+
+The same job after 8 consecutive attempts without progress; its parts stay for a retry:
+
+```json
+{"job_id":"…","state":"failed","direction":"upload","kind":"file","files":0,"dirs":0,"bytes":52428800,
+ "error_class":"link_unstable","message":"transfer link was too unstable to finish; a retry can resume",
+ "mode":"chunked","chunk_bytes":1048576,"chunks_done":50,"chunks_total":64,"attempts":11,"bytes_per_second":98304}
+```
 
 Manager bounds: at most two concurrent jobs; a job is refused while another job targets the same destination (root and root-relative path for downloads, target and remote path for uploads); at most 64 records are retained, evicting the oldest finished first; unknown job ids refuse with a fixed message.
+
+One engine per target. The manager builds the engine of a target on its first job, through the keeper's build callback (concurrent first uses build it once; a failed build is not remembered, so the next job tries again) and runs every later job of that target on the same engine. The engine owns the link profile, so what one job learned about a link (throughput, shortest connection lifetime, chunk size, mode) steers the next job to that target; targets never share an engine or a profile. The engine keeps the target name for the chunked staging key.
 
 ## Transport
 
@@ -192,7 +217,7 @@ Remote exit codes of the chunked templates beyond the shared ones: 26 the stagin
 
 ### Status fields
 
-`mode` (`stream`, `chunked`), `chunk_bytes` (the current `S`), `chunks_done` (parts verified so far, including those found on resume), `chunks_total` (`chunks_done` plus an estimate of the parts still needed at the current `S`, recomputed as `S` changes), `attempts`, and `bytes_per_second` (the rounded `B`) are plain integers and strings, never content, paths or remote output; absent fields are omitted. `bytes` counts bytes verified at the destination side, including bytes found on resume, and is monotone within a job. `link_unstable` has the fixed message `transfer link was too unstable to finish; a retry can resume`.
+`mode` (`stream`, `chunked`), `chunk_bytes` (the current `S`), `chunks_done` (parts verified so far, including those found on resume), `chunks_total` (`chunks_done` plus an estimate of the parts still needed at the current `S`, recomputed as `S` changes), `attempts`, and `bytes_per_second` (the rounded `B`) are plain integers and strings, never content, paths or remote output; absent fields are omitted. `bytes` counts bytes verified at the destination side, including bytes found on resume, and is monotone within a job (enforced by the engine and again by the manager, see "Job and status schema"). `link_unstable` has the fixed message `transfer link was too unstable to finish; a retry can resume`.
 
 ## Limits
 
@@ -200,7 +225,7 @@ Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 
 
 ## Cancellation and lifetime
 
-`transfer_cancel` cancels the job context, which closes the SSH session and aborts local I/O. Closing the connection does not prove detached remote processes stopped; the remote command is a plain `cat`/`tar` that ends on stdin or stdout closure, and staging cleanup is best-effort and reported. Closing the keeper session cancels all transfers. Job records and link profiles are RAM-only and not persisted. A chunked file transfer interrupted by a link failure, by closing the keeper or by a keeper restart leaves its staging directory on disk by design; no RAM state is needed to continue, because the next identical call derives the same staging key and resumes from the parts found there. `transfer_cancel` removes the job's staging directory instead (see "Staging lifecycle and garbage collection").
+`transfer_cancel` cancels the job context, which closes the SSH session and aborts local I/O. Closing the connection does not prove detached remote processes stopped; the remote command is a plain `cat`/`tar` that ends on stdin or stdout closure, and staging cleanup is best-effort and reported. Closing the keeper session cancels all transfers. Job records and link profiles are RAM-only and not persisted. A chunked file transfer interrupted by a link failure (`link_unstable` or another drop) or by the keeper process ending abruptly (a crash, a kill, a power loss) leaves its staging directory on disk by design; no RAM state is needed to continue, because the next identical call derives the same staging key and resumes from the parts found there, also with a new keeper process and a new `job_id`. `transfer_cancel` removes the job's staging directory instead (see "Staging lifecycle and garbage collection"): the manager cancels the job context and the engine, which sees a cancelled context, removes its own staging and reports `cancelled`; the manager reports the engine's class as it is. Closing the keeper session cancels every running job the same way, so a graceful close removes the staging of its running chunked jobs like a `transfer_cancel`.
 
 ## Threat model
 
@@ -238,7 +263,7 @@ Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 
    - parts of different sizes coexist, overlapping or oversized parts are ignored, and a gap off the `S` grid is read with the `tail`/`head` primitive and verified;
    - overwrite and no-overwrite publication after assembly behave as for a stream, and a failed overwrite leaves the old destination intact;
    - the capability probe selects `dd` or `tail`/`head` on GNU, BusyBox and BSD/macOS, and a target without them keeps whole-stream behaviour;
-   - status exposes `mode`, `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` and never content or a path;
+   - status exposes `mode`, `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` and never content or a path (manager unit tests with fake engines: one engine per target and a single build under concurrent first use, a failed build not cached, live progress of a running job, monotone bytes, no chunk fields for directories, `link_unstable` with its fixed message, cancel ending as `cancelled`, a link failure failing with its class and chunk fields so that a retry can start; the bridge tests pin the output schema and descriptions);
    - stall watchdog (upload): a connection that stays open and moves nothing (real stack, `internal/faultproxy` freezing the link after an exact byte count) is aborted after the inactivity limit during the stream and during a part, counted as a drop, continues chunked and publishes byte-exact; unit tests on a virtual clock cover firing, steady slow progress not firing, firing in a stream and in a part, and the manager's cancel staying `cancelled`;
    - leftover assembly: `assembled.<rnd>.tmp` files planted in a staging directory are removed and reported by the next listing, before any part is sent or any assembly starts, other names and the parts are untouched, and the transfer completes;
    - profile expiry: a profile unused for one hour is reset to unknown before the next decision (virtual clock); every use restarts the hour;

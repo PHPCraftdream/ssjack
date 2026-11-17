@@ -66,6 +66,31 @@ func kindName(kind transferengine.Kind) string {
 	}
 }
 
+// chunkReport is the content-free chunked-mode part of a job record: a mode
+// name and plain integers, zero while absent.
+type chunkReport struct {
+	mode           string
+	chunkBytes     int64
+	chunksDone     int
+	chunksTotal    int
+	attempts       int
+	bytesPerSecond int64
+}
+
+// validMode reports whether the engine named a mode the status may carry.
+func validMode(mode string) bool {
+	return mode == transferengine.ModeStream || mode == transferengine.ModeChunked
+}
+
+// chunkReportOf copies the chunked-mode fields of a Progress or Result,
+// dropping negative numbers.
+func chunkReportOf(mode string, chunkBytes int64, done, total, attempts int, bps int64) chunkReport {
+	return chunkReport{
+		mode: mode, chunkBytes: max(chunkBytes, 0), chunksDone: max(done, 0), chunksTotal: max(total, 0),
+		attempts: max(attempts, 0), bytesPerSecond: max(bps, 0),
+	}
+}
+
 type job struct {
 	id        string
 	direction string
@@ -74,10 +99,57 @@ type job struct {
 	done      chan struct{}
 	mu        sync.Mutex
 	phase     string
-	bytes     int64
+	high      int64 // the largest bytes value published so far; never decreases
+	rep       chunkReport
 	state     jobState
 	result    transferengine.Result
 	errClass  transfercore.Class
+}
+
+// observe records one engine progress report. Bytes never decrease. The
+// chunked-mode fields are replaced only by a report that carries a mode: a
+// report without one (a directory, or the preflight of a file) keeps what is
+// known.
+func (j *job) observe(p transferengine.Progress) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.phase = p.Phase
+	j.high = max(j.high, p.Bytes)
+	if validMode(p.Mode) {
+		j.rep = chunkReportOf(p.Mode, p.ChunkBytes, p.ChunksDone, p.ChunksTotal, p.Attempts, p.BytesPerSecond)
+	}
+}
+
+// finish records the outcome of the engine call.
+//
+// Bytes never decrease: the final value is the larger of the verified bytes of
+// the result and the bytes already published. A finished directory is the one
+// exception: its running figure counts tar framing, so the manifest total of
+// its result is authoritative. A result carrying a mode (a file transfer that
+// left the plain first stream, also a failed one) replaces the last progress
+// report; a plain successful file stream is one attempt in stream mode.
+func (j *job) finish(result transferengine.Result, state jobState, class transfercore.Class) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.result, j.state, j.errClass = result, state, class
+	if state == stateDone && result.Kind == transferengine.KindDir {
+		j.high = result.Bytes
+		j.rep = chunkReport{}
+		return
+	}
+	j.high = max(j.high, result.Bytes)
+	switch {
+	case validMode(result.Mode):
+		j.rep = chunkReportOf(result.Mode, result.ChunkBytes, result.ChunksDone, result.ChunksTotal, result.Attempts, result.BytesPerSecond)
+	case state == stateDone && j.rep.mode == "":
+		j.rep = chunkReport{mode: transferengine.ModeStream, attempts: 1}
+	}
+}
+
+// engineSlot holds the lazily built engine of one target.
+type engineSlot struct {
+	mu     sync.Mutex
+	engine Engine
 }
 
 // Manager runs bounded file-transfer jobs over approved roots and targets.
@@ -90,6 +162,7 @@ type Manager struct {
 	targets  map[string]bool
 	limits   transfercore.Limits
 	build    func(string) (Engine, error)
+	engines  map[string]*engineSlot
 	jobs     map[string]*job
 	dests    map[string]string
 	order    []string
@@ -100,7 +173,9 @@ type Manager struct {
 }
 
 // NewManager roots transfers in the owner-registered roots and approved
-// targets; build returns the engine for one target name.
+// targets; build returns the engine for one target name. The manager calls it
+// once per target (a failed call is retried by the next job) and shares the
+// engine, with its link profile, between all jobs of that target.
 func NewManager(roots []*transferlocal.Root, targets []string, limits transfercore.Limits, build func(string) (Engine, error)) (*Manager, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, errors.New("transfer limits are invalid")
@@ -118,7 +193,8 @@ func NewManager(roots []*transferlocal.Root, targets []string, limits transferco
 	m := &Manager{
 		ctx: ctx, cancel: cancel, roots: collection, hasRoots: len(roots) > 0,
 		targets: make(map[string]bool), limits: limits, build: build,
-		jobs: make(map[string]*job), dests: make(map[string]string),
+		engines: make(map[string]*engineSlot),
+		jobs:    make(map[string]*job), dests: make(map[string]string),
 	}
 	for _, target := range targets {
 		if target != "" {
@@ -213,21 +289,44 @@ func (m *Manager) evictOldestFinishedLocked() bool {
 	return false
 }
 
+// engineFor returns the one engine of a target, building it on first use. Every
+// job of the target shares it, so what the engine learns about the link carries
+// over from job to job. Concurrent first uses build once; a failed build is not
+// cached, and the next job builds again.
+func (m *Manager) engineFor(target string) (Engine, error) {
+	m.mu.Lock()
+	slot := m.engines[target]
+	if slot == nil {
+		slot = &engineSlot{}
+		m.engines[target] = slot
+	}
+	m.mu.Unlock()
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.engine != nil {
+		return slot.engine, nil
+	}
+	engine, err := m.build(target)
+	if err != nil {
+		return nil, err
+	}
+	if engine == nil {
+		return nil, errors.New("transfer engine is not configured")
+	}
+	slot.engine = engine
+	return engine, nil
+}
+
 func (m *Manager) run(ctx context.Context, j *job, root *transferlocal.Root, input StartInput, download bool) {
 	defer m.wg.Done()
 	defer j.cancel()
 	var result transferengine.Result
-	engine, err := m.build(input.Target)
+	engine, err := m.engineFor(input.Target)
 	if err == nil {
-		progress := func(p transferengine.Progress) {
-			j.mu.Lock()
-			j.phase, j.bytes = p.Phase, p.Bytes
-			j.mu.Unlock()
-		}
 		if download {
-			result, err = engine.Download(ctx, root, input.Remote, input.Local, input.Overwrite, progress)
+			result, err = engine.Download(ctx, root, input.Remote, input.Local, input.Overwrite, j.observe)
 		} else {
-			result, err = engine.Upload(ctx, root, input.Local, input.Remote, input.Overwrite, progress)
+			result, err = engine.Upload(ctx, root, input.Local, input.Remote, input.Overwrite, j.observe)
 		}
 	}
 	var class transfercore.Class
@@ -244,9 +343,7 @@ func (m *Manager) run(ctx context.Context, j *job, root *transferlocal.Root, inp
 	m.active--
 	delete(m.dests, j.dest)
 	m.mu.Unlock()
-	j.mu.Lock()
-	j.result, j.errClass, j.state = result, class, state
-	j.mu.Unlock()
+	j.finish(result, state, class)
 	close(j.done)
 }
 
@@ -258,23 +355,25 @@ func (m *Manager) status(id string) (StatusOutput, error) {
 		return StatusOutput{}, errUnknownJob
 	}
 	out := StatusOutput{JobID: j.id, State: string(stateRunning), Direction: j.direction}
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	select {
 	case <-j.done:
-		j.mu.Lock()
 		out.State = string(j.state)
 		out.Kind = kindName(j.result.Kind)
-		out.Files, out.Dirs, out.Bytes, out.SHA256 = j.result.Files, j.result.Dirs, j.result.Bytes, j.result.SHA256
+		out.Files, out.Dirs, out.SHA256 = j.result.Files, j.result.Dirs, j.result.SHA256
 		out.ManifestSHA256 = j.result.ManifestSHA256
 		if j.state != stateDone {
 			out.ErrorClass = string(j.errClass)
 			out.Message = statusMessage(j.errClass)
 		}
-		j.mu.Unlock()
 	default:
-		j.mu.Lock()
-		out.Phase, out.Bytes = j.phase, j.bytes
-		j.mu.Unlock()
+		out.Phase = j.phase
 	}
+	out.Bytes = j.high
+	out.Mode, out.ChunkBytes = j.rep.mode, j.rep.chunkBytes
+	out.ChunksDone, out.ChunksTotal = j.rep.chunksDone, j.rep.chunksTotal
+	out.Attempts, out.BytesPerSecond = j.rep.attempts, j.rep.bytesPerSecond
 	return out, nil
 }
 

@@ -51,7 +51,10 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 			}
 			return broker.Result(transfer.StartOutput{JobID: "transfer-job"}, nil)
 		case "transfer_status":
-			return broker.Result(transfer.StatusOutput{JobID: "transfer-job", State: "done", Direction: "upload", Kind: "file", Files: 1, Bytes: 3, SHA256: "aa"}, nil)
+			return broker.Result(transfer.StatusOutput{
+				JobID: "transfer-job", State: "done", Direction: "upload", Kind: "file", Files: 1, Bytes: 3, SHA256: "aa",
+				Mode: "chunked", ChunkBytes: 262144, ChunksDone: 2, ChunksTotal: 5, Attempts: 3, BytesPerSecond: 1000,
+			}, nil)
 		case "transfer_cancel":
 			return broker.Result(transfer.CancelOutput{Cancelled: true}, nil)
 		default:
@@ -108,6 +111,73 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 		data, err := json.Marshal(result)
 		if err != nil || !strings.Contains(string(data), call.text) || strings.Contains(string(data), auth.Token) {
 			t.Fatalf("unexpected response for %s", call.name)
+		}
+	}
+	chunkFields := []string{"mode", "chunk_bytes", "chunks_done", "chunks_total", "attempts", "bytes_per_second"}
+	byName := map[string]*mcp.Tool{}
+	for _, tool := range tools.Tools {
+		byName[tool.Name] = tool
+	}
+	for name, wants := range map[string][]string{
+		"remote_upload":   {"link_unstable", "resume", "twice the file size", "Directories are never chunked", "transfer_cancel removes"},
+		"remote_download": {"link_unstable", "resume", "twice the file size", "Directories are never chunked", "transfer_cancel removes"},
+		"transfer_status": append([]string{"link_unstable", "refused_path", "never decreases", "manifest_sha256"}, chunkFields...),
+		"transfer_cancel": {"removed", "link failure keeps"},
+	} {
+		tool := byName[name]
+		if tool == nil {
+			t.Fatalf("tool %s is not listed", name)
+		}
+		if len(tool.Description) > 2000 || strings.Contains(tool.Description, `:\`) {
+			t.Fatalf("%s description is unbounded or carries a local path: %q", name, tool.Description)
+		}
+		for _, want := range wants {
+			if !strings.Contains(tool.Description, want) {
+				t.Fatalf("%s description lacks %q: %q", name, want, tool.Description)
+			}
+		}
+	}
+	schemaData, err := json.Marshal(byName["transfer_status"].OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal(schemaData, &schema); err != nil {
+		t.Fatalf("transfer_status output schema is not an object schema: %v", err)
+	}
+	required := map[string]bool{}
+	for _, name := range schema.Required {
+		required[name] = true
+	}
+	for _, field := range chunkFields {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("transfer_status output schema lacks %q: %s", field, schemaData)
+		}
+		if required[field] {
+			t.Fatalf("transfer_status output schema requires the optional field %q", field)
+		}
+	}
+	status, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "transfer_status", Arguments: map[string]any{"job_id": "transfer-job"}})
+	if err != nil || status.IsError {
+		t.Fatalf("transfer_status: %+v, %v", status, err)
+	}
+	structuredData, err := json.Marshal(status.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var structured map[string]any
+	if err := json.Unmarshal(structuredData, &structured); err != nil {
+		t.Fatal(err)
+	}
+	for field, want := range map[string]any{
+		"mode": "chunked", "chunk_bytes": float64(262144), "chunks_done": float64(2), "chunks_total": float64(5),
+		"attempts": float64(3), "bytes_per_second": float64(1000),
+	} {
+		if structured[field] != want {
+			t.Fatalf("structured %s = %v, want %v: %s", field, structured[field], want, structuredData)
 		}
 	}
 	denied, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_exec", Arguments: map[string]any{"target": "other", "command": "echo hello"}})

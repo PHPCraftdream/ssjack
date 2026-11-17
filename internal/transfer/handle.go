@@ -38,6 +38,16 @@ type StatusOutput struct {
 	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
 	ErrorClass     string `json:"error_class,omitempty"`
 	Message        string `json:"message,omitempty"`
+
+	// The chunked-mode fields are content-free: a mode name and plain
+	// integers. They describe single-file transfers only and are omitted while
+	// absent (a directory never carries them; an omitted count is zero).
+	Mode           string `json:"mode,omitempty" jsonschema:"How a single-file transfer moves its bytes: stream (one whole-file stream) or chunked (resumable parts); omitted for directories"`
+	ChunkBytes     int64  `json:"chunk_bytes,omitempty" jsonschema:"Current chunk size in bytes while chunked; omitted otherwise"`
+	ChunksDone     int    `json:"chunks_done,omitempty" jsonschema:"Parts verified at the destination so far, including parts found from an earlier call; omitted while zero"`
+	ChunksTotal    int    `json:"chunks_total,omitempty" jsonschema:"chunks_done plus an estimate of the parts still needed at the current chunk size; omitted while zero"`
+	Attempts       int    `json:"attempts,omitempty" jsonschema:"Number of attempts so far: each stream and each chunk session counts"`
+	BytesPerSecond int64  `json:"bytes_per_second,omitempty" jsonschema:"Rounded link throughput estimate in bytes per second; omitted while unknown"`
 }
 
 type CancelInput struct {
