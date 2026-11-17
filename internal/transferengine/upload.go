@@ -126,8 +126,12 @@ func (j *uploadJob) streamAttempt() (res Result, link bool, err error) {
 			j.emit(transfercore.PhaseTransfer, n)
 		}
 	}
+	// The stall watchdog gives the session its own context: a stream that
+	// moves no byte for the limit is cut and reported as a link failure.
 	writeStart := e.now()
-	_, err = e.remote.WriteFile(ctx, stagedPath, reader, j.executable)
+	wd, wctx := e.stall.start(ctx)
+	_, err = e.remote.WriteFile(wctx, stagedPath, &stallReader{r: reader, w: wd}, j.executable)
+	err = j.stallError(err, wd.stop())
 	elapsed := e.now().Sub(writeStart)
 	if err != nil {
 		if reader.failure() != nil {

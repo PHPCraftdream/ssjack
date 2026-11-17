@@ -200,17 +200,35 @@ printf 'SSJACK-PART %s stored\n' "$wc_n"
 // listBody validates the marker, removes stale temporary files and prints
 // every part-* regular file with its size (`wc -c` on stdin, so names never
 // pass through wc). Entries are counted before filtering and bounded by $max.
-// Output: `SSJACK-LIST 1`, `<size> <name>` lines, then `SSJACK-END <n>` or
-// `SSJACK-OVERFLOW`.
+//
+// Besides the part temporaries it removes every leftover assembled.<rnd>.tmp
+// (<rnd> is the 16 hex digits of an assembly's random suffix): the exit trap of
+// an assembly does not run on every kill path, and each such file is as large as
+// the whole file. A listing runs between the attempts of one job, never during
+// its own assembly, so no file of the current attempt exists yet. The number
+// removed is reported, and the removal precedes any disk-space decision of the
+// caller, so the preflight never has to account for these files.
+//
+// Output: `SSJACK-LIST 1`, `SSJACK-STALE <n>`, `<size> <name>` lines, then
+// `SSJACK-END <n>` or `SSJACK-OVERFLOW`.
 const listBody = `stage_gate
 for f in "$stage"/part-*.tmp; do
 	if [ -e "$f" ] || [ -L "$f" ]; then
 		rm -f "$f" 2>/dev/null || :
 	fi
 done
+stale=0
+for f in "$stage"/assembled.????????????????.tmp; do
+	if [ -e "$f" ] || [ -L "$f" ]; then
+		if rm -f "$f" 2>/dev/null; then
+			stale=$((stale + 1))
+		fi
+	fi
+done
 count=0
 listed=0
 printf 'SSJACK-LIST 1\n'
+printf 'SSJACK-STALE %s\n' "$stale"
 for f in "$stage"/part-*; do
 	if [ ! -e "$f" ] && [ ! -L "$f" ]; then
 		continue

@@ -2,7 +2,9 @@
 // a server (for ssjack: the engine's SSH client and a test sshd) and injects
 // connection faults on purpose: it cuts a connection after an exact number of
 // forwarded bytes, after a duration, throttles it to a byte rate, or refuses
-// connections outright.
+// connections outright, or freezes it silently after an exact number of bytes
+// or a duration (StallAfterBytes, StallAfter): the socket stays open and
+// nothing moves, the failure mode that only an inactivity timer can detect.
 //
 // Faults are described by Rule values (a connection selector plus Fault
 // values) and are resolved once when a connection is accepted. SetRules
@@ -20,9 +22,9 @@
 // time itself and waits for the proxy with WaitPending.
 //
 // Observability needs no sleeping either: Proxy.WaitConn waits until the k-th
-// connection exists, Conn.Halted closes when a fault fired and Conn.Done
-// closes when the connection is fully released. Proxy.Close joins every
-// goroutine the proxy started.
+// connection exists, Conn.Halted closes when a fault fired, Conn.Stalled closes
+// when a stall engaged and Conn.Done closes when the connection is fully
+// released. Proxy.Close joins every goroutine the proxy started.
 //
 // A cut is clean: the proxy half-closes both peers after the last forwarded
 // byte, so the peers read every byte that was counted as forwarded and then
@@ -80,6 +82,8 @@ const (
 	kindDropBytes faultKind = iota + 1
 	kindDropAfter
 	kindThrottle
+	kindStallBytes
+	kindStallAfter
 )
 
 // Fault is one fault behaviour. Build it with DropAfterBytes, DropAfter,
@@ -109,6 +113,26 @@ func DropAfter(d time.Duration) Fault {
 	return Fault{kind: kindDropAfter, d: d}
 }
 
+// StallAfterBytes freezes the connection once n bytes were forwarded in total
+// in the directions selected by dir: exactly n bytes cross, then nothing more
+// is forwarded in either direction, and the connection stays open. Bytes the
+// peers send afterwards are read and discarded (never forwarded, never
+// answered), so neither side sees a reset or an EOF from the proxy: a silent
+// break, as when a middlebox loses the path but keeps the socket state. When a
+// peer closes its own end the close is passed on as usual, so a client that
+// gives up (its stall watchdog fired) lets the upstream wind down. n == 0
+// freezes the connection right after accept. Conn.Drop, a DropAfter fault and
+// Proxy.Close still end a frozen connection.
+func StallAfterBytes(dir Direction, n int64) Fault {
+	return Fault{kind: kindStallBytes, dir: dir, n: n}
+}
+
+// StallAfter freezes the connection d after it was accepted, measured by the
+// proxy's Clock, with the semantics of StallAfterBytes.
+func StallAfter(d time.Duration) Fault {
+	return Fault{kind: kindStallAfter, d: d}
+}
+
 // Throttle limits each selected direction of the connection to bytesPerSecond
 // with a token bucket whose capacity is one second of traffic.
 func Throttle(dir Direction, bytesPerSecond int64) Fault {
@@ -126,14 +150,14 @@ const maxBurst = int64(1) << 32
 
 func (f Fault) validate() error {
 	switch f.kind {
-	case kindDropBytes:
+	case kindDropBytes, kindStallBytes:
 		if !f.dir.valid() {
 			return errors.New("faultproxy: invalid direction")
 		}
 		if f.n < 0 {
 			return fmt.Errorf("faultproxy: negative byte limit %d", f.n)
 		}
-	case kindDropAfter:
+	case kindDropAfter, kindStallAfter:
 		if f.d < 0 {
 			return fmt.Errorf("faultproxy: negative duration %s", f.d)
 		}

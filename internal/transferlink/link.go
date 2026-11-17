@@ -52,6 +52,9 @@ const (
 
 	// DefaultWindow is how long a drop stays in the profile.
 	DefaultWindow = 5 * time.Minute
+	// DefaultIdleExpiry is how long a profile may go unused before everything
+	// it learned is discarded (docs/FILE-TRANSFER.md, "Link profile").
+	DefaultIdleExpiry = time.Hour
 
 	maxDrops  = 8   // bounded history of recent drops
 	ewmaAlpha = 0.3 // weight of a new sample
@@ -105,6 +108,9 @@ type Config struct {
 	Now func() time.Time
 	// Window is how long a drop is remembered; zero means DefaultWindow.
 	Window time.Duration
+	// IdleExpiry is how long the profile may go unused before it is reset to
+	// unknown; zero means DefaultIdleExpiry. See Profile for what counts as use.
+	IdleExpiry time.Duration
 }
 
 // Step is the decision for the next attempt.
@@ -138,10 +144,25 @@ type drop struct {
 }
 
 // Profile is the per-target link knowledge. RAM only; safe for concurrent use.
+//
+// Expiry. A profile that was not used for IdleExpiry (one hour by default) is
+// stale: the next decision finds it reset to unknown, exactly as new. Every
+// call counts as use and restarts the idle time, except the two pure reads
+// Snapshot and Mode, which show a stale profile as reset but do not refresh it.
+// The reset is applied lazily, by the calls that start an attempt or a transfer
+// (Decide, UseChunks, NextChunk, GiveUp, ForceChunked) and by the two reads; the
+// calls that report an attempt's outcome (StreamProgress, ChunkDone,
+// ConnectionSetup, Dropped, BeginTransfer, Succeeded) only refresh, so a single
+// attempt that outlasts the limit never loses the state of its own job. A caller
+// therefore starts every transfer with a decision call before it reports
+// anything.
 type Profile struct {
 	mu     sync.Mutex
 	now    func() time.Time
 	window time.Duration
+	idle   time.Duration
+
+	lastUsed time.Time // zero: never used or just reset
 
 	speed      float64 // bytes/s, 0 = unknown
 	setup      float64 // seconds, 0 = unknown
@@ -156,14 +177,39 @@ type Profile struct {
 
 // NewProfile returns an empty profile in stream mode.
 func NewProfile(cfg Config) *Profile {
-	p := &Profile{now: cfg.Now, window: cfg.Window}
+	p := &Profile{now: cfg.Now, window: cfg.Window, idle: cfg.IdleExpiry}
 	if p.now == nil {
 		p.now = time.Now
 	}
 	if p.window <= 0 {
 		p.window = DefaultWindow
 	}
+	if p.idle <= 0 {
+		p.idle = DefaultIdleExpiry
+	}
 	return p
+}
+
+// expireLocked resets a profile that has been unused for the idle limit.
+func (p *Profile) expireLocked() {
+	if p.lastUsed.IsZero() || p.now().Sub(p.lastUsed) < p.idle {
+		return
+	}
+	p.speed, p.setup, p.dropSpeed, p.chunk = 0, 0, 0, 0
+	p.drops = nil
+	p.mode = ModeStream
+	p.okStreak, p.stalled, p.bestStream = 0, 0, 0
+	p.lastUsed = time.Time{}
+}
+
+// touchLocked records a use.
+func (p *Profile) touchLocked() { p.lastUsed = p.now() }
+
+// decisionLocked starts a decision: stale knowledge is dropped, then the call
+// counts as use.
+func (p *Profile) decisionLocked() {
+	p.expireLocked()
+	p.touchLocked()
 }
 
 // StreamProgress feeds one throughput sample: bytes moved in elapsed data
@@ -172,6 +218,7 @@ func NewProfile(cfg Config) *Profile {
 func (p *Profile) StreamProgress(bytes int64, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.touchLocked()
 	p.observeLocked(bytes, elapsed)
 }
 
@@ -184,6 +231,7 @@ func (p *Profile) ChunkDone(bytes int64, elapsed time.Duration) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.touchLocked()
 	p.pruneLocked()
 	p.observeLocked(bytes, elapsed)
 	p.stalled = 0
@@ -206,6 +254,7 @@ func (p *Profile) ConnectionSetup(d time.Duration) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.touchLocked()
 	s := d.Seconds()
 	if p.setup == 0 {
 		p.setup = s
@@ -232,6 +281,7 @@ func (p *Profile) Dropped(bytes int64, life time.Duration, kind FailureKind) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.touchLocked()
 	p.pruneLocked()
 	if bytes < 0 {
 		bytes = 0
@@ -276,6 +326,7 @@ func (p *Profile) Succeeded() {
 func (p *Profile) BeginTransfer() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.touchLocked()
 	p.stalled = 0
 	p.bestStream = 0
 	p.mode = ModeStream
@@ -291,6 +342,7 @@ func (p *Profile) BeginTransfer() {
 func (p *Profile) ForceChunked(seed int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.decisionLocked()
 	p.mode = ModeChunked
 	p.okStreak = 0
 	if seed > 0 {
@@ -303,13 +355,16 @@ func (p *Profile) ForceChunked(seed int64) {
 func (p *Profile) GiveUp() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.decisionLocked()
 	return p.stalled >= MaxNoProgress
 }
 
-// Mode returns the stored mode (updated by Decide).
+// Mode returns the stored mode (updated by Decide). It is a pure read: it
+// shows a stale profile as reset but does not count as use.
 func (p *Profile) Mode() Mode {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.expireLocked()
 	return p.mode
 }
 
@@ -319,6 +374,7 @@ func (p *Profile) Mode() Mode {
 func (p *Profile) UseChunks(size int64) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.decisionLocked()
 	p.pruneLocked()
 	return p.useChunksLocked(size)
 }
@@ -335,6 +391,7 @@ func (p *Profile) NextChunk(remaining int64) int64 {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.decisionLocked()
 	p.pruneLocked()
 	s := p.effectiveLocked()
 	if s > remaining {
@@ -354,6 +411,7 @@ func (p *Profile) NextChunk(remaining int64) int64 {
 func (p *Profile) Decide(remaining int64) Step {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.decisionLocked()
 	p.pruneLocked()
 	if remaining <= 0 {
 		return Step{Mode: p.mode}
@@ -379,10 +437,12 @@ func (p *Profile) Decide(remaining int64) Step {
 	return Step{Mode: ModeChunked, Len: s}
 }
 
-// Snapshot returns a copy of the current state.
+// Snapshot returns a copy of the current state. It is a pure read: a stale
+// profile is shown reset, and the call does not count as use.
 func (p *Profile) Snapshot() Snapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.expireLocked()
 	p.pruneLocked()
 	t, known := p.surviveLocked()
 	return Snapshot{

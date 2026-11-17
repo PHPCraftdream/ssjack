@@ -45,6 +45,8 @@ LINUX_SCENARIOS = (
     "chunk-upload-resume-by-new-engine",
     "chunk-upload-source-changed",
     "chunk-upload-stale-staging-collected",
+    "chunk-upload-stall-detected-and-resumed",
+    "chunk-upload-leftover-assembly-cleaned",
 )
 BUSYBOX_SCENARIOS = (
     "roundtrip-file-both-directions",
@@ -68,6 +70,8 @@ BUSYBOX_SCENARIOS = (
     "chunk-upload-resume-by-new-engine",
     "chunk-upload-source-changed",
     "chunk-upload-stale-staging-collected",
+    "chunk-upload-stall-detected-and-resumed",
+    "chunk-upload-leftover-assembly-cleaned",
 )
 
 

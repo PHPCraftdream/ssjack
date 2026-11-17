@@ -131,7 +131,16 @@ type StagingListing struct {
 	// Overflow reports more entries than the bound: the staging is corrupt
 	// and should be removed. Parts and Remove are then empty.
 	Overflow bool
+	// StaleAssembled is the number of leftover assembled.<rnd>.tmp files the
+	// listing session found and removed (a killed assembly can leave one behind,
+	// as large as the whole file). They are gone before the listing returns, so
+	// a disk-space decision made after it needs no allowance for them.
+	StaleAssembled int
 }
+
+// staleLinePrefix starts the optional line `SSJACK-STALE <n>` that follows the
+// listing header.
+const staleLinePrefix = "SSJACK-STALE "
 
 // maxListedPartsCap clamps the entry bound for very large byte limits (256
 // GiB of 256 KiB parts), keeping the listing memory bounded.
@@ -179,15 +188,26 @@ func parseStagingListing(data []byte, fileSize int64, maxParts int) (StagingList
 	}
 	last := lines[len(lines)-1]
 	entries := lines[1 : len(lines)-1]
+	stale := 0
+	if len(entries) > 0 {
+		if text, isStale := strings.CutPrefix(entries[0], staleLinePrefix); isStale {
+			n, good := parseCanonical(text)
+			if !good || n > maxListedPartsCap {
+				return StagingListing{}, chunkMalformed()
+			}
+			stale = int(n)
+			entries = entries[1:]
+		}
+	}
 	if last == "SSJACK-OVERFLOW" {
-		return StagingListing{Overflow: true}, nil
+		return StagingListing{Overflow: true, StaleAssembled: stale}, nil
 	}
 	count, ok := strings.CutPrefix(last, "SSJACK-END ")
 	if n, good := parseCanonical(count); !ok || !good || n != int64(len(entries)) {
 		return StagingListing{}, chunkMalformed()
 	}
 	if len(entries) > maxParts {
-		return StagingListing{Overflow: true}, nil
+		return StagingListing{Overflow: true, StaleAssembled: stale}, nil
 	}
 	if fileSize < 0 {
 		fileSize = 0
@@ -222,7 +242,7 @@ func parseStagingListing(data []byte, fileSize int64, maxParts int) (StagingList
 		}
 		return a.Len > b.Len
 	})
-	listing := StagingListing{Remove: remove}
+	listing := StagingListing{Remove: remove, StaleAssembled: stale}
 	var cursor int64
 	for _, c := range candidates {
 		if c.size != c.rng.Len || c.rng.Off < cursor || c.rng.Len > fileSize-c.rng.Off || c.rng.Off > fileSize {

@@ -377,7 +377,9 @@ func (j *uploadJob) sendPart(rg transferlink.Range, planned int64) (Result, bool
 	j.setChunkLen(planned)
 	src := &countedReader{r: io.NewSectionReader(j.file, rg.Off, rg.Len)}
 	start := j.e.now()
-	res, err := j.e.chunk.UploadPart(j.ctx, j.parent, j.key, rg, src)
+	wd, wctx := j.e.stall.start(j.ctx)
+	res, err := j.e.chunk.UploadPart(wctx, j.parent, j.key, rg, &stallReader{r: src, w: wd})
+	err = j.stallError(err, wd.stop())
 	elapsed := j.e.now().Sub(start)
 	if err != nil {
 		return j.sessionFailed(err, src.count(), elapsed, true)

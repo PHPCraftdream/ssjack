@@ -126,6 +126,9 @@ type Stats struct {
 	// manual). Refused connections are counted separately.
 	Dropped int
 	Refused int
+	// Stalled counts connections a stall engaged on, whatever ended them
+	// afterwards.
+	Stalled int
 	// Closed counts connections fully released.
 	Closed int
 	// ClientToServer and ServerToClient sum the forwarded bytes.
@@ -148,6 +151,9 @@ func (p *Proxy) Stats() Stats {
 			stats.Refused++
 		case cs.Reason.isFault():
 			stats.Dropped++
+		}
+		if cs.Stalled {
+			stats.Stalled++
 		}
 		if cs.Closed {
 			stats.Closed++

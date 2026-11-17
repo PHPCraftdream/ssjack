@@ -46,7 +46,9 @@ type ChunkRemote interface {
 	// part-<off>-<len>. The part counts only when PartResult.Stored is true.
 	UploadPart(ctx context.Context, parent, key string, part transferlink.Range, src io.Reader) (PartResult, error)
 	// ListStaging lists the staging directory of a file of fileSize bytes and
-	// builds the coverage; it removes stale temporary files remotely.
+	// builds the coverage; it removes stale temporary files remotely, among them
+	// every leftover assembled.<rnd>.tmp (counted in StagingListing.StaleAssembled),
+	// so the caller's disk preflight after the listing sees the space free.
 	ListStaging(ctx context.Context, parent, key string, fileSize int64) (StagingListing, error)
 	// RemoveStagingEntries removes ignored part entries named by a listing.
 	RemoveStagingEntries(ctx context.Context, parent, key string, names []string) error

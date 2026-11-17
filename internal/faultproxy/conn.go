@@ -20,11 +20,15 @@ var past = time.Unix(1, 0)
 // granted to a write that may still be in flight, written those that were
 // really forwarded; the drop fires on written, so every granted byte is
 // delivered and the cut is exact.
+//
+// A stall limit (StallAfterBytes) is accounted the same way, but reaching it
+// freezes the connection instead of cutting it.
 type limit struct {
 	dir      Direction
 	n        int64
 	reserved int64
 	written  int64
+	stall    bool
 }
 
 type rateSpec struct{ rate, burst int64 }
@@ -43,8 +47,10 @@ type Conn struct {
 	buckets [2]*bucket
 	timers  []Timer
 
-	halted chan struct{} // closed when forwarding stops for any Reason
-	done   chan struct{} // closed when both sockets are released
+	halted    chan struct{} // closed when forwarding stops for any Reason
+	done      chan struct{} // closed when both sockets are released
+	stalled   chan struct{} // closed when a stall engaged: nothing is forwarded any more
+	stallOnce sync.Once
 
 	mu       sync.Mutex
 	upstream net.Conn
@@ -64,6 +70,9 @@ type ConnStats struct {
 	Reason Reason
 	// Halted: forwarding stopped because of Reason.
 	Halted bool
+	// Stalled: a stall engaged; the connection forwarded nothing after that.
+	// It stays true when the connection is cut or closed later.
+	Stalled bool
 	// Closed: both sockets are released.
 	Closed bool
 }
@@ -72,7 +81,7 @@ func newConn(p *Proxy, index int, client net.Conn) *Conn {
 	ctx, cancel := context.WithCancel(p.ctx)
 	return &Conn{
 		p: p, index: index, client: client, ctx: ctx, cancel: cancel,
-		halted: make(chan struct{}), done: make(chan struct{}),
+		halted: make(chan struct{}), done: make(chan struct{}), stalled: make(chan struct{}),
 	}
 }
 
@@ -83,6 +92,11 @@ func (c *Conn) Index() int { return c.index }
 // connection errored or the proxy closed. It stays open when the connection
 // ends on its own.
 func (c *Conn) Halted() <-chan struct{} { return c.halted }
+
+// Stalled is closed when a stall (StallAfterBytes, StallAfter) engaged. The
+// connection is then still open but forwards nothing; it stays open until a
+// peer closes, Drop is called or the proxy closes.
+func (c *Conn) Stalled() <-chan struct{} { return c.stalled }
 
 // Done is closed when the connection is fully released: forwarding stopped,
 // peers had the chance to read every forwarded byte, both sockets closed.
@@ -104,7 +118,7 @@ func (c *Conn) Stats() ConnStats {
 	defer c.mu.Unlock()
 	return ConnStats{
 		Index: c.index, ClientToServer: c.c2s, ServerToClient: c.s2c,
-		Reason: c.reason, Halted: c.stopped, Closed: c.closed,
+		Reason: c.reason, Halted: c.stopped, Closed: c.closed, Stalled: c.isStalled(),
 	}
 }
 
@@ -123,8 +137,12 @@ func (c *Conn) configure(rules []Rule) {
 			switch fault.kind {
 			case kindDropBytes:
 				c.limits = append(c.limits, &limit{dir: fault.dir, n: fault.n})
+			case kindStallBytes:
+				c.limits = append(c.limits, &limit{dir: fault.dir, n: fault.n, stall: true})
 			case kindDropAfter:
 				c.timers = append(c.timers, c.p.clock.AfterFunc(fault.d, func() { c.halt(ReasonDuration) }))
+			case kindStallAfter:
+				c.timers = append(c.timers, c.p.clock.AfterFunc(fault.d, c.engageStall))
 			case kindThrottle:
 				for _, dir := range []Direction{ClientToServer, ServerToClient} {
 					if fault.dir&dir != 0 {
@@ -141,10 +159,29 @@ func (c *Conn) configure(rules []Rule) {
 		}
 	}
 	for _, l := range c.limits {
-		if l.n == 0 {
-			c.halt(ReasonBytes)
-			break
+		if l.n != 0 {
+			continue
 		}
+		if l.stall {
+			c.engageStall()
+			continue
+		}
+		c.halt(ReasonBytes)
+		break
+	}
+}
+
+// engageStall freezes forwarding: from now on the pumps read and discard.
+func (c *Conn) engageStall() {
+	c.stallOnce.Do(func() { close(c.stalled) })
+}
+
+func (c *Conn) isStalled() bool {
+	select {
+	case <-c.stalled:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -310,18 +347,28 @@ func (c *Conn) pump(dir Direction, src, dst net.Conn, tokens *bucket) {
 }
 
 // forward writes data to dst under the byte limits and the throttle. It
-// returns false when forwarding must stop.
+// returns false when forwarding must stop. After a stall engaged it discards
+// the data and returns true, so the pump keeps reading and the sockets stay
+// open.
 func (c *Conn) forward(dir Direction, dst net.Conn, data []byte, tokens *bucket) bool {
 	for len(data) > 0 {
+		if c.isStalled() {
+			return true
+		}
 		want := int64(len(data))
 		if tokens != nil && want > tokens.burst {
 			want = tokens.burst
 		}
 		grant := c.reserve(dir, want)
 		if grant == 0 {
-			// At a byte limit: the write that completes it fires the halt.
-			<-c.halted
-			return false
+			// At a byte limit: the write that completes it fires the halt, or,
+			// for a stall limit, freezes the connection.
+			select {
+			case <-c.halted:
+				return false
+			case <-c.stalled:
+				return true
+			}
 		}
 		if tokens != nil && !c.take(tokens, grant) {
 			return false
@@ -371,18 +418,25 @@ func (c *Conn) account(dir Direction, n int) {
 	} else {
 		c.s2c += int64(n)
 	}
-	reached := false
+	reached, freeze := false, false
 	for _, l := range c.limits {
 		if l.dir&dir != 0 {
 			l.written += int64(n)
 			if l.written >= l.n {
-				reached = true
+				if l.stall {
+					freeze = true
+				} else {
+					reached = true
+				}
 			}
 		}
 	}
 	c.mu.Unlock()
 	if reached {
 		c.halt(ReasonBytes)
+	}
+	if freeze {
+		c.engageStall()
 	}
 }
 

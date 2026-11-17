@@ -113,6 +113,13 @@ type Options struct {
 	// Nil means time.Now; tests inject a virtual clock (the same one as the
 	// clock of an injected Profile).
 	Now func() time.Time
+	// StallLimit is how long a byte-moving session of an upload (the whole
+	// stream, one part) may deliver no byte before the stall watchdog counts it
+	// as a drop. Zero means DefaultStallLimit (60 s); negative is invalid.
+	StallLimit time.Duration
+	// StallClock drives the watchdog's timer. Nil means the wall clock; tests
+	// inject a virtual one.
+	StallClock StallClock
 }
 
 // cleanupTimeout bounds the fresh context used for staging cleanup so that
@@ -145,6 +152,7 @@ type Engine struct {
 	target  string
 	profile *transferlink.Profile
 	now     func() time.Time
+	stall   stallConfig
 }
 
 // New validates the limits and returns an Engine over remote with default
@@ -172,7 +180,11 @@ func NewWithOptions(remote transferremote.Remote, limits transfercore.Limits, op
 	if profile == nil {
 		profile = transferlink.NewProfile(transferlink.Config{Now: now})
 	}
-	e := &Engine{remote: remote, limits: limits, target: opts.Target, profile: profile, now: now}
+	stall, err := newStallConfig(opts.StallClock, opts.StallLimit)
+	if err != nil {
+		return nil, err
+	}
+	e := &Engine{remote: remote, limits: limits, target: opts.Target, profile: profile, now: now, stall: stall}
 	if chunk, ok := remote.(transferremote.ChunkRemote); ok {
 		e.chunk = chunk
 	}
