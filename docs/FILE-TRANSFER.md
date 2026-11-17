@@ -30,13 +30,13 @@ The keeper handles the operations `transfer_upload`, `transfer_download`, `trans
 
 The kind (file or directory) is taken from the source, never from the caller. A start call returns `job_id` at once. At most two transfers run concurrently, and no two target one destination. `overwrite=true` requires `confirm=true`; the flag records caller acknowledgment only, and harness permissions still apply.
 
-`transfer_status` returns: `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message, plus the content-free chunked-mode fields listed in the schema below. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `link_unstable`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. `refused_path` is deliberately coarse: it covers a missing local parent directory, a path outside the root and a symlink alike, because a finer reason would disclose the structure of the owner's file system to the model. Finished records are retained in a bounded set.
+`transfer_status` reports (as plain text, see "Result text"): `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message, plus the content-free chunked-mode fields listed in the schema below. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `link_unstable`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. `refused_path` is deliberately coarse: it covers a missing local parent directory, a path outside the root and a symlink alike, because a finer reason would disclose the structure of the owner's file system to the model. Finished records are retained in a bounded set.
 
 ### Job and status schema
 
-A start call returns `{"job_id": "..."}` immediately. `transfer_cancel` returns `{"cancelled": true|false}`; `false` means the job had already finished.
+A start call returns the job id immediately. `transfer_cancel` reports whether it cancelled the job; not cancelling means the job had already finished. The model sees every result as plain text ("Result text" below), never as a JSON object: the bridge sends one text content block, no structured content and no output schema.
 
-`transfer_status` returns exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free), and for file transfers the chunked-mode fields `mode` (`stream`, `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` (all integers except `mode`; semantics in "Chunked resumable mode"). Optional fields are omitted while absent (an omitted count is zero).
+The keeper's status record, which the bridge renders as that text, holds exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free), and for file transfers the chunked-mode fields `mode` (`stream`, `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` (all integers except `mode`; semantics in "Chunked resumable mode"). Optional fields are omitted while absent (an omitted count is zero).
 
 Rules of the chunked-mode fields, applied by the manager to what the engine reports:
 
@@ -48,18 +48,39 @@ Rules of the chunked-mode fields, applied by the manager to what the engine repo
 
 A running chunked upload, after a drop switched the job from the stream to chunks:
 
-```json
-{"job_id":"…","state":"running","direction":"upload","phase":"transfer","files":0,"dirs":0,"bytes":52428800,
- "mode":"chunked","chunk_bytes":4194304,"chunks_done":12,"chunks_total":64,"attempts":3,"bytes_per_second":1310720}
+```text
+Transfer 05ad9f6712345678abcdef0123456789: upload file, running
+Phase: transfer · Mode: chunked · Chunks: 12/64 · Chunk size: 4,194,304 bytes · Attempts: 3
+Bytes: 52,428,800 · Files: 0 · Dirs: 0 · Speed: 1.3 MB/s
+Still running; check again with transfer_status job_id=05ad9f6712345678abcdef0123456789 and wait_seconds 20.
 ```
 
 The same job after 8 consecutive attempts without progress; its parts stay for a retry:
 
-```json
-{"job_id":"…","state":"failed","direction":"upload","kind":"file","files":0,"dirs":0,"bytes":52428800,
- "error_class":"link_unstable","message":"transfer link was too unstable to finish; a retry can resume",
- "mode":"chunked","chunk_bytes":1048576,"chunks_done":50,"chunks_total":64,"attempts":11,"bytes_per_second":98304}
+```text
+Transfer 05ad9f6712345678abcdef0123456789: upload file, failed
+Mode: chunked · Chunks: 50/64 · Chunk size: 1,048,576 bytes · Attempts: 11
+Bytes: 52,428,800 · Files: 0 · Dirs: 0 · Speed: 98.3 kB/s
+Failed: link_unstable — transfer link was too unstable to finish; a retry can resume
+Resume: call remote_upload again with the same arguments to continue from the staged parts; transfer_cancel removes them instead.
 ```
+
+### Result text
+
+Every transfer tool answers with plain text. Job ids and hashes are always printed in full; a field that is absent is left out together with its label, and so is a line without any field.
+
+- `remote_upload`, `remote_download`: `Started job <job_id>`, then `Check progress with transfer_status job_id=<job_id>; use wait_seconds 20 to wait for it.`
+- `transfer_cancel`: `Cancelled job <job_id>`, or `Job <job_id> had already finished`.
+- `transfer_status`, in this order:
+  1. `Transfer <job_id>: <direction> <kind>, <state>`; `<kind>` is omitted while unknown.
+  2. `Phase: <phase> · Mode: <mode> · Chunks: <done>/<total> · Chunk size: <n> bytes · Attempts: <n>` (`Chunks: <done>` when the total is unknown); only the fields present, the whole line omitted when none is.
+  3. `Bytes: <n> · Files: <n> · Dirs: <n> · Speed: <rate>`; integers have thousands separators, the speed is in decimal units (`B/s`, `kB/s`, `MB/s`, `GB/s`) and is left out while unknown.
+  4. `SHA-256: <hex>` (file) and `Manifest SHA-256: <hex>` (directory) when available.
+  5. `Failed: <error_class> — <message>` for a failed job, `Cancelled: <error_class> — <message>` for a cancelled one; the message is the fixed, content-free one of the class.
+  6. A hint line: `Still running; check again with transfer_status job_id=<job_id> and wait_seconds 20.` while running, and for `link_unstable` `Resume: call remote_upload|remote_download again with the same arguments to continue from the staged parts; transfer_cancel removes them instead.`
+- An error is the message alone, with the tool error flag set: for example `transfer root was not registered` or `wait_seconds must be between 0 and 25`.
+
+The text never carries file content, a remote stderr line or an absolute local path.
 
 Manager bounds: at most two concurrent jobs; a job is refused while another job targets the same destination (root and root-relative path for downloads, target and remote path for uploads); at most 64 records are retained, evicting the oldest finished first; unknown job ids refuse with a fixed message.
 
@@ -274,7 +295,7 @@ Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 
    - parts of different sizes coexist, overlapping or oversized parts are ignored, and a gap off the `S` grid is read with the `tail`/`head` primitive and verified;
    - overwrite and no-overwrite publication after assembly behave as for a stream, and a failed overwrite leaves the old destination intact;
    - the capability probe selects `dd` or `tail`/`head` on GNU, BusyBox and BSD/macOS, and a target without them keeps whole-stream behaviour;
-   - status exposes `mode`, `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` and never content or a path (manager unit tests with fake engines: one engine per target and a single build under concurrent first use, a failed build not cached, live progress of a running job, monotone bytes, no chunk fields for directories, `link_unstable` with its fixed message, cancel ending as `cancelled`, a link failure failing with its class and chunk fields so that a retry can start; the bridge tests pin the output schema and descriptions);
+   - status exposes `mode`, `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` and never content or a path (manager unit tests with fake engines: one engine per target and a single build under concurrent first use, a failed build not cached, live progress of a running job, monotone bytes, no chunk fields for directories, `link_unstable` with its fixed message, cancel ending as `cancelled`, a link failure failing with its class and chunk fields so that a retry can start; the bridge tests pin the text rendering of every state and error class, that no tool declares an output schema or returns structured content, and the descriptions);
    - stall watchdog (upload): a connection that stays open and moves nothing (real stack, `internal/faultproxy` freezing the link after an exact byte count) is aborted after the inactivity limit during the stream and during a part, counted as a drop, continues chunked and publishes byte-exact; unit tests on a virtual clock cover firing, steady slow progress not firing, firing in a stream and in a part, and the manager's cancel staying `cancelled`;
    - leftover assembly: `assembled.<rnd>.tmp` files planted in a staging directory are removed and reported by the next listing, before any part is sent or any assembly starts, other names and the parts are untouched, and the transfer completes;
    - profile expiry: a profile unused for one hour is reset to unknown before the next decision (virtual clock); every use restarts the hour;

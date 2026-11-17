@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -220,17 +219,9 @@ func callApply(ctx context.Context, peer *mcp.ClientSession, planID, id string) 
 	return out, nil
 }
 func decode(r *mcp.CallToolResult, v any) error {
-	for _, c := range r.Content {
-		if text, ok := c.(*mcp.TextContent); ok {
-			return json.Unmarshal([]byte(text.Text), v)
-		}
-	}
-	if r.StructuredContent == nil {
-		return fmt.Errorf("empty result")
-	}
-	b, err := json.Marshal(r.StructuredContent)
+	text, err := bridge.ResultText(r)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, v)
+	return bridge.ParseResult(text, v)
 }

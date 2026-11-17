@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"os"
 	"testing"
 	"time"
@@ -162,19 +160,11 @@ func applyOverMCP(t *testing.T, ctx context.Context, p *mcp.ClientSession, id, r
 	return out
 }
 func decodeResult(r *mcp.CallToolResult, v any) error {
-	for _, c := range r.Content {
-		if text, ok := c.(*mcp.TextContent); ok {
-			return json.Unmarshal([]byte(text.Text), v)
-		}
+	text, err := bridge.ResultText(r)
+	if err != nil {
+		return err
 	}
-	if r.StructuredContent == nil {
-		return errors.New("empty result")
-	}
-	b, e := json.Marshal(r.StructuredContent)
-	if e != nil {
-		return e
-	}
-	return json.Unmarshal(b, v)
+	return bridge.ParseResult(text, v)
 }
 
 func TestScopedPlanExpiry(t *testing.T) {

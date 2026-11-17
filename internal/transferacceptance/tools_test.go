@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/PHPCraftdream/ssjack/internal/bridge"
+	"github.com/PHPCraftdream/ssjack/internal/transfer"
 )
 
 // callTool invokes one bridge tool and fails on a transport error.
@@ -60,9 +63,7 @@ func jobID(t *testing.T, result *mcp.CallToolResult) string {
 	if result.IsError {
 		t.Fatalf("start call was refused: %s", resultText(result))
 	}
-	var out struct {
-		JobID string `json:"job_id"`
-	}
+	var out transfer.StartOutput
 	structured(t, result, &out)
 	if out.JobID == "" {
 		t.Fatal("start call returned an empty job id")
@@ -89,18 +90,16 @@ func waitStatus(t *testing.T, s *stack, c *captured, job string) statusOutput {
 	}
 }
 
-// structured decodes the structured content of a tool result.
+// structured reads the plain-text result of a bridge tool into its keeper
+// result type; the tools carry no structured content.
 func structured(t *testing.T, result *mcp.CallToolResult, out any) {
 	t.Helper()
-	if result.StructuredContent == nil {
-		t.Fatal("tool result omitted structured output")
-	}
-	data, err := json.Marshal(result.StructuredContent)
+	text, err := bridge.ResultText(result)
 	if err != nil {
-		t.Fatalf("structured result encoding: %v", err)
+		t.Fatalf("tool result is not the plain-text contract: %v", err)
 	}
-	if err := json.Unmarshal(data, out); err != nil {
-		t.Fatalf("structured result did not decode: %v", err)
+	if err := bridge.ParseResult(text, out); err != nil {
+		t.Fatalf("tool result text did not parse: %v", err)
 	}
 }
 
@@ -122,17 +121,5 @@ func resultText(result *mcp.CallToolResult) string {
 	return ""
 }
 
-// statusOutput mirrors the transfer_status record.
-type statusOutput struct {
-	JobID          string `json:"job_id"`
-	State          string `json:"state"`
-	Direction      string `json:"direction"`
-	Kind           string `json:"kind"`
-	Files          int    `json:"files"`
-	Dirs           int    `json:"dirs"`
-	Bytes          int64  `json:"bytes"`
-	SHA256         string `json:"sha256"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	ErrorClass     string `json:"error_class"`
-	Message        string `json:"message"`
-}
+// statusOutput is the transfer_status record read back from its text.
+type statusOutput = transfer.StatusOutput

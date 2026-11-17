@@ -71,7 +71,7 @@ func (k *recordingKeeper) handle(_ context.Context, req wire.Request) wire.Reply
 			return wire.Reply{Error: "invalid read"}
 		}
 		k.record(req.Operation, input.WaitSeconds)
-		return broker.Result(remote.ReadOutput{JobID: input.JobID, Stdout: []byte("out"), Done: true}, nil)
+		return broker.Result(remote.ReadOutput{JobID: input.JobID, Stdout: []byte("out"), StdoutOffset: 3, Done: true}, nil)
 	case "transfer_status":
 		var input transfer.StatusInput
 		if wire.Decode(req.Data, &input) != nil {
@@ -139,6 +139,7 @@ func TestPollingToolsWaitSecondsArguments(t *testing.T) {
 				if len(calls) != before+1 || calls[before].operation != tool.operation || calls[before].wait != ok.want {
 					t.Fatalf("%s: keeper saw %+v after %d earlier calls, want %s with wait_seconds %d", ok.label, calls, before, tool.operation, ok.want)
 				}
+				requireTextContract(t, tool.name, result)
 			}
 			for _, bad := range []struct {
 				label string

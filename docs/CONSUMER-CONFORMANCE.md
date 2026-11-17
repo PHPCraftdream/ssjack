@@ -22,6 +22,11 @@ constructors, listener, SSH runner and a real consumer process. It does not
 prove production enrollment, interactive approval/unlock prompts, crash
 durability, application adoption or detection of unknown secrets.
 
+The kit drives the adapter listener, not the `app_*` or `remote_*` MCP tools of
+the ssjack bridge, so it neither reads nor depends on their results. Those tools
+answer with plain text, never JSON (see `REMOTE-MCP.md`, "Result text of the
+ssjack tools"); the kit's own result contract below is unchanged.
+
 ## Running the kit against a consumer
 
 Requirements: Linux amd64, root (the kit registers root-owned grants and runs

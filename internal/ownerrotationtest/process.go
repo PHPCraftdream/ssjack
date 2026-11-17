@@ -3,7 +3,6 @@ package ownerrotationtest
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -166,15 +165,9 @@ func rotationCall(t *testing.T, ctx context.Context, session *mcp.ClientSession,
 	if err != nil || result == nil || result.IsError {
 		t.Fatal("authenticated rotation MCP operation failed:", tool)
 	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal("rotation MCP result could not be decoded")
-	}
-	var envelope struct {
-		Structured json.RawMessage `json:"structuredContent"`
-	}
-	if json.Unmarshal(encoded, &envelope) != nil || len(envelope.Structured) == 0 || json.Unmarshal(envelope.Structured, output) != nil {
-		t.Fatal("rotation MCP result omitted typed response")
+	text, err := bridge.ResultText(result)
+	if err != nil || bridge.ParseResult(text, output) != nil {
+		t.Fatal("rotation MCP result is not the plain-text contract")
 	}
 }
 func rotationTarget(t *testing.T, ctx context.Context, session *mcp.ClientSession) string {

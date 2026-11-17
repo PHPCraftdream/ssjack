@@ -151,11 +151,9 @@ func nativeGuardMCPCall(t *testing.T, ctx context.Context, session *mcp.ClientSe
 	if err != nil || (os.Getenv("SSJACK_OWNER_GUARD_BYPASS_CHILD") != "1" && (bytes.Contains(encoded, []byte(connectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)))) {
 		t.Fatal("actual native MCP result exposed a known credential")
 	}
-	var envelope struct {
-		Structured json.RawMessage `json:"structuredContent"`
-	}
-	if json.Unmarshal(encoded, &envelope) != nil || len(envelope.Structured) == 0 || json.Unmarshal(envelope.Structured, output) != nil {
-		t.Fatal("actual native MCP result omitted structured output")
+	text, err := bridge.ResultText(result)
+	if err != nil || bridge.ParseResult(text, output) != nil {
+		t.Fatal("actual native MCP result is not the plain-text contract")
 	}
 }
 

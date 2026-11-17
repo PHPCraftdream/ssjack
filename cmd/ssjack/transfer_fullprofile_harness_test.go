@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
+	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/transfer"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -78,9 +81,7 @@ func transferHarnessTarget(t *testing.T, ctx context.Context, session *mcp.Clien
 		t.Fatalf("remote_targets failed: %v", err)
 	}
 	*results = append(*results, transferHarnessEncoded(t, result))
-	var out struct {
-		Targets []string `json:"targets"`
-	}
+	var out remote.TargetsOutput
 	transferHarnessStructured(t, result, &out)
 	if len(out.Targets) != 1 || out.Targets[0] == "" {
 		t.Fatalf("expected exactly one approved target, got %+v", out.Targets)
@@ -96,9 +97,7 @@ func transferHarnessRun(t *testing.T, ctx context.Context, session *mcp.ClientSe
 		t.Fatalf("%s was refused: %v", tool, err)
 	}
 	*results = append(*results, transferHarnessEncoded(t, started))
-	var job struct {
-		JobID string `json:"job_id"`
-	}
+	var job transfer.StartOutput
 	transferHarnessStructured(t, started, &job)
 	if job.JobID == "" {
 		t.Fatalf("%s returned no job id", tool)
@@ -136,24 +135,14 @@ func transferHarnessFinished(t *testing.T, ctx context.Context, session *mcp.Cli
 		t.Fatalf("transfer_cancel failed: %v", err)
 	}
 	*results = append(*results, transferHarnessEncoded(t, result))
-	var out struct {
-		Cancelled bool `json:"cancelled"`
-	}
+	var out transfer.CancelOutput
 	transferHarnessStructured(t, result, &out)
 	if out.Cancelled {
 		t.Fatal("cancelling a finished job claimed success")
 	}
 }
 
-type transferStatus struct {
-	JobID          string `json:"job_id"`
-	State          string `json:"state"`
-	Direction      string `json:"direction"`
-	Kind           string `json:"kind"`
-	Bytes          int64  `json:"bytes"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	ErrorClass     string `json:"error_class"`
-}
+type transferStatus = transfer.StatusOutput
 
 func transferHarnessEncoded(t *testing.T, result *mcp.CallToolResult) []byte {
 	t.Helper()
@@ -164,14 +153,15 @@ func transferHarnessEncoded(t *testing.T, result *mcp.CallToolResult) []byte {
 	return data
 }
 
+// transferHarnessStructured reads the plain-text result of a bridge tool.
 func transferHarnessStructured(t *testing.T, result *mcp.CallToolResult, out any) {
 	t.Helper()
-	if result.StructuredContent == nil {
-		t.Fatal("tool result omitted structured output")
+	text, err := bridge.ResultText(result)
+	if err != nil {
+		t.Fatalf("tool result is not the plain-text contract: %v", err)
 	}
-	data, err := json.Marshal(result.StructuredContent)
-	if err != nil || json.Unmarshal(data, out) != nil {
-		t.Fatalf("structured result did not decode: %v", err)
+	if err := bridge.ParseResult(text, out); err != nil {
+		t.Fatalf("tool result text did not parse: %v", err)
 	}
 }
 

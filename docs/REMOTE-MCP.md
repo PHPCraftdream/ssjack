@@ -342,6 +342,86 @@ flows, HTTP-disconnect rollback, or that the SDK joins every goroutine. Runtime
 acceptance at `6913e5f` and archive receipts at `07290ca` are historical,
 verified CI receipts for distinct earlier sources; dedicated #359 remains pending.
 
+## Result text of the ssjack tools
+
+Every tool the ssjack bridge itself offers (`remote_targets`, `remote_exec`,
+`remote_read`, `remote_cancel`, `app_list`, `app_exec`, `app_read`,
+`app_cancel`, `remote_upload`, `remote_download`, `transfer_status`,
+`transfer_cancel`, and the declarative `resource_plan` and `plan_apply`)
+answers with plain text, so that a result in the chat is never a raw JSON
+object. The result is one text content block with no structured content, and the
+tool declares no output schema (the bridge registers its handlers with the SDK's
+`any` output type and builds the result itself). The text is English and
+stable; job ids, offsets, hashes, error classes, target names and application
+names are printed in full and untranslated. The transfer tools are specified in
+`FILE-TRANSFER.md` ("Result text"). The results of tools proxied from a remote
+MCP server are not rewritten by the bridge.
+
+- `remote_targets`: `N approved targets:` (`1 approved target:`) and one
+  `- <name>` line per target; `No approved targets.` when empty.
+- `app_list`: `N registered applications:` (`1 registered application:`) and one
+  `- <name> (profile <profile>[, container <container>])` line each; an empty
+  list is `No applications are registered.` followed by `Hint: <hint>` (the
+  keeper's hint, for example that the owner starts the keeper with `--app DIR`).
+- `remote_exec`, `app_exec`: `Started job <job_id>`, then
+  `Read output with remote_read|app_read job_id=<job_id>; use wait_seconds 20 to wait for it.`
+- `remote_cancel`, `app_cancel`: `Cancelled job <job_id>`, or
+  `Job <job_id> had already finished`.
+- `remote_read`, `app_read`: the lines below, in this order.
+  1. `Job <job_id>: running` or `Job <job_id>: done (exit code <n>)`.
+  2. `Error: <message>` when the job ended with an error (one line).
+  3. For stdout, then stderr, when the chunk is not empty, a block (below).
+  4. `No new output.` when both chunks are empty.
+  5. `Warning: <stream> output was lost to buffer overflow; the chunk starts at the oldest retained byte.`
+     for each stream with a lost flag.
+  6. `Next: stdout_offset=<n> stderr_offset=<n> · more: stdout=yes|no stderr=yes|no · lost: stdout=yes|no stderr=yes|no`
+     The offsets are the next offsets to pass to the following call;
+     `more` yes means output remains to drain; `lost` yes means the buffer
+     overflowed. The job is complete when the first line says `done` and both
+     `more` flags are no.
+- Errors, including a refused `wait_seconds` (`wait_seconds must be between 0 and 25`),
+  are the message alone as the text, with the MCP error flag set.
+
+An output chunk is shown verbatim between a label line and an end marker line:
+
+```text
+stdout (bytes 0-237):
+<the chunk text, line breaks included>
+[end of stdout]
+```
+
+The range is half open: it starts at the offset the chunk begins at and ends at
+the offset after it, which is also the next offset. The marker is
+`[end of stdout]` or `[end of stderr]`. A line break always separates the chunk
+text from the marker, so everything between the label line and that line break
+is the chunk, exactly. When the chunk text contains the marker string, the
+marker gets a number (`[end of stdout 2]`, `[end of stdout 3]`, ... the first
+one the chunk does not contain) and the label names it:
+
+```text
+stdout (bytes 0-19, end marker "[end of stdout 2]"):
+```
+
+The text shown has invalid UTF-8 replaced with U+FFFD. A chunk that is not valid
+UTF-8 is followed by a line carrying its original bytes, because offsets count
+original bytes:
+
+```text
+stdout base64 (bytes 0-12): <standard base64 of the original chunk>
+```
+
+The same guards as before apply to the output (known credentials are masked
+before the text is built). `bridge.ParseResult` is the reference reader of this
+format; the conformance tests use it, so they check the text a model sees.
+
+The declarative tools are flat. `resource_plan` is
+`Plan <plan_id> created`, `Digest: <digest> · Expires: <expires_at>`,
+`Precondition: <revision>` (`none` when absent), `Effects: <n>` (`none` when
+empty), one `- <class>: <summary_id>[ (destructive)]` line per effect and
+`Next: apply it with plan_apply plan_id=<plan_id> and a new request_id.`
+`plan_apply` is `Operation <operation_id>: <state>` and, when the keeper
+reports one, `Delivery: <status>`.
+
 ## Compatibility and acceptance
 
 New readers load old payloads without `remote_mcp` as an absent directory. New

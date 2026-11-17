@@ -51,7 +51,14 @@ func TestGuardedCapturePrecedesTextAndOriginalByteBase64(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	out := readOutput(raw)
+	rendered := renderRead(raw)
+	if bytes.Contains([]byte(rendered), secret) {
+		t.Fatal("the rendered text carries the original captured secret bytes")
+	}
+	var out ReadOutput
+	if err := ParseResult(rendered, &out); err != nil {
+		t.Fatal(err)
+	}
 	stdout, first := base64.StdEncoding.DecodeString(out.StdoutBase64)
 	stderr, second := base64.StdEncoding.DecodeString(out.StderrBase64)
 	if first != nil || second != nil || !bytes.Equal(stdout, []byte("[REDACTED]|\xfe")) || !bytes.Equal(stderr, []byte("[REDACTED]|\xfd")) || bytes.Contains(stdout, secret) || bytes.Contains(stderr, secret) {

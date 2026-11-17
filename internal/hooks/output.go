@@ -55,11 +55,17 @@ func Run(action string, input []byte) ([]byte, error) {
 				message = "ssjack: command failed\n" + valueOr(result["error"], result["stdout"])
 			} else if result["job_id"] != "" {
 				message = "ssjack: started job " + result["job_id"]
+			} else if job := startedJob(result["stdout"]); job != "" {
+				message = "ssjack: started job " + job
 			} else {
 				message = "ssjack: command response\n" + result["stdout"]
 			}
 		case "mcp__ssjack__remote_read":
-			message = formatRead(result)
+			if text := result["stdout"]; result["job_id"] == "" && result["isError"] != "true" && strings.HasPrefix(text, "Job ") {
+				message = "ssjack <- " + text
+			} else {
+				message = formatRead(result)
+			}
 		case "mcp__ssjack__remote_cancel":
 			jobID, _ := stringField(event.ToolInput, "job_id")
 			message = "ssjack: cancel job " + jobID + "\n" + valueOr(result["error"], valueOr(result["stdout"], "cancelled="+result["cancelled"]))
@@ -90,6 +96,15 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// startedJob reads the job id of the plain-text result "Started job <id>".
+func startedJob(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	if id, ok := strings.CutPrefix(line, "Started job "); ok && !strings.ContainsAny(id, " \t") {
+		return id
+	}
+	return ""
 }
 
 func formatRead(result map[string]string) string {

@@ -87,9 +87,7 @@ func scenarioFailureCancel(t *testing.T) {
 	s.server.WaitEntered(t, "cat > ")
 	acknowledged := callTool(t, s, "transfer_cancel", map[string]any{"job_id": job})
 	c.add(t, acknowledged)
-	var ack struct {
-		Cancelled bool `json:"cancelled"`
-	}
+	var ack transfer.CancelOutput
 	structured(t, acknowledged, &ack)
 	if !ack.Cancelled {
 		t.Fatal("transfer_cancel did not cancel the running job")

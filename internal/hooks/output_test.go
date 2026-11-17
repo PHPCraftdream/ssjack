@@ -56,6 +56,37 @@ func TestPostSupportsMCPResultShapes(t *testing.T) {
 	}
 }
 
+func TestPostSupportsPlainTextResults(t *testing.T) {
+	plain := func(text string) map[string]any {
+		return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
+	}
+	started := display(t, "post", map[string]any{
+		"tool_name":     "mcp__ssjack__remote_exec",
+		"tool_response": plain("Started job job-1\nRead output with remote_read job_id=job-1; use wait_seconds 20 to wait for it."),
+	})
+	if started != "ssjack: started job job-1" {
+		t.Fatalf("unexpected start display: %q", started)
+	}
+	read := display(t, "post", map[string]any{
+		"tool_name": "mcp__ssjack__remote_read",
+		"tool_response": plain("Job job-1: done (exit code 7)\nstdout (bytes 0-6):\nhello\n\n[end of stdout]\n" +
+			"Next: stdout_offset=6 stderr_offset=0 · more: stdout=no stderr=no · lost: stdout=no stderr=no"),
+	})
+	for _, want := range []string{"ssjack <- Job job-1: done (exit code 7)", "stdout (bytes 0-6):\nhello", "Next: stdout_offset=6"} {
+		if !strings.Contains(read, want) {
+			t.Fatalf("missing %q in %q", want, read)
+		}
+	}
+	cancel := display(t, "post", map[string]any{
+		"tool_name":     "mcp__ssjack__remote_cancel",
+		"tool_input":    map[string]any{"job_id": "job-1"},
+		"tool_response": plain("Cancelled job job-1"),
+	})
+	if cancel != "ssjack: cancel job job-1\nCancelled job job-1" {
+		t.Fatalf("unexpected cancel display: %q", cancel)
+	}
+}
+
 func TestPostShowsErrorsWithoutClaimingSuccess(t *testing.T) {
 	text := display(t, "post", map[string]any{
 		"tool_name":     "mcp__ssjack__remote_exec",
