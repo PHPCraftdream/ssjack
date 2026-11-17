@@ -430,7 +430,7 @@ func scenarioChunkUploadDropDuringAssembly(t *testing.T) {
 		}
 		rig.remote.onAssemble = func(n int) {
 			if n == 1 {
-				rig.server.ArmKill("assembled.", 1)
+				rig.server.ArmKill("assembled.$rnd", 1)
 			} else {
 				rig.disarmKill()
 			}
@@ -458,7 +458,7 @@ func scenarioChunkUploadDropDuringAssembly(t *testing.T) {
 				rig.cutNext(streamCut)
 			}
 		}
-		rig.remote.onAssemble = func(n int) { rig.server.ArmKill("assembled.", 1) }
+		rig.remote.onAssemble = func(n int) { rig.server.ArmKill("assembled.$rnd", 1) }
 
 		res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 		rig.disarmKill()
