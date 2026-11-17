@@ -56,7 +56,10 @@ func (r *remoteRunner) capabilities() remoteCaps {
 	if caps := r.caps.Load(); caps != nil {
 		return *caps
 	}
-	return remoteCaps{hash: hashSha256sum, mvT: true, tarGNU: true, wcNames: true}
+	return remoteCaps{
+		hash: hashSha256sum, mvT: true, tarGNU: true, wcNames: true,
+		chunk: ChunkCaps{Own: true, Read: ReadDD, Mtime: MtimeGNU, DF: true},
+	}
 }
 
 // Remote exit codes used by the fixed command templates.

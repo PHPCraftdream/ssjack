@@ -33,6 +33,12 @@ LINUX_SCENARIOS = (
     "failure-unsupported-remote",
     "failure-unsupported-publication-primitive",
     "manager-concurrency-and-duplicate-destination",
+    "chunk-remote-probe-capabilities",
+    "chunk-remote-staging-lifecycle-and-foreign-objects",
+    "chunk-remote-part-upload-and-listing",
+    "chunk-remote-assembly-and-publication",
+    "chunk-remote-garbage-collection",
+    "chunk-remote-read-stat-and-disk",
 )
 BUSYBOX_SCENARIOS = (
     "roundtrip-file-both-directions",
@@ -44,6 +50,12 @@ BUSYBOX_SCENARIOS = (
     "overwrite-failure-leaves-old-destination",
     "refuse-destination-exists",
     "failure-hash-mismatch-corruption",
+    "chunk-remote-probe-capabilities",
+    "chunk-remote-staging-lifecycle-and-foreign-objects",
+    "chunk-remote-part-upload-and-listing",
+    "chunk-remote-assembly-and-publication",
+    "chunk-remote-garbage-collection",
+    "chunk-remote-read-stat-and-disk",
 )
 
 

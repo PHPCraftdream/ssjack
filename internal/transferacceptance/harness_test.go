@@ -261,4 +261,10 @@ func TestTransferAcceptance(t *testing.T) {
 	t.Run("failure-unsupported-remote", scenarioFailureUnsupportedRemote)
 	t.Run("failure-unsupported-publication-primitive", scenarioFailureUnsupportedPublicationPrimitive)
 	t.Run("manager-concurrency-and-duplicate-destination", scenarioManagerBounds)
+	t.Run("chunk-remote-probe-capabilities", scenarioChunkProbe)
+	t.Run("chunk-remote-staging-lifecycle-and-foreign-objects", scenarioChunkStagingLifecycle)
+	t.Run("chunk-remote-part-upload-and-listing", scenarioChunkPartsAndListing)
+	t.Run("chunk-remote-assembly-and-publication", scenarioChunkAssemblyAndPublication)
+	t.Run("chunk-remote-garbage-collection", scenarioChunkGarbageCollection)
+	t.Run("chunk-remote-read-stat-and-disk", scenarioChunkReadStatAndDisk)
 }

@@ -3,7 +3,6 @@ package transferremote
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -19,6 +18,8 @@ type remoteCaps struct {
 	tarGNU bool   // tar -x --no-same-owner --no-same-permissions is functional
 	// wcNames is functional; false selects the stdin-based portable size listing.
 	wcNames bool
+	// chunk is the chunked-mode verdict; the zero value means unavailable.
+	chunk ChunkCaps
 }
 
 // probeTemplate verifies POSIX sh and the fixed tools cat find xargs tar rm
@@ -252,9 +253,95 @@ content="$(cat "$d/y/f")" || exit 20
 [ "$content" = 'tar fixture' ] || exit 20
 mode="$(find "$d/y/f" -type f -perm 0700 -print)" || exit 20
 [ "$mode" = "$d/y/f" ] || exit 20
-rm -rf "$d" || exit 20
+` + probeChunkSection + `rm -rf "$d" || exit 20
 trap - 0
 printf 'SSJACK-CAPS %%s %%s gnu %%s\n' "$hash" "$rename" "$wc"
+printf '%%s\n' "$chunk_line"
+`
+
+// probeChunkSection reports the chunked-mode capabilities on a second line,
+// from the same scratch directory. The checks run in a command substitution
+// with errexit off and stderr dropped: a failing tool only turns its own
+// field off, and a missing or broken line means "chunking unavailable"; it
+// can never make the probe fail. Every command either writes to a variable or
+// is redirected, so the substitution carries exactly the report line.
+const probeChunkSection = `chunk_caps() {
+	set +e
+	cown=no
+	if [ -O "$d" ] && [ ! -O "$d/absent-owner-probe" ]; then
+		mkdir "$d/own755" && chmod 755 "$d/own755"
+		cfound=$(find "$d" -prune -type d -perm 0700 -print 2>/dev/null)
+		cother=$(find "$d/own755" -prune -type d -perm 0700 -print 2>/dev/null)
+		if [ "$cfound" = "$d" ] && [ -d "$d/own755" ] && [ -z "$cother" ]; then
+			cown=yes
+		fi
+	fi
+	crd=none
+	printf '0123456789' > "$d/rd"
+	cra=$(dd if="$d/rd" bs=4 skip=1 count=1 2>/dev/null)
+	crb=$(dd if="$d/rd" bs=4 skip=2 count=1 2>/dev/null)
+	crc=$(dd if="$d/rd" bs=10 skip=0 count=1 2>/dev/null)
+	if [ "$cra" = 4567 ] && [ "$crb" = 89 ] && [ "$crc" = 0123456789 ]; then
+		crd=dd
+	else
+		cra=$(tail -c +4 "$d/rd" 2>/dev/null | head -c 3)
+		crb=$(tail -c +9 "$d/rd" 2>/dev/null | head -c 5)
+		crc=$(tail -c +1 "$d/rd" 2>/dev/null | head -c 10)
+		if [ "$cra" = 345 ] && [ "$crb" = 89 ] && [ "$crc" = 0123456789 ]; then
+			crd=tail
+		fi
+	fi
+	cmt=none
+	cst=$(stat -c '%%s %%Y' "$d/rd" 2>/dev/null)
+	cval=${cst#10 }
+	if [ "$cval" != "$cst" ]; then
+		case "$cval" in
+			''|*[!0123456789]*) ;;
+			*) cmt=c ;;
+		esac
+	fi
+	if [ "$cmt" = none ]; then
+		cst=$(stat -f '%%z %%m' "$d/rd" 2>/dev/null)
+		cval=${cst#10 }
+		if [ "$cval" != "$cst" ]; then
+			case "$cval" in
+				''|*[!0123456789]*) ;;
+				*) cmt=f ;;
+			esac
+		fi
+	fi
+	cdf=no
+	cout=$(df -P -k "$d" 2>/dev/null)
+	cnl='
+'
+	cdata=${cout#*"$cnl"}
+	if [ "$cdata" != "$cout" ]; then
+		case "$cdata" in
+			*"$cnl"*) ;;
+			*)
+				set -f
+				set -- $cdata
+				set +f
+				if [ "$#" -ge 6 ]; then
+					case "$2$3$4" in
+						*[!0123456789]*) ;;
+						*)
+							case "$5" in
+								*%%|-) cdf=yes ;;
+							esac
+							;;
+					esac
+				fi
+				;;
+		esac
+	fi
+	printf 'SSJACK-CHUNK %%s %%s %%s %%s\n' "$cown" "$crd" "$cmt" "$cdf"
+}
+chunk_line=$(chunk_caps 2>/dev/null) || chunk_line=
+case "$chunk_line" in
+	'SSJACK-CHUNK '*) ;;
+	*) chunk_line='SSJACK-CHUNK no none none no' ;;
+esac
 `
 
 // Probe checks that the remote target has every tool the transfer needs.
@@ -271,20 +358,11 @@ func (r *remoteRunner) Probe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	line := string(report)
-	if !strings.HasSuffix(line, "\n") {
+	caps, ok := parseProbeReport(string(report))
+	if !ok {
 		return classedUnsupportedProbe()
 	}
-	fields := strings.Split(strings.TrimSuffix(line, "\n"), " ")
-	if len(fields) != 5 || fields[0] != "SSJACK-CAPS" {
-		return classedUnsupportedProbe()
-	}
-	if (fields[1] != hashSha256sum && fields[1] != hashShasum && fields[1] != hashSha256q) ||
-		(fields[2] != "t" && fields[2] != "p") || fields[3] != "gnu" ||
-		(fields[4] != "names" && fields[4] != "stdin") {
-		return classedUnsupportedProbe()
-	}
-	r.caps.Store(&remoteCaps{hash: fields[1], mvT: fields[2] == "t", tarGNU: true, wcNames: fields[4] == "names"})
+	r.caps.Store(&caps)
 	return nil
 }
 
