@@ -3,7 +3,6 @@ package transferremote
 import (
 	"math"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -165,12 +164,6 @@ func listingBytesBound(maxParts int) int64 {
 	return int64(maxParts+2)*96 + 256
 }
 
-type listedPart struct {
-	name string
-	rng  transferlink.Range
-	size int64
-}
-
 // parseStagingListing strictly parses the listing output and builds the
 // coverage. Only names shaped `part-` plus digits and dashes can appear in
 // the output; strict names are then parsed with transferlink, entries are
@@ -213,7 +206,7 @@ func parseStagingListing(data []byte, fileSize int64, maxParts int) (StagingList
 		fileSize = 0
 	}
 	seen := make(map[string]struct{}, len(entries))
-	var candidates []listedPart
+	var candidates []transferlink.Listed
 	var remove []string
 	for _, line := range entries {
 		sizeText, name, ok := strings.Cut(line, " ")
@@ -233,26 +226,10 @@ func parseStagingListing(data []byte, fileSize int64, maxParts int) (StagingList
 			remove = append(remove, name)
 			continue
 		}
-		candidates = append(candidates, listedPart{name: name, rng: rng, size: size})
+		candidates = append(candidates, transferlink.Listed{Name: name, Range: rng, Size: size})
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i].rng, candidates[j].rng
-		if a.Off != b.Off {
-			return a.Off < b.Off
-		}
-		return a.Len > b.Len
-	})
-	listing := StagingListing{Remove: remove, StaleAssembled: stale}
-	var cursor int64
-	for _, c := range candidates {
-		if c.size != c.rng.Len || c.rng.Off < cursor || c.rng.Len > fileSize-c.rng.Off || c.rng.Off > fileSize {
-			listing.Remove = append(listing.Remove, c.name)
-			continue
-		}
-		listing.Parts = append(listing.Parts, c.rng)
-		cursor = c.rng.End()
-	}
-	return listing, nil
+	accepted, rejected := transferlink.AcceptListed(fileSize, candidates)
+	return StagingListing{Parts: accepted, Remove: append(remove, rejected...), StaleAssembled: stale}, nil
 }
 
 // safePartName mirrors the remote safe_name check: `part-` followed by one to

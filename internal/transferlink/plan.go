@@ -180,9 +180,9 @@ type Listed struct {
 // entry whose size differs from its length, that overlaps an already accepted
 // entry or that ends past fileSize is rejected. accepted is ascending by
 // offset and pairwise disjoint; rejected holds the names of the rejected
-// entries in that order. These are the coverage rules the remote listing parser
-// (internal/transferremote) applies to its text output; the local listing of a
-// chunked download uses this function.
+// entries in that order. The remote listing parser (internal/transferremote)
+// and the local listing of a chunked download both build their coverage with
+// this function.
 func AcceptListed(fileSize int64, entries []Listed) (accepted []Range, rejected []string) {
 	if fileSize < 0 {
 		fileSize = 0

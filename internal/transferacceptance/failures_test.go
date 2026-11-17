@@ -15,9 +15,10 @@ import (
 
 // scenarioFailureKilledMidStream kills the transport while bytes are in
 // flight in both directions: nothing may be published and no staging may
-// survive locally or in the sandbox. The uploaded file is below the size that
-// is worth chunking (two minimum chunks), so a dropped stream fails it as
-// before; the chunked continuation of larger files has its own scenarios.
+// survive locally or in the sandbox. Both files are below the size that is
+// worth chunking (two minimum chunks), so a dropped stream fails them as
+// before; the chunked continuation of larger files, in both directions, has its
+// own scenarios.
 func scenarioFailureKilledMidStream(t *testing.T) {
 	s := newStack(t, transfercore.DefaultLimits(), nil)
 	var c captured
