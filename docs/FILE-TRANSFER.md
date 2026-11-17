@@ -24,7 +24,7 @@ All calls require a `target` approved by `remote_targets`.
 
 - `remote_upload { target, root?, local, remote, overwrite?, confirm? }`
 - `remote_download { target, root?, remote, local, overwrite?, confirm? }`
-- `transfer_status { job_id }` and `transfer_cancel { job_id }`
+- `transfer_status { job_id, wait_seconds? }` and `transfer_cancel { job_id }`
 
 The keeper handles the operations `transfer_upload`, `transfer_download`, `transfer_status` and `transfer_cancel`; the MCP bridge exposes them as `remote_upload`, `remote_download`, `transfer_status` and `transfer_cancel` with the argument sets listed above.
 
@@ -62,6 +62,17 @@ The same job after 8 consecutive attempts without progress; its parts stay for a
 ```
 
 Manager bounds: at most two concurrent jobs; a job is refused while another job targets the same destination (root and root-relative path for downloads, target and remote path for uploads); at most 64 records are retained, evicting the oldest finished first; unknown job ids refuse with a fixed message.
+
+### Waiting calls (`wait_seconds`)
+
+Every tool result is printed into the model's chat, so polling a long transfer dozens of times floods it. `transfer_status`, `remote_read` and `app_read` therefore take an optional integer `wait_seconds` that lets one call block until something changes:
+
+- Range: `0` to `25`; omitted or `0` is today's immediate behavior. A value above `25` is clamped to `25`; a negative value is refused with the fixed message `wait_seconds must be between 0 and 25`. A non-integer is refused by the input schema.
+- `transfer_status`: a job that is already `done`, `failed` or `cancelled` is returned at once. A running job blocks until it reaches a terminal state or the wait expires; an expired wait returns the current `running` record. The wait is a select on the job's completion, the expiry timer and the contexts: it holds neither the manager lock nor the job lock, and there is no polling loop. Phase changes do not end a wait.
+- `remote_read` and `app_read`: a job that is done, or whose retained output already extends beyond the given offsets, is returned at once. Otherwise the call blocks until new stdout or stderr bytes arrive, the command completes or the wait expires, then returns the normal chunk record; offsets, `done`, `*_more` and `*_lost` keep their meaning, and an invalid offset is refused at once.
+- Release: a waiting call ends when the keeper session closes (it then answers `session closed`, or the final record when the job ended at the same moment) and when the job is cancelled or ends (the terminal record). When the MCP request is cancelled, the bridge returns to the model at once and keeps the keeper session open; the reply still owed by the keeper (at most the remaining wait) is read and dropped in the background.
+- Concurrency: one connection carries one request at a time, so a waiting call occupies the session's keeper connection; another tool call made meanwhile (for example `transfer_cancel`) is served after the wait ends, at most 25 seconds later. The keeper also bounds waiting calls per manager (transfer, remote, application): at most 4 at once; a call that finds every slot taken is answered at once, as if it had asked for no wait.
+- Deadlines on the path: the keeper side sets none after attachment; the bridge's IPC deadline for an ordinary call is 30 seconds, and a waiting call uses 35 seconds (the longest wait plus a 10 second margin) instead, so a full wait never trips it; the bridge's stdio write bound of 15 seconds starts when the reply is written, not when the call starts; the 20 second budgets of the remote MCP relay (`mcpbridge`, `mcpchannel`) belong to a different path that these tools never use.
 
 One engine per target. The manager builds the engine of a target on its first job, through the keeper's build callback (concurrent first uses build it once; a failed build is not remembered, so the next job tries again) and runs every later job of that target on the same engine. The engine owns the link profile, so what one job learned about a link (throughput, shortest connection lifetime, chunk size, mode) steers the next job to that target; targets never share an engine or a profile. The engine keeps the target name for the chunked staging key.
 

@@ -13,6 +13,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
+	"github.com/PHPCraftdream/ssjack/internal/jobwait"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/transfer"
 )
@@ -49,6 +50,17 @@ func readOutput(raw remote.ReadOutput) ReadOutput {
 		out.StderrBase64 = base64.StdEncoding.EncodeToString(raw.Stderr)
 	}
 	return out
+}
+
+// callPolling sends one polling request. With no wait it is the plain bounded
+// call; a positive wait (already validated and clamped to 25 seconds) uses the
+// waiting call, whose IPC deadline covers the whole wait and which leaves the
+// keeper session open when the request context ends first.
+func callPolling(ctx context.Context, client *broker.Client, operation string, wait int, input, output any) error {
+	if wait > 0 {
+		return client.CallWait(ctx, operation, input, output)
+	}
+	return client.Call(ctx, operation, input, output)
 }
 
 func NewDeclarativeServer() *mcp.Server {
@@ -103,16 +115,21 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 			err := client.Call(ctx, "targets", struct{}{}, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "remote_exec", Description: "Start a noninteractive shell command on an approved target. Returns job_id; read output through remote_read. The command has the configured SSH user privileges."},
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_exec", Description: "Start a noninteractive shell command on an approved target. Returns job_id; read output through remote_read (wait_seconds 20 avoids repeated polling). The command has the configured SSH user privileges."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.StartInput) (*mcp.CallToolResult, remote.StartOutput, error) {
 			var out remote.StartOutput
 			err := client.Call(ctx, "start", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "remote_read", Description: "Read stdout/stderr chunks using returned offsets. done indicates command completion; drain remaining output while *_more is true. *_lost indicates buffer overflow. Invalid UTF-8 is replaced and the original chunk is also returned in *_base64. Offsets count original bytes."},
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_read", Description: "Read stdout/stderr chunks using returned offsets. done indicates command completion; drain remaining output while *_more is true. *_lost indicates buffer overflow. Invalid UTF-8 is replaced and the original chunk is also returned in *_base64. Offsets count original bytes. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the command runs and no output beyond the given offsets exists, until new output arrives, the command completes or the wait expires, then returns the normal chunk; prefer one call with wait_seconds 20 over repeated immediate reads."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
+			wait, err := jobwait.Clamp(input.WaitSeconds)
+			if err != nil {
+				return nil, ReadOutput{}, err
+			}
+			input.WaitSeconds = wait
 			var raw remote.ReadOutput
-			err := client.Call(ctx, "read", input, &raw)
+			err = callPolling(ctx, client, "read", wait, input, &raw)
 			return nil, readOutput(raw), err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "remote_cancel", Description: "Cancel an operation and close its SSH connection. Detached remote processes may continue running."},
@@ -133,10 +150,15 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 			err := client.Call(ctx, "app_start", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered application operation output using returned offsets; drain both streams until done and no more output remains."},
+	mcp.AddTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered application operation output using returned offsets; drain both streams until done and no more output remains. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the operation runs and no output beyond the given offsets exists, until new output arrives, the operation completes or the wait expires, then returns the normal chunk; prefer one call with wait_seconds 20 over repeated immediate reads."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input remote.ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
+			wait, err := jobwait.Clamp(input.WaitSeconds)
+			if err != nil {
+				return nil, ReadOutput{}, err
+			}
+			input.WaitSeconds = wait
 			var raw remote.ReadOutput
-			err := client.Call(ctx, "app_read", input, &raw)
+			err = callPolling(ctx, client, "app_read", wait, input, &raw)
 			return nil, readOutput(raw), err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "app_cancel", Description: "Cancel a registered application operation and revoke its child transport. A detached remote process may continue running."},
@@ -145,22 +167,27 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 			err := client.Call(ctx, "app_cancel", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "remote_upload", Description: "Copy a file from an owner-registered local transfer root to an absolute POSIX path on an approved target, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is relative to the registered root (omit root when exactly one is registered); target must be one of the remote_targets. The remote path is written with the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; poll transfer_status and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_upload again with the same arguments to resume from the parts already staged next to the remote destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the remote disk needs about twice the file size. Directories are never chunked."},
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_upload", Description: "Copy a file from an owner-registered local transfer root to an absolute POSIX path on an approved target, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is relative to the registered root (omit root when exactly one is registered); target must be one of the remote_targets. The remote path is written with the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_upload again with the same arguments to resume from the parts already staged next to the remote destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the remote disk needs about twice the file size. Directories are never chunked."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StartInput) (*mcp.CallToolResult, transfer.StartOutput, error) {
 			var out transfer.StartOutput
 			err := client.Call(ctx, "transfer_upload", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "remote_download", Description: "Copy a file from an approved target into an owner-registered local transfer root, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is the root-relative destination (omit root when exactly one is registered); target must be one of the remote_targets. The remote read uses the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; poll transfer_status and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_download again with the same arguments to resume from the parts already staged beside the local destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the local disk needs about twice the file size. Directories are never chunked."},
+	mcp.AddTool(server, &mcp.Tool{Name: "remote_download", Description: "Copy a file from an approved target into an owner-registered local transfer root, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is the root-relative destination (omit root when exactly one is registered); target must be one of the remote_targets. The remote read uses the profile's SSH principal. overwrite=true requires confirm=true. Returns job_id; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_download again with the same arguments to resume from the parts already staged beside the local destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the local disk needs about twice the file size. Directories are never chunked."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StartInput) (*mcp.CallToolResult, transfer.StartOutput, error) {
 			var out transfer.StartOutput
 			err := client.Call(ctx, "transfer_download", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "transfer_status", Description: "Report a bounded, content-free transfer status: state (running, done, failed, cancelled), phase, direction, kind, file/dir counts, bytes (never decreases), sha256 or manifest_sha256 when available, and error_class (refused_path, exists, limit, unsupported_remote, integrity, remote_failed, link_unstable, cancelled, internal) with a fixed message. For a single file it also reports mode (stream or chunked), chunk_bytes, chunks_done, chunks_total, attempts and bytes_per_second, each omitted while absent; a running chunked job shows live part progress, and a directory never carries them. A failed chunked job keeps its verified bytes and counts. link_unstable means the link was too unstable to finish: the staged parts are kept and the same upload or download call resumes. Never contains file content or local paths."},
+	mcp.AddTool(server, &mcp.Tool{Name: "transfer_status", Description: "Report a bounded, content-free transfer status: state (running, done, failed, cancelled), phase, direction, kind, file/dir counts, bytes (never decreases), sha256 or manifest_sha256 when available, and error_class (refused_path, exists, limit, unsupported_remote, integrity, remote_failed, link_unstable, cancelled, internal) with a fixed message. For a single file it also reports mode (stream or chunked), chunk_bytes, chunks_done, chunks_total, attempts and bytes_per_second, each omitted while absent; a running chunked job shows live part progress, and a directory never carries them. A failed chunked job keeps its verified bytes and counts. link_unstable means the link was too unstable to finish: the staged parts are kept and the same upload or download call resumes. Never contains file content or local paths. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the job is running until it is done, failed or cancelled, or the wait expires, then returns the status; prefer one call with wait_seconds 20 over repeated immediate polling."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input transfer.StatusInput) (*mcp.CallToolResult, transfer.StatusOutput, error) {
 			var out transfer.StatusOutput
-			err := client.Call(ctx, "transfer_status", input, &out)
+			wait, err := jobwait.Clamp(input.WaitSeconds)
+			if err != nil {
+				return nil, out, err
+			}
+			input.WaitSeconds = wait
+			err = callPolling(ctx, client, "transfer_status", wait, input, &out)
 			return nil, out, err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "transfer_cancel", Description: "Cancel a running transfer job and close its SSH session. A chunked file transfer's partial parts are removed, so a cancel gives up resuming; a link failure keeps them. Cancelling an already finished job reports cancelled=false."},

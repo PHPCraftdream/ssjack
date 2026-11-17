@@ -207,6 +207,41 @@ func TestApplicationCancellationAndDisconnect(t *testing.T) {
 	}
 }
 
+// app_read with wait_seconds blocks until output or completion instead of
+// returning an empty chunk, and a cancelled operation ends the wait.
+func TestApplicationReadWaitsForOutputAndCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	manager := fixtureManager(t, ctx)
+	var start remote.StartOutput
+	applicationCall(t, ctx, manager, "app_start", Input{Application: fixtureName, Arguments: []string{"inspect", "wait"}}, &start)
+	var first remote.ReadOutput
+	applicationCall(t, ctx, manager, "app_read", remote.ReadInput{JobID: start.JobID, WaitSeconds: 15}, &first)
+	if first.Done || len(first.Stdout) == 0 {
+		t.Fatalf("a waiting read returned without output while the helper runs: %+v", first)
+	}
+	var cancelled remote.CancelOutput
+	applicationCall(t, ctx, manager, "app_cancel", remote.JobInput{JobID: start.JobID}, &cancelled)
+	if !cancelled.Cancelled {
+		t.Fatal("cancel not acknowledged")
+	}
+	stdoutOffset, stderrOffset := first.StdoutOffset, first.StderrOffset
+	for {
+		var next remote.ReadOutput
+		applicationCall(t, ctx, manager, "app_read", remote.ReadInput{JobID: start.JobID, StdoutOffset: stdoutOffset, StderrOffset: stderrOffset, WaitSeconds: 15}, &next)
+		stdoutOffset, stderrOffset = next.StdoutOffset, next.StderrOffset
+		if next.Done {
+			if next.ExitCode == 0 || !strings.Contains(next.Error, "canceled") {
+				t.Fatalf("cancellation was lost: %+v", next)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("waiting reads did not see the cancelled application finish\ngoroutine dump:\n%s", flakediag.GoroutineDump(64*1024))
+		}
+	}
+}
+
 func TestApplicationTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

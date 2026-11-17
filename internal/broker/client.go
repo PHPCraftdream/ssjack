@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/jobwait"
 	"github.com/PHPCraftdream/ssjack/internal/lifelog"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
@@ -132,6 +133,59 @@ func (c *Client) Call(ctx context.Context, operation string, input, output any) 
 		return wire.Decode(reply.Data, output)
 	}
 	return nil
+}
+
+// waitCallBudget is the IPC deadline of a waiting call: the longest wait the
+// keeper accepts plus a margin for the reply, so a full wait never trips it.
+const waitCallBudget = jobwait.MaxSeconds*time.Second + 10*time.Second
+
+// CallWait is Call for an operation that may block in the keeper for up to
+// jobwait.MaxSeconds (wait_seconds). It differs from Call in two ways. Its
+// deadline is waitCallBudget, not 30 s, and the request context is not
+// applied to the connection. When ctx ends first the call returns ctx.Err()
+// at once but the session stays open: the reply still owed by the keeper is
+// read and dropped in the background while the client stays busy, so the next
+// call waits for it (at most the remaining wait) instead of a closed session.
+func (c *Client) CallWait(ctx context.Context, operation string, input, output any) error {
+	data, err := wire.Encode(input)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.conn.SetDeadline(time.Now().Add(waitCallBudget))
+	var reply wire.Reply
+	exchanged := make(chan bool, 1)
+	go func() { exchanged <- c.exchange(operation, data, &reply) }()
+	select {
+	case ok := <-exchanged:
+		defer c.mu.Unlock()
+		if !ok {
+			c.conn.Close()
+			return errors.New("keeper connection closed; start a new session")
+		}
+		c.conn.SetDeadline(time.Time{})
+		if !reply.OK {
+			return errors.New(reply.Error)
+		}
+		if output != nil {
+			return wire.Decode(reply.Data, output)
+		}
+		return nil
+	case <-ctx.Done():
+		go func() {
+			defer c.mu.Unlock()
+			if <-exchanged {
+				c.conn.SetDeadline(time.Time{})
+				return
+			}
+			c.conn.Close()
+		}()
+		return ctx.Err()
+	}
 }
 
 func Result(value any, err error) wire.Reply {

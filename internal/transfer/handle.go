@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/jobwait"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -22,7 +23,8 @@ type StartOutput struct {
 }
 
 type StatusInput struct {
-	JobID string `json:"job_id" jsonschema:"Transfer job identifier"`
+	JobID       string `json:"job_id" jsonschema:"Transfer job identifier"`
+	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"Optional wait, integer 0 to 25, default 0 (return at once); a larger value counts as 25. A positive value blocks until the job is done, failed or cancelled, or the wait expires, then returns the current status. Prefer one call with 20 over repeated immediate polling"`
 }
 
 type StatusOutput struct {
@@ -90,7 +92,11 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 		if wire.Decode(request.Data, &input) != nil {
 			return broker.Result(nil, errors.New("invalid transfer arguments")), true
 		}
-		out, err := m.status(input.JobID)
+		wait, err := jobwait.Duration(input.WaitSeconds)
+		if err != nil {
+			return broker.Result(nil, err), true
+		}
+		out, err := m.statusWait(ctx, input.JobID, wait)
 		return broker.Result(out, err), true
 	case "transfer_cancel":
 		if !m.hasRootsGate() {

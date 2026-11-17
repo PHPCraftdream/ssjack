@@ -121,7 +121,9 @@ func TestMCPToolsOverAuthenticatedConnection(t *testing.T) {
 	for name, wants := range map[string][]string{
 		"remote_upload":   {"link_unstable", "resume", "twice the file size", "Directories are never chunked", "transfer_cancel removes"},
 		"remote_download": {"link_unstable", "resume", "twice the file size", "Directories are never chunked", "transfer_cancel removes"},
-		"transfer_status": append([]string{"link_unstable", "refused_path", "never decreases", "manifest_sha256"}, chunkFields...),
+		"transfer_status": append([]string{"link_unstable", "refused_path", "never decreases", "manifest_sha256", "wait_seconds"}, chunkFields...),
+		"remote_read":     {"wait_seconds", "done indicates"},
+		"app_read":        {"wait_seconds", "drain both streams"},
 		"transfer_cancel": {"removed", "link failure keeps"},
 	} {
 		tool := byName[name]

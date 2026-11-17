@@ -93,6 +93,19 @@ type capture struct {
 	mu    sync.Mutex
 	data  []byte
 	total int64
+	// wake is closed and cleared by the next write; it exists only while a
+	// waiting read has asked for it.
+	wake chan struct{}
+}
+
+// changed returns a channel that is closed by the next write that adds bytes.
+func (b *capture) changed() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.wake == nil {
+		b.wake = make(chan struct{})
+	}
+	return b.wake
 }
 
 func (b *capture) Write(data []byte) (int, error) {
@@ -100,6 +113,10 @@ func (b *capture) Write(data []byte) (int, error) {
 	defer b.mu.Unlock()
 	n := len(data)
 	b.total += int64(n)
+	if n > 0 && b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
 	if n >= outputLimit {
 		b.data = append(b.data[:0], data[n-outputLimit:]...)
 	} else {

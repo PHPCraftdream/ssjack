@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/jobwait"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/transferengine"
 	"github.com/PHPCraftdream/ssjack/internal/transferlocal"
@@ -19,6 +21,9 @@ const (
 var (
 	errNoRoots    = errors.New("no transfer roots are registered; the owner registers one with --transfer-root when starting the keeper")
 	errUnknownJob = errors.New("unknown transfer job")
+
+	// errSessionClosed frees a waiting call whose request or keeper session ended.
+	errSessionClosed = errors.New("session closed")
 )
 
 type jobState string
@@ -170,6 +175,11 @@ type Manager struct {
 	closed   bool
 	wg       sync.WaitGroup
 	bind     sync.Once
+
+	// waits bounds the transfer_status calls blocked on wait_seconds; timer
+	// arms their expiry (nil: the real clock). Neither needs mu.
+	waits jobwait.Gate
+	timer jobwait.Timer
 }
 
 // NewManager roots transfers in the owner-registered roots and approved
@@ -347,13 +357,66 @@ func (m *Manager) run(ctx context.Context, j *job, root *transferlocal.Root, inp
 	close(j.done)
 }
 
-func (m *Manager) status(id string) (StatusOutput, error) {
+func (m *Manager) lookup(id string) *job {
 	m.mu.Lock()
-	j := m.jobs[id]
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	return m.jobs[id]
+}
+
+func (m *Manager) status(id string) (StatusOutput, error) {
+	j := m.lookup(id)
 	if j == nil {
 		return StatusOutput{}, errUnknownJob
 	}
+	return j.record(), nil
+}
+
+// newTimer arms an expiry on the manager's timer (the real clock by default).
+func (m *Manager) newTimer(d time.Duration) (<-chan time.Time, func()) {
+	if m.timer != nil {
+		return m.timer(d)
+	}
+	return jobwait.SystemTimer(d)
+}
+
+// statusWait is status that, for a running job and a positive wait, blocks
+// until the job reaches a terminal state or the wait expires, then returns the
+// record as it is. The wait holds no manager or job lock: it only selects on
+// the job's done channel, the expiry timer and the contexts. A call that finds
+// every wait slot taken is answered at once.
+func (m *Manager) statusWait(ctx context.Context, id string, wait time.Duration) (StatusOutput, error) {
+	j := m.lookup(id)
+	if j == nil {
+		return StatusOutput{}, errUnknownJob
+	}
+	select {
+	case <-j.done:
+		return j.record(), nil
+	default:
+	}
+	if wait <= 0 || !m.waits.Acquire() {
+		return j.record(), nil
+	}
+	defer m.waits.Release()
+	expired, stop := m.newTimer(wait)
+	defer stop()
+	select {
+	case <-j.done:
+	case <-expired:
+	case <-ctx.Done():
+		return StatusOutput{}, errSessionClosed
+	case <-m.ctx.Done():
+		select {
+		case <-j.done:
+		default:
+			return StatusOutput{}, errSessionClosed
+		}
+	}
+	return j.record(), nil
+}
+
+// record builds the status record of the job as it is now.
+func (j *job) record() StatusOutput {
 	out := StatusOutput{JobID: j.id, State: string(stateRunning), Direction: j.direction}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -374,7 +437,7 @@ func (m *Manager) status(id string) (StatusOutput, error) {
 	out.Mode, out.ChunkBytes = j.rep.mode, j.rep.chunkBytes
 	out.ChunksDone, out.ChunksTotal = j.rep.chunksDone, j.rep.chunksTotal
 	out.Attempts, out.BytesPerSecond = j.rep.attempts, j.rep.bytesPerSecond
-	return out, nil
+	return out
 }
 
 func (m *Manager) cancelJob(id string) (CancelOutput, error) {

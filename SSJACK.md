@@ -117,7 +117,7 @@ These are actual UI cards, not assistant-authored messages or a tamper-proof aud
 - `remote_read`: output chunks and operation state.
 - `remote_cancel`: cancellation and SSH connection closure.
 
-Pass returned stdout/stderr offsets into the next read. Offsets count original bytes. `done` means execution ended, not that all retained output was drained: continue reading while `stdout_more` or `stderr_more` is true.
+Pass returned stdout/stderr offsets into the next read. Instead of polling `remote_read` (and `app_read`, `transfer_status`) in a loop, pass the optional integer `wait_seconds` (0 to 25, default 0 = answer at once; a larger value counts as 25, a negative one is refused with `wait_seconds must be between 0 and 25`): the call then blocks while the job is running and nothing new exists, and returns as soon as new stdout/stderr bytes arrive, the command completes or the wait expires, with the normal chunk record. A read that already has output beyond the given offsets, or whose job is done, returns at once. Prefer one call with `wait_seconds` 20 over repeated immediate reads; every call is printed into the chat. See [Waiting calls](docs/FILE-TRANSFER.md#waiting-calls-wait_seconds) for the bounds. Offsets count original bytes. `done` means execution ended, not that all retained output was drained: continue reading while `stdout_more` or `stderr_more` is true.
 
 Invalid UTF-8 is replaced in text output, with the original chunk additionally available as `stdout_base64` or `stderr_base64`. This also preserves bytes when a multibyte character spans chunks.
 
@@ -140,7 +140,7 @@ Owner startup flags (full mode only): repeatable `--transfer-root [NAME=]DIR` re
 Tools:
 
 - `remote_upload` and `remote_download` start a copy job on an approved target and return `job_id`;
-- `transfer_status` reports bounded progress; for a single file it also reports `mode` (`stream` or `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second`, omitted while absent;
+- `transfer_status` reports bounded progress; for a single file it also reports `mode` (`stream` or `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second`, omitted while absent; with `wait_seconds` (0 to 25) it blocks until the job is done, failed or cancelled, or the wait expires, so one call with `wait_seconds` 20 replaces repeated polling;
 - `transfer_cancel` cancels a job and closes its SSH session; a chunked transfer's partial parts are removed (a link failure keeps them for resume).
 
 Guaranteed: copy only, the source is never modified; SHA-256 verification of every transfer; staged writes with rename-only publication, so a failed transfer publishes nothing, and a single file whose link keeps dropping continues from marked staging parts and is published only after a whole-file hash check; at most two concurrent transfers and one job per destination; `overwrite=true` requires `confirm=true`; results are content-free — never file content, absolute local paths, remote stderr or raw lower-layer error text, only state, phase, direction, kind, counts, bytes, the SHA-256, the chunked-mode fields above, an error class (including `link_unstable`: the link was too unstable to finish, call again to resume, also after a keeper restart) and a fixed message; finished records are retained in a bounded set; closing the keeper cancels all transfers; records are RAM-only.

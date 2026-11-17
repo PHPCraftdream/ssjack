@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/jobwait"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -35,6 +36,7 @@ type ReadInput struct {
 	JobID        string `json:"job_id"`
 	StdoutOffset int64  `json:"stdout_offset,omitempty"`
 	StderrOffset int64  `json:"stderr_offset,omitempty"`
+	WaitSeconds  int    `json:"wait_seconds,omitempty" jsonschema:"Optional wait, integer 0 to 25, default 0 (return at once); a larger value counts as 25. A positive value blocks only while the job is running and no output beyond the given offsets exists, until new output arrives, the command completes or the wait expires, then returns the chunk. Prefer one call with 20 over repeated immediate polling"`
 }
 
 type JobInput struct {
@@ -77,7 +79,15 @@ type Manager struct {
 	closed  bool
 	wg      sync.WaitGroup
 	bind    sync.Once
+
+	// waits bounds the reads blocked on wait_seconds; timer arms their
+	// expiry (nil: the real clock). Neither needs mu.
+	waits jobwait.Gate
+	timer jobwait.Timer
 }
+
+// errSessionClosed frees a waiting read whose request or keeper session ended.
+var errSessionClosed = errors.New("session closed")
 
 func NewManager(parent context.Context, targets []string, runner Runner) *Manager {
 	ctx, cancel := context.WithCancel(parent)
@@ -222,6 +232,66 @@ func (m *Manager) Read(input ReadInput) (ReadOutput, error) {
 	return out, nil
 }
 
+// quiet reports that a read carried nothing to act on: the job is still
+// running and no output is available beyond the offsets of the read.
+func quiet(out ReadOutput) bool {
+	return !out.Done && len(out.Stdout) == 0 && len(out.Stderr) == 0 && !out.StdoutMore && !out.StderrMore
+}
+
+// newTimer arms an expiry on the manager's timer (the real clock by default).
+func (m *Manager) newTimer(d time.Duration) (<-chan time.Time, func()) {
+	if m.timer != nil {
+		return m.timer(d)
+	}
+	return jobwait.SystemTimer(d)
+}
+
+// ReadWait is Read that, for a positive wait_seconds and a quiet read, blocks
+// until new stdout or stderr bytes arrive, the job completes or the wait
+// expires, then returns the chunk exactly as Read would: offsets, done and
+// lost keep their meaning. A read that already has output, or whose job is
+// done, returns at once, and so does one that finds every wait slot taken.
+// The wait holds no manager or job lock; it ends with ctx or the manager.
+func (m *Manager) ReadWait(ctx context.Context, input ReadInput) (ReadOutput, error) {
+	wait, err := jobwait.Duration(input.WaitSeconds)
+	if err != nil {
+		return ReadOutput{}, err
+	}
+	out, err := m.Read(input)
+	if err != nil || wait <= 0 || !quiet(out) {
+		return out, err
+	}
+	j, err := m.get(input.JobID)
+	if err != nil {
+		return ReadOutput{}, err
+	}
+	if !m.waits.Acquire() {
+		return out, nil
+	}
+	defer m.waits.Release()
+	expired, stop := m.newTimer(wait)
+	defer stop()
+	for {
+		// Subscribe before the next read, so a write in between wakes us.
+		stdoutWrote, stderrWrote := j.stdout.changed(), j.stderr.changed()
+		out, err = m.Read(input)
+		if err != nil || !quiet(out) {
+			return out, err
+		}
+		select {
+		case <-stdoutWrote:
+		case <-stderrWrote:
+		case <-j.done:
+		case <-expired:
+			return out, nil
+		case <-ctx.Done():
+			return ReadOutput{}, errSessionClosed
+		case <-m.ctx.Done():
+			return ReadOutput{}, errSessionClosed
+		}
+	}
+}
+
 func (m *Manager) Cancel(id string) (CancelOutput, error) {
 	j, err := m.get(id)
 	if err != nil {
@@ -260,7 +330,7 @@ func (m *Manager) Handle(ctx context.Context, req wire.Request) wire.Reply {
 		if err := decode(req.Data, &input); err != nil {
 			return broker.Result(nil, err)
 		}
-		out, err := m.Read(input)
+		out, err := m.ReadWait(ctx, input)
 		return broker.Result(out, err)
 	case "cancel":
 		var input JobInput
