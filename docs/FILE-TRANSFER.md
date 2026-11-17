@@ -1,12 +1,12 @@
 # File and directory transfer
 
-Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI.
+Status: implemented in progress. The startup flags, the keeper job manager (internal/transfer), the single-file engine and the MCP tools below exist; directory transfers are still being completed in the engine, and all building and testing happens in CI. The chunked resumable mode for single files ("Chunked resumable mode" below) is specified here and not implemented yet; until it is, every transfer behaves as the whole-stream mode described in the other sections.
 
 ## Purpose
 
 An agent running under ssjack holds no SSH keys. Today it can move bytes only through `remote_exec`/`remote_read`, which are text-oriented, bounded, output-guarded and model-facing: file contents would pass through the model context, binary data is not preserved reliably, and secret-looking content is masked or truncated. This feature copies files and directories between an owner-approved local directory and an approved SSH target through the keeper. The model sees only a bounded status record, never content.
 
-Copy only. The source is never modified or deleted. There is no move, sync, delta or resume.
+Copy only. The source is never modified or deleted. There is no move, sync or delta. A large single file whose connection keeps dropping is transferred in chunks into a temporary staging directory at the destination and concatenated there, so an interrupted transfer continues instead of restarting (see "Chunked resumable mode"); every other transfer is a whole stream that publishes nothing on failure.
 
 ## Authority model
 
@@ -30,13 +30,13 @@ The keeper handles the operations `transfer_upload`, `transfer_download`, `trans
 
 The kind (file or directory) is taken from the source, never from the caller. A start call returns `job_id` at once. At most two transfers run concurrently, and no two target one destination. `overwrite=true` requires `confirm=true`; the flag records caller acknowledgment only, and harness permissions still apply.
 
-`transfer_status` returns: `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. `refused_path` is deliberately coarse: it covers a missing local parent directory, a path outside the root and a symlink alike, because a finer reason would disclose the structure of the owner's file system to the model. Finished records are retained in a bounded set.
+`transfer_status` returns: `state` (`running`, `done`, `failed`, `cancelled`), `phase`, `kind`, `direction`, `files`, `dirs`, `bytes`, `sha256` (file) or `manifest_sha256` (directory), `error_class` and a fixed message, plus the content-free chunked-mode fields listed in the schema below. Error classes: `refused_path`, `exists`, `limit`, `unsupported_remote`, `integrity`, `remote_failed`, `link_unstable`, `cancelled`, `internal`. Remote stderr is never returned; the model gets the error class and a fixed message only. `refused_path` is deliberately coarse: it covers a missing local parent directory, a path outside the root and a symlink alike, because a finer reason would disclose the structure of the owner's file system to the model. Finished records are retained in a bounded set.
 
 ### Job and status schema
 
 A start call returns `{"job_id": "..."}` immediately. `transfer_cancel` returns `{"cancelled": true|false}`; `false` means the job had already finished.
 
-`transfer_status` returns exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free). Optional fields are omitted while absent.
+`transfer_status` returns exactly: `job_id`, `state` (`running`, `done`, `failed`, `cancelled`), `direction` (`upload`, `download`), `phase` (`preflight`, `transfer`, `verify`, `publish`, `cleanup`), `kind` (`file`, `directory`), `files`, `dirs`, `bytes`, `sha256` (file transfers), `manifest_sha256` (directory transfers), `error_class` and `message` (fixed, content-free), and for file transfers the chunked-mode fields `mode` (`stream`, `chunked`), `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` (all integers except `mode`; semantics in "Chunked resumable mode"). Optional fields are omitted while absent.
 
 Manager bounds: at most two concurrent jobs; a job is refused while another job targets the same destination (root and root-relative path for downloads, target and remote path for uploads); at most 64 records are retained, evicting the oldest finished first; unknown job ids refuse with a fixed message.
 
@@ -50,7 +50,7 @@ Remote requirements, probed before transfer staging or payload mutation: POSIX `
 
 ## Atomic publication
 
-Everything is written to a staging path in the destination's parent (`.ssjack-transfer-<random>`, mode 0700, created with a no-clobber primitive) and published by rename only after verification. A failure removes only the staging path this job created (name pattern and creation checked before removal) and publishes nothing.
+Everything is written to a staging path in the destination's parent (`.ssjack-transfer-<random>`, mode 0700, created with a no-clobber primitive) and published by rename only after verification. A failure removes only the staging path this job created (name pattern and creation checked before removal) and publishes nothing. The chunked mode keeps a deterministic, marked staging directory across a link failure and uses a stricter adoption and removal check; see "Chunked resumable mode".
 
 - File, no overwrite: hard-link staging to the destination (atomic, fails if it exists), then unlink staging. Primitive `p` uses Perl `link()` with the paths as argv, so a destination directory or existing symlink fails without nesting; this fixes the plain-`ln` directory-nesting behavior only for the new `p` variant. Primitive `t` keeps all existing GNU/BusyBox publication templates byte-for-byte unchanged, including their `ln` behavior. If hard-link publication is unavailable, the fallback is an existence check plus the selected no-nesting rename (`mv -T` or Perl `rename()`), with the same accepted check/publish race.
 - File, overwrite: `mv -T -f` or Perl `rename()` onto a destination that passed the regular-file type check. A pre-existing symlink or directory is refused. Rename replaces a destination symlink itself and does not follow it; the accepted check/publish race means a symlink introduced after the type check may be replaced.
@@ -63,7 +63,7 @@ A missing destination parent is refused in v1; parents are never created implici
 
 ## Files
 
-Upload: stream the local file through a counting hasher into `cat > staging` (remote umask 077, final mode `0666` or `0777` if the source had an execute bit, minus remote umask; no ownership or special bits). Then run the selected, probed SHA-256 command on the staging file and compare with the local hash. Download: refuse non-regular or symlink sources, run the selected SHA-256 command and size check on the remote file, stream `cat` into a local staging file while hashing and counting, compare with the pre-hash, fsync, publish. A source that changes mid-transfer yields `integrity`.
+Upload: stream the local file through a counting hasher into `cat > staging` (remote umask 077, final mode `0666` or `0777` if the source had an execute bit, minus remote umask; no ownership or special bits). Then run the selected, probed SHA-256 command on the staging file and compare with the local hash. Download: refuse non-regular or symlink sources, run the selected SHA-256 command and size check on the remote file, stream `cat` into a local staging file while hashing and counting, compare with the pre-hash, fsync, publish. A source that changes mid-transfer yields `integrity`. The stream described here is the first attempt of every file transfer; when the link keeps dropping, the remaining bytes move in chunks ("Chunked resumable mode").
 
 ## Directories
 
@@ -73,15 +73,113 @@ Upload: walk the local tree under the root, build a manifest (relative path, siz
 
 Download: remote preflight rejects non-regular entries and over-limit trees, then returns the remote manifest using the selected SHA-256 command. Stream `tar -c` and extract locally into staging with Go `archive/tar`, hashing while extracting, and compare with the manifest and counts. Then publish. Source enumeration or read failures remain failed, content-free results and are not converted to an empty manifest.
 
+Directories always move as one whole stream in v1 and are never chunked: a tar stream is not deterministic across attempts (entry order, timestamps and a changing tree), so a byte offset into it cannot be resumed, least of all for downloads. A dropped directory transfer fails with `remote_failed` and publishes nothing, as before.
+
 Safe extraction (both directions, same rules): reject absolute paths, `..`, duplicate names, entries whose type is not regular or directory, and any entry that would be written through a pre-existing link. Open with no-follow semantics. Reject names invalid on the local OS: Windows device names (`CON`, `NUL`, `COM1`...), trailing dot or space, `:`, and case-insensitive collisions on case-insensitive filesystems. Enforce byte, entry-count, path-length and depth limits while streaming; a limit hit cancels the remote command.
+
+## Chunked resumable mode
+
+Single regular files only, upload and download. The mode exists for links whose connection dies before a large file has crossed; it changes how bytes reach the destination, never what is published: the destination appears once, through the `t`/`p` publication primitives, after a whole-file SHA-256 check. Directories, parallel chunks, delta, move, delete and sync are out of scope. No new SSH primitive, no SFTP and no new dependency: every chunk command is a fixed template over a fresh authenticated connection, with offsets and lengths formatted by the keeper as decimal integers and never supplied by the model.
+
+Terms. A *drop* is a link failure: the session ended without a remote exit status (connection reset, EOF, keepalive or stall timeout). A remote command that exits non-zero, a cancel, `refused_path`, `integrity` and `limit` are not drops. An *attempt* is one try to move bytes, a stream or one chunk session. An attempt *makes progress* when it adds at least one verified byte to the destination side (a completed part, or a finished stream).
+
+### First attempt and measurements
+
+The first attempt of every file transfer is the existing whole-file stream. While it runs the keeper measures throughput `B` (an EWMA of bytes per second over 1 s samples, alpha 0.25) and the connection lifetime (from authenticated session ready to the drop, if one occurs). A stream that finishes behaves exactly as described under "Files". A session that moves no byte for 60 s is aborted by the keeper and counted as a drop.
+
+### Link profile
+
+The keeper holds, per target, in RAM only and never persisted:
+
+- `B`, the throughput EWMA;
+- `T_survive`, the minimum connection lifetime over the last 8 drops (a session that ends normally is a censored sample and is not recorded as a lifetime);
+- `t_setup`, an EWMA of the time from dialing to an authenticated session ready;
+- `S`, the current chunk size;
+- `mode`, `stream` or `chunked`;
+- consecutive-success and consecutive-failure counters.
+
+A profile unused for one hour is discarded, and all profiles vanish with the keeper. A profile only steers the strategy; it grants no authority and is never visible to the model beyond the status fields below.
+
+### Mode decision
+
+Let `remaining` be the bytes not yet verified at the destination side. After a drop, the job switches to chunked mode when `remaining / B > T_survive`: the transfer cannot be expected to finish inside the shortest recently observed connection lifetime. Otherwise the failed attempt is retried as a stream. With no lifetime sample yet or with `B` unknown, the first drop selects chunked mode (the estimate is treated as exceeding `T_survive`).
+
+The same decision applies in two places. Inside a job, the switch is automatic after a drop; the job stays `running`, `attempts` counts every attempt, and after 8 consecutive attempts without progress the job fails with `link_unstable`. Across jobs, a later call to the same target reads the profile and starts in the recorded mode instead of repeating a doomed stream; a profile in `chunked` mode still begins with a cheap staging lookup, because parts may already exist. A staging directory with at least one valid part for the call's key always selects chunked mode regardless of the profile (this is how a transfer resumes after a keeper restart), with `S` initialised from the largest part found, within the clamp below.
+
+Only a drop switches or retries. `cancelled`, `refused_path`, `integrity`, `limit`, `exists`, `unsupported_remote` and non-drop `remote_failed` end the job at once, are never retried, and never count toward `link_unstable`. Directory transfers have no second attempt.
+
+### Chunk size
+
+With `s_surv = B * T_survive / 2` (half the shortest observed lifetime of data) and `s_over = 20 * B * t_setup` (setup overhead at most 5% of each chunk):
+
+- target `S = clamp(s_surv, 256 KiB, min(64 MiB, remaining))`;
+- floor for later reductions `max(256 KiB, min(s_over, s_surv))`: the overhead bound applies only while it does not exceed `s_surv`; when `s_over > s_surv` (equivalently `T_survive < 40 * t_setup`, independent of `B`) survivability wins and chunks may carry more than 5% overhead;
+- AIMD: a drop inside a chunk halves `S` (not below the floor); after 4 consecutive successful chunks `S` grows by 1.5x (not above `min(64 MiB, remaining)`); `B`, `t_setup` and `T_survive` are updated after every chunk;
+- the last part is cut to the gap it fills, so `S` never exceeds the bytes still missing in the current gap.
+
+Return to stream. The profile's mode returns to `stream` when `S >= remaining`, or when the measured speed is at least twice the speed recorded at the last drop and no drop occurred within the last 4 chunks. Inside a job that already has verified parts the bytes in them are never discarded: the last gap is then sent as one single part (`S = gap length`) and the job still ends in assembly. A whole-file stream replaces chunking only when no valid parts exist.
+
+### Remote layout (upload)
+
+The staging directory is `.ssjack-transfer-<key>` in the destination's parent: mode 0700, created with the no-clobber primitive, and holding a marker file with a fixed magic and the full key. `<key>` is the first 32 hex digits of `sha256(target, remote path, local root-relative path, size, mtime_ns)`, each field length-prefixed. The name length (32 hex digits) differs from the one-shot staging names, so the two kinds never match each other's pattern. The marker contains no path or file content.
+
+Parts are files `part-<offset>-<len>` (decimal, strict pattern, no leading zeros). Parts of different sizes may coexist, because `S` changes under AIMD. The plan covers the first uncovered gap of the coverage, cut with the current `S`.
+
+A part is uploaded in a fresh SSH session: `cat > part-<offset>-<len>.<random>.tmp`, then `wc -c` on the temporary file read from stdin (independent of `wcNames`), then, only when the count equals `<len>`, a rename to the final part name and a refresh of the marker's modification time. The expected length is embedded in the fixed template by the keeper; the session also prints the count and the keeper checks it. A part counts only with the exact size. Temporary names carry a per-attempt random suffix so a lingering process of a dropped session cannot write into a later attempt's file. The source offset is read with a section reader from the local file; before every part the keeper re-checks that the open file still has the key's size and `mtime_ns`, and a change yields `integrity`.
+
+Resume. A listing session reads the staging directory: it validates the marker, then prints every `part-*` entry with its size obtained by `wc -c` on stdin. The keeper accepts only names matching the strict pattern and builds the coverage itself: entries are ordered by offset, then longer first; an entry that overlaps an already accepted one, whose size differs from `<len>`, or whose end exceeds the file size is ignored and removed; stale `*.tmp` files are removed. Gaps are then the complement of the accepted parts in `[0, size)`. The listing is bounded by `ceil(MaxBytes / 256 KiB)` plus a small margin; more entries than that mark the staging as corrupt: it is removed and the job restarts from zero once.
+
+### Assembly and publication
+
+Assembly runs in phase `verify`; no new phase is introduced.
+
+1. The keeper verifies exact coverage of `[0, size)` by the accepted parts: no gap, no overlap, ordered by offset.
+2. One fixed session concatenates the parts in offset order into `assembled.<random>.tmp` inside the staging directory. The ordered part names are fed on stdin and re-validated against the strict pattern by the remote `sh` (a list of up to thousands of names would exceed the argument-length limit if passed as arguments); each is appended with `cat`. A drop during assembly deletes nothing but the half-written file; the next attempt assembles again from the unchanged parts into a new random name.
+3. The selected SHA-256 command is run on the assembled file and its digest must equal the local hash computed before the first part was sent (the hash is computed in one local pass when the job first enters chunked mode, and the open file's size and `mtime_ns` are re-checked after the last part). This whole-file hash is the real integrity guarantee; part sizes, names, the marker and the listing are not. A mismatch ends the job with `integrity` and removes the staging directory.
+4. The assembled file is published with the existing `t`/`p` primitives and the existing exists/overwrite sequence (file, no overwrite: hard-link then unlink; overwrite: rename onto a regular-file destination); then the staging directory is removed.
+
+Remote disk. Peak usage is about twice the file size (parts plus assembled file). The preflight runs a best-effort `df -P -k` on the destination's parent and requires `(size - bytes already in valid parts) + size` available; too little space fails the job with `limit` before any part is sent, and an unparsable `df` result skips the check. After a part session ends with a remote exit status that is not a drop (for example a full disk), the check runs again and a shortage is reported as `limit`.
+
+### Download
+
+Download mirrors upload. The remote preflight yields size, the SHA-256 pre-hash (as in "Files") and modification time in whole seconds. The first attempt is the whole stream.
+
+- Remote chunk read: `dd if=<file> bs=<S> skip=<i> count=1` (POSIX) when the offset is `i * S` for the current `S`; when a gap is not on the `S` grid, `tail -c +<N> <file> | head -c <L>`. Standard error of the reader is discarded. `dd` and `tail -c +N | head -c L` are not in the required-tool list; the primitive is selected by a functional probe (below), which must cover BSD/macOS and BusyBox. A target where neither passes still supports whole-stream download and simply has no chunked download.
+- Local staging: a staging directory in the destination's parent inside the root, named `.ssjack-transfer-<key>` with the same marker and mode rules; the key is `sha256(target, remote path, local root-relative path, remote size, remote mtime)`. A source that changed in size or modification time yields a different key, so stale parts are never reused; the marker also stores the pre-hash, and a staging whose recorded pre-hash differs from the current one is discarded.
+- Each part is streamed into `part-<offset>-<len>.<random>.tmp`, counted, fsynced, size-checked against `<len>` and renamed; a part with another size is deleted and the gap stays open. Resume lists the local parts and builds the coverage as for upload.
+- Assembly concatenates the parts in offset order into a local file in the staging directory while hashing; the digest must equal the remote pre-hash (`integrity` otherwise), then the existing local publication runs and the staging directory is removed. Remote and local sizes are rechecked after the last part, and a source that changed since the pre-hash yields `integrity`.
+- Local disk: peak usage is again about twice the size; a best-effort free-space check on the destination's volume fails with `limit` when short.
+
+### Capability probe additions
+
+The existing probe line stays byte-for-byte as is. Chunk capabilities are reported on a second fixed line, `SSJACK-CHUNK <own> <read> <mtime> <df>\n`, from the same scratch directory:
+
+- `own`: functional checks that `test -O` and `find <path> -prune -type d -perm 0700` work, used by every adoption and removal check on a staging directory (the probe does not require `id`);
+- `read`: `dd`, else `tail -c +N | head -c L`, else none, each verified on a scratch file with known bytes (a chunk at an aligned offset, one not on the grid, one at end of file shorter than the block);
+- `mtime`: a `stat` flavour that reports whole-second modification time and size (GNU/BusyBox `stat -c`, BSD `stat -f`), or none;
+- `df`: whether `df -P -k` output parses.
+
+A target without `own` has no chunked mode in either direction; without `read` or `mtime` it has no chunked download; without `df` it skips the disk preflight. None of these is `unsupported_remote`: such a target keeps the whole-stream behaviour, and a link failure on it is `remote_failed` as before.
+
+### Staging lifecycle and garbage collection
+
+- Adoption. Before reusing a staging directory, and before any removal of one, the keeper verifies: the path is a directory and not a symlink (reparse point locally), the name matches the strict pattern, the mode is 0700, the directory is owned by the keeper's principal (`test -O` remotely, owner comparison locally where the OS exposes it), and the marker has the right magic and the same full key. A directory that fails any check is a foreign object: it is never reused, never removed and never written to. The call then proceeds without chunking (a whole stream into a fresh random staging name); when it is already in link-failure fallback it fails with `remote_failed`.
+- A reused staging directory becomes the job's own: it joins the set of staging paths the job may remove, which the one-shot cleanup otherwise limits to directories it created.
+- Removal on end of job. `transfer_cancel`, `integrity`, `limit`, `refused_path`, `exists` at publish time and every other non-link failure remove the job's own staging directory. A link failure, including `link_unstable`, keeps it for resume. A successful publish removes it.
+- Garbage collection. During the preflight of a later transfer into the same parent (remote for uploads, local for downloads) the keeper removes at most 16 staging directories in that parent which carry the name pattern and the marker, pass every adoption check, and have a marker modification time older than 24 hours (`find <marker> -mtime +0`; the marker is touched after each completed part, so age means idleness). The job's own staging is excluded, each check is repeated immediately before `rm -rf`, and a GC failure never fails or delays the transfer. One-shot staging names and anything else in the parent are untouched. Unmarked directories are never removed.
+- Staging is not cleaned when the keeper is gone and nothing runs again into that parent; the 24 h rule bounds the lifetime only for parents that see later transfers. Owners can remove a stale directory by hand; it contains only the parts and the marker.
+
+### Status fields
+
+`mode` (`stream`, `chunked`), `chunk_bytes` (the current `S`), `chunks_done` (parts verified so far, including those found on resume), `chunks_total` (`chunks_done` plus an estimate of the parts still needed at the current `S`, recomputed as `S` changes), `attempts`, and `bytes_per_second` (the rounded `B`) are plain integers and strings, never content, paths or remote output; absent fields are omitted. `bytes` counts bytes verified at the destination side, including bytes found on resume, and is monotone within a job. `link_unstable` has the fixed message `transfer link was too unstable to finish; a retry can resume`.
 
 ## Limits
 
-Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 4 KiB. Both flags are validated at keeper startup, before the vault is unlocked; the defaults come from the engine's DefaultLimits. The owner may lower or raise them at keeper startup (`--transfer-max-bytes`, `--transfer-max-entries`). Limits are checked in preflight and again on the actual stream. No resume: any failure, cancel or lost connection publishes nothing.
+Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 4 KiB. Both flags are validated at keeper startup, before the vault is unlocked; the defaults come from the engine's DefaultLimits. The owner may lower or raise them at keeper startup (`--transfer-max-bytes`, `--transfer-max-entries`). Limits are checked in preflight and again on the actual stream; `--transfer-max-bytes` bounds the file size in chunked mode too (staging bytes are not counted twice, but see the disk preflight in "Chunked resumable mode"). Any failure, cancel or lost connection publishes nothing; for a single file, a lost connection may additionally leave a marked staging directory from which the next call continues, and the destination is still published only after whole-file verification.
 
 ## Cancellation and lifetime
 
-`transfer_cancel` cancels the job context, which closes the SSH session and aborts local I/O. Closing the connection does not prove detached remote processes stopped; the remote command is a plain `cat`/`tar` that ends on stdin or stdout closure, and staging cleanup is best-effort and reported. Closing the keeper session cancels all transfers. Records and staging state are RAM-only and not persisted.
+`transfer_cancel` cancels the job context, which closes the SSH session and aborts local I/O. Closing the connection does not prove detached remote processes stopped; the remote command is a plain `cat`/`tar` that ends on stdin or stdout closure, and staging cleanup is best-effort and reported. Closing the keeper session cancels all transfers. Job records and link profiles are RAM-only and not persisted. A chunked file transfer interrupted by a link failure, by closing the keeper or by a keeper restart leaves its staging directory on disk by design; no RAM state is needed to continue, because the next identical call derives the same staging key and resumes from the parts found there. `transfer_cancel` removes the job's staging directory instead (see "Staging lifecycle and garbage collection").
 
 ## Threat model
 
@@ -90,19 +188,40 @@ Defaults: 2 GiB total bytes, 100000 entries, path length 1024, depth 64, stderr 
 - Hostile remote tree (`../`, symlink tricks, special files, huge archive, zip-bomb-like expansion): preflight plus streaming-time validation, no link creation, limits.
 - Partial or corrupt data: staging, SHA-256 verification, rename-only publication.
 - Remote path injection: quoting only, control characters refused, no model-supplied command text.
-- Secret exposure in results: content, remote stderr and absolute local paths are never returned.
+- Secret exposure in results: content, remote stderr and absolute local paths are never returned. The new status fields are counters and a mode name only.
+- Staging-name guessing or hijack in chunked mode: another principal on the same host who can write the destination's parent may pre-create `.ssjack-transfer-<key>` (as a directory, a symlink or with planted parts). The key is a hash of private inputs, but guessing is not relied on: before any reuse or removal the keeper checks the name pattern, that the path is a real directory (not a symlink or reparse point), mode 0700, ownership by its own principal, and the marker magic and full key. A foreign object is neither adopted nor deleted. Planted or altered parts in an owned directory are caught by the whole-file hash.
+- Garbage-collection safety: GC removes only directories passing every adoption check, at most 16 per preflight, never the job's own staging, never unmarked or one-shot staging, with the checks repeated immediately before removal. This is not protection against a hostile concurrent writer to the parent, like the other publication checks.
+- Remote disk exhaustion: chunked mode needs about twice the file size; the `df -P` preflight is best-effort and refuses with `limit` when short, a later write failure re-runs it, and staging older than 24 h is collected. A hostile or full remote can still fill the disk; the staging is bounded by the file size limit and the part-count bound.
+- Integrity anchor: part sizes, names, the marker and listings are untrusted hints. The only integrity guarantee is the whole-file SHA-256 of the assembled file, computed with the selected hash command and compared to the hash taken from the source before the first part; a mismatch publishes nothing and removes staging.
+- Hostile remote returning false sizes or listings (upload resume list, download pre-hash, size and mtime): a lying size can only make the keeper skip or resend a part, over-long or overlapping listings are ignored or removed, the listing is bounded, and a wrong or stale pre-hash or content fails the final hash. It cannot make the keeper publish unverified bytes.
+- Source changing between attempts: size and `mtime_ns` (local) or size, mtime and pre-hash (remote) are part of the key or rechecked, and a change either selects a different staging or yields `integrity`.
+- Retained copies: a kept staging directory holds file content in 0600 parts inside a 0700 directory for up to 24 h after the last activity, on the host that already holds the destination.
 
 ## Acceptance
 
 1. File and directory round trip, both directions, byte-exact including binary data and names with spaces and non-ASCII characters; the tool output never contains file content.
 2. Refusals before any mutation: path traversal, absolute and drive paths, symlink or reparse point in source or destination, forbidden control directory, destination exists without `overwrite`+`confirm`, missing root, root containing the vault, over-limit size or count, missing remote tool.
-3. Interrupted stream, cancel, hash mismatch and limit hit publish nothing and remove only job-owned staging.
+3. Interrupted stream, cancel, hash mismatch and limit hit publish nothing and remove only job-owned staging. A link failure of a single-file transfer publishes nothing either, but keeps its marked staging for resume; no failure leaves a partial destination.
 4. Overwrite replaces the destination only when requested; a failed overwrite leaves the old destination intact.
 5. Both native Linux and native macOS CI workflows are configured to run the full real-stack acceptance suite on the same round-trip scenarios (including empty directories), overwrites, failures, refusals and injection cases, with no skips. The macOS run uses stock BSD tools and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, exercising Perl publication rather than refusal-only coverage. The supplied macOS CI diagnostic exposed the previous incorrect coupling of `wc` filename handling to hash selection: the selected hash does not predict whether BSD `wc` preserves operand names, so the independent probe must select stdin when the name-fidelity check fails. The current patch awaits CI; this is not a claim that all workflows passed. Other BSD systems are supported only when the functional probe passes; FreeBSD success is not CI-tested. Linux CI also has a real BusyBox applet subset using a BusyBox-only PATH and BusyBox `sh`. That subset covers file/empty/name/overwrite/refusal/corruption behavior and nested directory content, manifests and counts both ways; BusyBox directory timestamp restoration remains unverified. The subset intentionally excludes `failure-unsupported-remote`: standalone BusyBox `sh` can resolve SHA applets independently of the restricted PATH, so its missing-tool fixture is not meaningful under that shell. The full Linux and macOS suites still cover missing-hash refusal; native BusyBox positive scenarios remain covered.
+6. Chunked resumable mode, with a fault-injecting link in the fake runner and, for the real-stack cases, a real SSH test server whose connections are cut at fixed byte or time points, in both directions where applicable:
+   - strategy: a drop after a stream that could not finish switches to chunked mode, a drop with `remaining / B <= T_survive` retries as a stream, a later job reads the profile, and 8 consecutive attempts without progress fail with `link_unstable`; AIMD halving, 1.5x growth, the 256 KiB and 64 MiB clamps, the overhead floor and the survivability-wins conflict are checked on synthetic profiles;
+   - drop mid-chunk: only the part in flight is lost, the next attempt continues at the first gap, and the final file is byte-exact;
+   - drop mid-assembly: parts stay intact, the next attempt reassembles into a new temporary name and publishes once;
+   - changed source between attempts (size, mtime or content, both directions): a different key or `integrity`, never a published mix of versions;
+   - resume after a keeper restart: a new keeper process and a new `job_id` continue from the parts on disk with no profile;
+   - garbage collection: a marked staging older than 24 h is removed by a later transfer into the same parent; a younger one, an unmarked one, a one-shot one, a foreign-owned, symlinked or wrong-mode one, and the job's own staging are not;
+   - disk short: the `df` preflight refuses with `limit` before any part is sent, and a mid-transfer write failure re-checks and reports `limit`;
+   - integrity: a corrupted or planted part, a lying part size or listing and a staging of another key all fail or are ignored without publishing, and `integrity` removes the staging;
+   - cancel and every non-link failure remove the staging; a link failure keeps it;
+   - parts of different sizes coexist, overlapping or oversized parts are ignored, and a gap off the `S` grid is read with the `tail`/`head` primitive and verified;
+   - overwrite and no-overwrite publication after assembly behave as for a stream, and a failed overwrite leaves the old destination intact;
+   - the capability probe selects `dd` or `tail`/`head` on GNU, BusyBox and BSD/macOS, and a target without them keeps whole-stream behaviour;
+   - status exposes `mode`, `chunk_bytes`, `chunks_done`, `chunks_total`, `attempts` and `bytes_per_second` and never content or a path.
 
 ## Non-goals
 
-Move/delete/sync/delta/resume; symlink or hard-link replication; ownership and xattr preservation, and timestamps of single files; remote-to-remote copy; Windows remote targets; remote hosts that fail the functional SHA-256, `t`/`p` publication, or required long tar extraction-flag probes; root (uid 0) remote targets whose tar only supports the short `-o` extraction form; SFTP or rsync; a declarative or narrower authorization surface; scheduling; any change to key custody or to the output guard. BusyBox directory timestamp restoration is not established by its CI subset.
+Move/delete/sync/delta; parallel chunks; chunked or resumed directory transfers; symlink or hard-link replication; ownership and xattr preservation, and timestamps of single files; remote-to-remote copy; Windows remote targets; remote hosts that fail the functional SHA-256, `t`/`p` publication, or required long tar extraction-flag probes; root (uid 0) remote targets whose tar only supports the short `-o` extraction form; SFTP or rsync; a declarative or narrower authorization surface; scheduling; any change to key custody or to the output guard. BusyBox directory timestamp restoration is not established by its CI subset.
 
 ## Implementation order
 

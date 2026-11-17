@@ -143,9 +143,9 @@ Tools:
 - `transfer_status` reports bounded progress;
 - `transfer_cancel` cancels a job and closes its SSH session.
 
-Guaranteed: copy only, the source is never modified; SHA-256 verification of every transfer; staged writes with rename-only publication, so a failed transfer publishes nothing; at most two concurrent transfers and one job per destination; `overwrite=true` requires `confirm=true`; results are content-free — never file content, absolute local paths, remote stderr or raw lower-layer error text, only state, phase, direction, kind, counts, bytes, the SHA-256, an error class and a fixed message; finished records are retained in a bounded set; closing the keeper cancels all transfers; records are RAM-only.
+Guaranteed: copy only, the source is never modified; SHA-256 verification of every transfer; staged writes with rename-only publication, so a failed transfer publishes nothing, and a single file whose link keeps dropping continues from marked staging parts and is published only after a whole-file hash check; at most two concurrent transfers and one job per destination; `overwrite=true` requires `confirm=true`; results are content-free — never file content, absolute local paths, remote stderr or raw lower-layer error text, only state, phase, direction, kind, counts, bytes, the SHA-256, an error class and a fixed message; finished records are retained in a bounded set; closing the keeper cancels all transfers; records are RAM-only.
 
-Not guaranteed: no sandbox — remote writes carry the profile's full SSH principal authority; no move, sync, delta or resume; detached remote processes may outlive a cancellation; single-file transfers are verified today, directory transfers are being completed in the engine (the status schema already carries `kind` and reserves `manifest_sha256`).
+Not guaranteed: no sandbox — remote writes carry the profile's full SSH principal authority; no move, sync or delta, and directory transfers are never resumed; detached remote processes may outlive a cancellation; single-file transfers are verified today, directory transfers are being completed in the engine (the status schema already carries `kind` and reserves `manifest_sha256`).
 
 See [the transfer specification](docs/FILE-TRANSFER.md).
 
