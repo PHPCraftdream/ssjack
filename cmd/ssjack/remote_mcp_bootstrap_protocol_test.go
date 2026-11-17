@@ -184,9 +184,13 @@ func TestRunMCPBootstrapProtocolDiscoverKeepsKeeperAttachment(t *testing.T) {
 
 	writeMCPFrame(t, clientIn, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"remote_targets","arguments":{},`+meta+`}}`)
 	called := sdkCallResults(t, readMCPLine(t, clientOut), false, 4)[4]
-	structured, ok := called["structuredContent"].(map[string]any)
-	targets, targetsOK := structured["targets"].([]any)
-	if called["isError"] == true || !ok || !targetsOK || len(targets) != 1 || targets[0] != "synthetic-target" {
+	content, ok := called["content"].([]any)
+	var text string
+	if ok && len(content) == 1 {
+		block, _ := content[0].(map[string]any)
+		text, _ = block["text"].(string)
+	}
+	if _, structured := called["structuredContent"]; structured || called["isError"] == true || !ok || len(content) != 1 || text != "1 approved target:\n- synthetic-target" {
 		t.Fatal("remote_targets did not return the attached keeper result")
 	}
 	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 1)
