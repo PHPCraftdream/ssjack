@@ -181,10 +181,15 @@ func TestRefuseNextConnections(t *testing.T) {
 	p := startProxy(t, up.addr())
 	p.RefuseNext(2)
 	for index := 1; index <= 2; index++ {
-		client := dial(t, p.Addr())
-		_ = client.SetReadDeadline(time.Now().Add(testBudget))
-		if n, err := client.Read(make([]byte, 1)); err == nil {
-			t.Fatalf("refused connection %d delivered %d bytes", index, n)
+		// Depending on the OS the reset is seen by the dial itself (macOS
+		// loopback) or by the first read; either way the client gets an error.
+		if client, err := net.DialTimeout("tcp", p.Addr(), testBudget); err == nil {
+			_ = client.SetReadDeadline(time.Now().Add(testBudget))
+			n, readErr := client.Read(make([]byte, 1))
+			_ = client.Close()
+			if readErr == nil {
+				t.Fatalf("refused connection %d delivered %d bytes", index, n)
+			}
 		}
 		stats := p.Await(t, index)
 		if stats.Reason != ReasonRefused || !stats.Halted || !stats.Closed {
