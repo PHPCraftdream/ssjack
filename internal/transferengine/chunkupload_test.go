@@ -457,7 +457,7 @@ func TestChunkedUploadDiskPreflight(t *testing.T) {
 
 func TestChunkedUploadRechecksTheDiskAfterAPartFailure(t *testing.T) {
 	for _, full := range []bool{true, false} {
-		t.Run(fmt.Sprintf("disk full=%v", full), func(t *testing.T) {
+		t.Run(fmt.Sprintf("disk full %v", full), func(t *testing.T) {
 			rig := newChunkRig(t)
 			content := chunkContent(3*chunkMiB, 8)
 			rig.write("big.bin", content)
@@ -706,7 +706,7 @@ func TestChunkedUploadProfileCarriesOverToTheNextJob(t *testing.T) {
 
 func TestChunkedUploadPublicationSemanticsMatchTheStream(t *testing.T) {
 	for _, overwrite := range []bool{false, true} {
-		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {
+		t.Run(fmt.Sprintf("overwrite %v", overwrite), func(t *testing.T) {
 			rig := newChunkRig(t)
 			content := chunkContent(3*chunkMiB, 16)
 			rig.write("big.bin", content)
