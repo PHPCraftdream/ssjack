@@ -74,10 +74,10 @@ func (e *Engine) uploadFile(ctx context.Context, file *os.File, sizeAtOpen int64
 		return Result{}, classify(ctx, err)
 	}
 	j := &uploadJob{
-		e: e, ctx: ctx, file: file, size: sizeAtOpen,
+		jobReport: jobReport{e: e, size: sizeAtOpen, progress: progress, mode: ModeStream},
+		ctx:       ctx, file: file,
 		local: local, remote: remote, parent: path.Dir(remote),
-		overwrite: overwrite, executable: executable, progress: progress,
-		mode: ModeStream,
+		overwrite: overwrite, executable: executable,
 	}
 	if info, err := file.Stat(); err == nil {
 		j.mtimeNs = info.ModTime().UnixNano()

@@ -9,11 +9,12 @@
 // (kind.go): a regular file is copied as a file, a directory tree as a
 // directory, with the same guarantees.
 //
-// A single-file upload starts as one whole-file stream. When the connection
+// A single-file transfer starts as one whole-file stream. When the connection
 // drops and the link profile (internal/transferlink) says the file cannot be
 // expected to cross within a connection's lifetime, the same job continues in
-// chunked, resumable mode (chunkupload.go) and still publishes only after a
-// whole-file SHA-256 check.
+// chunked, resumable mode (chunkupload.go for uploads, chunkdownload.go for
+// downloads) and still publishes only after a whole-file SHA-256 check. The
+// reporting state both directions share is in jobreport.go.
 package transferengine
 
 import (
@@ -46,12 +47,12 @@ const (
 //
 // The chunked-mode fields (Mode to BytesPerSecond) are plain integers and a
 // mode name, never content, a path or remote output, and zero when absent.
-// They are set only for a single-file upload that left the plain first stream:
-// it entered chunked mode or needed more than one attempt. A plain stream
-// result, a directory result and the failure of a plain stream keep them zero
-// (a consumer reports mode "stream" and one attempt for those). A failed
-// chunked upload returns a Result holding only Bytes (the bytes verified at the
-// destination) and these fields.
+// They are set only for a single-file transfer that left the plain first
+// stream: it entered chunked mode or needed more than one attempt. A plain
+// stream result, a directory result and the failure of a plain stream keep
+// them zero (a consumer reports mode "stream" and one attempt for those). A
+// failed chunked transfer returns a Result holding only Bytes (the bytes
+// verified at the destination side) and these fields.
 type Result struct {
 	Kind   Kind
 	Files  int
@@ -85,10 +86,10 @@ type Result struct {
 // Progress reports the phase (a transfercore.Phase* constant) and the bytes
 // transferred so far. Bytes never decreases within a job: it counts the bytes
 // of the running stream and, in chunked mode, the bytes verified at the
-// destination including parts found on resume. For single-file uploads the
+// destination including parts found on resume. For single-file transfers the
 // other fields carry the same chunked-mode values as Result, with Mode set,
 // from the transfer phase on (the preflight report precedes the first
-// attempt); they are zero for downloads and directories.
+// attempt); they are zero for directories.
 type Progress struct {
 	Phase string
 	Bytes int64
@@ -163,8 +164,8 @@ func New(remote transferremote.Remote, limits transfercore.Limits) (*Engine, err
 
 // NewWithOptions is New with the target name, an injectable link profile and
 // an injectable clock. A remote that also implements
-// transferremote.ChunkRemote enables the chunked upload mode, when its probed
-// capabilities allow it.
+// transferremote.ChunkRemote enables the chunked modes, when its probed
+// capabilities allow them (ChunkCaps.Upload and ChunkCaps.Download).
 func NewWithOptions(remote transferremote.Remote, limits transfercore.Limits, opts Options) (*Engine, error) {
 	if remote == nil {
 		return nil, transfercore.Fail(transfercore.ClassInternal, "remote transfer layer is not configured")

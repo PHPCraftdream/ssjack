@@ -5,10 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"math"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,14 +25,13 @@ const minChunkedFile = 2 * transferlink.MinChunk
 // (this file). It lives for one Upload call; everything that outlives the call
 // is in the remote staging directory and the Engine's link profile.
 //
-// The reporting state is guarded by mu because the SSH stdin copy of a stream
-// reports progress from its own goroutine. Every other field belongs to the
-// goroutine that runs the job.
+// The reporting state (jobreport.go) is guarded by its own lock because the
+// SSH stdin copy of a stream reports progress from its own goroutine. Every
+// other field belongs to the goroutine that runs the job.
 type uploadJob struct {
-	e          *Engine
+	jobReport
 	ctx        context.Context
 	file       *os.File
-	size       int64
 	mtimeNs    int64
 	mtimeKnown bool
 	local      string
@@ -42,21 +39,11 @@ type uploadJob struct {
 	parent     string
 	overwrite  bool
 	executable bool
-	progress   func(Progress)
-
-	mu          sync.Mutex
-	mode        string
-	attempts    int
-	chunkLen    int64
-	chunksDone  int
-	chunksTotal int
-	high        int64
 
 	chunkOK      bool // chunked mode may be used for this job
 	usedChunk    bool // chunked mode was entered
 	key          string
 	stagingKnown bool // the keyed staging directory may exist and is the job's own
-	parts        []transferlink.Range
 	covered      int64
 	needSync     bool // the staging must be listed again before the next part
 	hashed       bool
@@ -167,14 +154,7 @@ func (j *uploadJob) loop() (Result, error) {
 // are never discarded, so the last gap then goes as one single part
 // (planned == 0 means the whole gap).
 func (j *uploadJob) plan() (chunked bool, planned int64) {
-	if !j.chunkOK {
-		return false, 0
-	}
-	step := j.e.profile.Decide(j.size - j.covered)
-	if step.Mode == transferlink.ModeChunked {
-		return true, step.Len
-	}
-	return len(j.parts) > 0, 0
+	return j.nextStep(j.chunkOK, j.covered)
 }
 
 // chunkStep makes one step of the chunked loop. final reports that res and err
@@ -356,13 +336,7 @@ func (j *uploadJob) diskShort() (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	need := j.size - j.covered
-	if need > math.MaxInt64-j.size {
-		need = math.MaxInt64
-	} else {
-		need += j.size
-	}
-	return avail < need, nil
+	return avail < spaceNeeded(j.size, j.covered), nil
 }
 
 // sendPart uploads one part read from the open source.
@@ -480,20 +454,6 @@ func (j *uploadJob) assemble() (Result, bool, error) {
 	return Result{Kind: KindFile, Files: 1, Bytes: j.size, SHA256: hex.EncodeToString(j.sum[:])}, true, nil
 }
 
-// noteDrop tells the link profile that an attempt ended without a remote exit
-// status. bytes is what the attempt put on the wire and life how long its
-// connection lived; an attempt that moved no byte did not establish anything
-// to learn from and only counts as an attempt without progress.
-func (j *uploadJob) noteDrop(bytes int64, life time.Duration) {
-	p := j.e.profile
-	if bytes <= 0 {
-		p.Dropped(0, life, transferlink.FailSetup)
-		return
-	}
-	p.StreamProgress(bytes, life)
-	p.Dropped(bytes, life, transferlink.FailLink)
-}
-
 // noteStreamDone feeds the throughput of a finished stream to the profile.
 func (j *uploadJob) noteStreamDone(bytes int64, elapsed time.Duration) {
 	if j.chunkOK {
@@ -505,25 +465,9 @@ func (j *uploadJob) noteStreamDone(bytes int64, elapsed time.Duration) {
 // job's own staging is removed unless the job is resumable, and the
 // chunked-mode fields are filled in when the job left the plain stream.
 func (j *uploadJob) finish(res Result, err error) (Result, error) {
-	if j.usedProfile {
-		if err == nil {
-			j.e.profile.Succeeded()
-		} else {
-			j.e.profile.BeginTransfer()
-		}
-	}
+	j.endProfile(j.usedProfile, err)
 	j.cleanupStaging(err)
-	t := j.telemetry()
-	if !j.usedChunk && t.attempts <= 1 {
-		return res, err
-	}
-	if err != nil {
-		res = Result{Bytes: j.covered}
-	}
-	res.Mode, res.ChunkBytes = t.mode, t.chunkLen
-	res.ChunksDone, res.ChunksTotal = t.done, t.total
-	res.Attempts, res.BytesPerSecond = t.attempts, t.bps
-	return res, err
+	return j.decorate(res, err, j.usedChunk, j.covered)
 }
 
 // cleanupStaging removes the job's own chunk staging, with a fresh bounded
@@ -541,100 +485,6 @@ func (j *uploadJob) cleanupStaging(err error) {
 	cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	_ = j.e.chunk.RemoveChunkStaging(cctx, j.parent, j.key)
-}
-
-// tele is a copy of the reporting state.
-type tele struct {
-	mode     string
-	chunkLen int64
-	done     int
-	total    int
-	attempts int
-	bps      int64
-}
-
-func (j *uploadJob) telemetry() tele {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.teleLocked()
-}
-
-func (j *uploadJob) teleLocked() tele {
-	t := tele{mode: j.mode, chunkLen: j.chunkLen, done: j.chunksDone, total: j.chunksTotal, attempts: j.attempts}
-	if j.e.chunk != nil {
-		t.bps = int64(math.Round(j.e.profile.Snapshot().Speed))
-	}
-	return t
-}
-
-// emit reports progress. The reported bytes never decrease. The callback runs
-// under the reporting lock, so calls are serialised and ordered; it must not
-// call back into the engine.
-func (j *uploadJob) emit(phase string, bytes int64) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.high = max(j.high, bytes)
-	if j.progress == nil {
-		return
-	}
-	t := j.teleLocked()
-	j.progress(Progress{
-		Phase: phase, Bytes: j.high,
-		Mode: t.mode, ChunkBytes: t.chunkLen, ChunksDone: t.done, ChunksTotal: t.total,
-		Attempts: t.attempts, BytesPerSecond: t.bps,
-	})
-}
-
-// beginAttempt counts one attempt and records its mode.
-func (j *uploadJob) beginAttempt(mode string) {
-	j.mu.Lock()
-	j.attempts++
-	j.mode = mode
-	if mode == ModeStream {
-		j.chunkLen = 0
-	}
-	j.mu.Unlock()
-	j.refreshCounts()
-}
-
-func (j *uploadJob) setMode(mode string) {
-	j.mu.Lock()
-	j.mode = mode
-	j.mu.Unlock()
-}
-
-// setChunkLen records the chunk size in use and re-estimates the part count.
-func (j *uploadJob) setChunkLen(s int64) {
-	j.mu.Lock()
-	j.chunkLen = s
-	j.mu.Unlock()
-	j.refreshCounts()
-}
-
-// refreshCounts recomputes chunks_done and chunks_total: the parts verified so
-// far plus an estimate of the parts the open gaps still need at the current
-// chunk size. A plain stream with no parts reports neither.
-func (j *uploadJob) refreshCounts() {
-	done := len(j.parts)
-	total := done
-	j.mu.Lock()
-	s := j.chunkLen
-	plain := j.mode == ModeStream && done == 0
-	j.mu.Unlock()
-	if plain {
-		done, total = 0, 0
-	} else if gaps, err := transferlink.Gaps(j.size, j.parts); err == nil {
-		for _, g := range gaps {
-			if s > 0 {
-				total += int((g.Len + s - 1) / s)
-			} else {
-				total++
-			}
-		}
-	}
-	j.mu.Lock()
-	j.chunksDone, j.chunksTotal = done, total
-	j.mu.Unlock()
 }
 
 func cancelled() error {

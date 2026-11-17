@@ -275,4 +275,10 @@ func TestTransferAcceptance(t *testing.T) {
 	t.Run("chunk-upload-stale-staging-collected", scenarioChunkUploadStaleStagingCollected)
 	t.Run("chunk-upload-stall-detected-and-resumed", scenarioChunkUploadStallDetectedAndResumed)
 	t.Run("chunk-upload-leftover-assembly-cleaned", scenarioChunkUploadLeftoverAssemblyCleaned)
+	t.Run("chunk-download-stream-drop-continues-chunked", scenarioChunkDownloadStreamDrop)
+	t.Run("chunk-download-drop-mid-chunk", scenarioChunkDownloadDropMidChunk)
+	t.Run("chunk-download-drop-during-assembly", scenarioChunkDownloadDropDuringAssembly)
+	t.Run("chunk-download-resume-by-new-engine", scenarioChunkDownloadResumeByNewEngine)
+	t.Run("chunk-download-source-changed", scenarioChunkDownloadSourceChanged)
+	t.Run("chunk-download-stale-staging-collected", scenarioChunkDownloadStaleStagingCollected)
 }

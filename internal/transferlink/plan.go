@@ -167,6 +167,45 @@ func ValidateTiling(size int64, parts []Range) error {
 	return nil
 }
 
+// Listed is one entry of a part directory whose name is a strict part name:
+// the range the name denotes and the size the entry really has.
+type Listed struct {
+	Name  string
+	Range Range
+	Size  int64
+}
+
+// AcceptListed builds the coverage of a part directory of a file of fileSize
+// bytes. Entries are ordered by offset and, at one offset, longer first; an
+// entry whose size differs from its length, that overlaps an already accepted
+// entry or that ends past fileSize is rejected. accepted is ascending by
+// offset and pairwise disjoint; rejected holds the names of the rejected
+// entries in that order. These are the coverage rules the remote listing parser
+// (internal/transferremote) applies to its text output; the local listing of a
+// chunked download uses this function.
+func AcceptListed(fileSize int64, entries []Listed) (accepted []Range, rejected []string) {
+	if fileSize < 0 {
+		fileSize = 0
+	}
+	sorted := append([]Listed(nil), entries...)
+	slices.SortFunc(sorted, func(a, b Listed) int {
+		if c := cmp.Compare(a.Range.Off, b.Range.Off); c != 0 {
+			return c
+		}
+		return cmp.Compare(b.Range.Len, a.Range.Len)
+	})
+	var cursor int64
+	for _, c := range sorted {
+		if c.Size != c.Range.Len || c.Range.Off < cursor || c.Range.Len > fileSize-c.Range.Off || c.Range.Off > fileSize {
+			rejected = append(rejected, c.Name)
+			continue
+		}
+		accepted = append(accepted, c.Range)
+		cursor = c.Range.End()
+	}
+	return accepted, rejected
+}
+
 const partPrefix = "part-"
 
 // PartName formats the canonical name part-<offset>-<len> of a part. The

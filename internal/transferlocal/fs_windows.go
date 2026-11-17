@@ -215,6 +215,44 @@ func privateDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	return windows.SecurityDescriptorFromString("O:" + sid + "D:P(A;;FA;;;" + sid + ")")
 }
 
+// createStageDir creates the keyed chunk staging directory exclusively with an
+// owner-only DACL.
+func createStageDir(path string) error {
+	return createPrivateDir(path)
+}
+
+// privateOwnedDir reports whether the directory is owned by the process user
+// (createPrivateDir records that owner explicitly) or by the Administrators
+// group, which an elevated process may be given as the default owner. Windows
+// has no mode bits, so there is nothing else to compare.
+func privateOwnedDir(path string, info pathInfo) bool {
+	name, err := wideLocalPath(path)
+	if err != nil {
+		return false
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(handle)
+	descriptor, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil || descriptor == nil {
+		return false
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil {
+		return false
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err == nil && user != nil && user.User.Sid != nil && owner.Equals(user.User.Sid) {
+		return true
+	}
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	return err == nil && owner.Equals(admins)
+}
+
 // setPublishedRootMode is a no-op on Windows: modes do not exist there, and
 // widening the private ACL of the staging root is a separate decision.
 func setPublishedRootMode(string) error { return nil }

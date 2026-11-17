@@ -109,6 +109,27 @@ func createPrivateDir(path string) error {
 	return nil
 }
 
+// createStageDir creates the keyed chunk staging directory exclusively with
+// owner-only permissions.
+func createStageDir(path string) error {
+	return createPrivateDir(path)
+}
+
+// privateOwnedDir reports whether the directory is private (mode 0700 with no
+// special bits) and owned by the current user. info is the no-follow
+// inspection of path.
+func privateOwnedDir(path string, info pathInfo) bool {
+	if info.mode.Perm() != 0o700 || info.mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return false
+	}
+	raw, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := raw.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid()
+}
+
 // setPublishedRootMode gives a staged directory the mode its subdirectories
 // are created with, before it is published by rename.
 func setPublishedRootMode(path string) error {

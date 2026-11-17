@@ -47,6 +47,12 @@ LINUX_SCENARIOS = (
     "chunk-upload-stale-staging-collected",
     "chunk-upload-stall-detected-and-resumed",
     "chunk-upload-leftover-assembly-cleaned",
+    "chunk-download-stream-drop-continues-chunked",
+    "chunk-download-drop-mid-chunk",
+    "chunk-download-drop-during-assembly",
+    "chunk-download-resume-by-new-engine",
+    "chunk-download-source-changed",
+    "chunk-download-stale-staging-collected",
 )
 BUSYBOX_SCENARIOS = (
     "roundtrip-file-both-directions",
@@ -72,6 +78,12 @@ BUSYBOX_SCENARIOS = (
     "chunk-upload-stale-staging-collected",
     "chunk-upload-stall-detected-and-resumed",
     "chunk-upload-leftover-assembly-cleaned",
+    "chunk-download-stream-drop-continues-chunked",
+    "chunk-download-drop-mid-chunk",
+    "chunk-download-drop-during-assembly",
+    "chunk-download-resume-by-new-engine",
+    "chunk-download-source-changed",
+    "chunk-download-stale-staging-collected",
 )
 
 
