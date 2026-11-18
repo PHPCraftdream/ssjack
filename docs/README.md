@@ -99,6 +99,7 @@ continuous synchronization, server hardening or discovery of unknown secrets is 
 
 [CI policy](CI.md) separates ordinary scoped checks from the full sprint gate.
 Tests/builds/application smoke belong in GitHub CI, not an implicit local command.
+[Code layout rules](LAYOUT.md) (file and folder size limits) are reported by CI.
 The accepted feature baseline is source `0576409`,
 [full run 41796602948](https://github.com/PHPCraftdream/ssjack/actions/runs/41796602948),
 all nine jobs successful. Production owner acceptance includes actual tmux import,

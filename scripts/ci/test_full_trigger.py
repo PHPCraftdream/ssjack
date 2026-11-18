@@ -78,7 +78,7 @@ class FullTriggerTests(unittest.TestCase):
         self.assertNotIn("remote_mcp_connected.py", profile)
 
     def test_go_vet_runs_unconditionally_on_every_platform(self):
-        command = "run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/..."
+        command = "run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/... ./tools/..."
         for block in (job(self.full, "test"), job(self.feature, "impacted")):
             step = block.split("      - name: Vet" + chr(10), 1)[1].split("      - ", 1)[0]
             self.assertEqual(step.strip(), command)

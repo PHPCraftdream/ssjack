@@ -40,7 +40,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/ci/plan.py plan --base "$BASE" --output "$RUNNER_TEMP/ci-plan.json"
       - name: Vet
-        run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/...
+        run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/... ./tools/...
       - name: Test selected packages (race detector on Linux)
         shell: bash
         run: python3 scripts/ci/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
@@ -351,6 +351,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
       - name: Check exact release dependency and notice policy (factual source consistency only)
         run: python3 scripts/check_licenses.py
+      - name: Code layout report (non-blocking)
+        run: go run -mod=readonly ./tools/layoutlint -report
 
   plugin-check:
     if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}

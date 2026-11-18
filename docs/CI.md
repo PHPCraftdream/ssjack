@@ -27,6 +27,9 @@ checks are not complete legal clearance. JSON selection evidence is retained as
 a CI artifact. Newer runs cancel obsolete feature runs for the same event ref;
 full sprint/release checks are not cancelled by this feature concurrency group.
 
+The cheap Linux license job also runs the [code layout linter](LAYOUT.md) in
+report-only mode (`-report`): violations are printed, never fail the run.
+
 Package/test import and embed graphs cannot infer arbitrary cross-package runtime
 file/process dependencies. Unknown non-document inputs broaden selection; any
 new runtime relationship not represented by these edges must be added explicitly
