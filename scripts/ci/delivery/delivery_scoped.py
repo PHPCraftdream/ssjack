@@ -44,6 +44,7 @@ def main():
                   (f"-X main.behavior={mode}",))
         build(ROOT, "./internal/declarativeslice/tests/fixtures/secretharness", harness)
         # The private overlay accelerates only Argon2 derivation in this isolated CI process.
+        sys.path.insert(0, str(ROOT / "scripts" / "ci" / "appstore"))
         from appstore_scoped import OLD, NEW, MASTER
         source = MASTER.read_text(encoding="utf-8")
         if source.count(OLD) != 1:
