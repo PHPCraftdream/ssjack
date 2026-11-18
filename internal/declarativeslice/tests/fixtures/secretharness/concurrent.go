@@ -52,7 +52,16 @@ func boundedWrite(path string, value any) {
 	if err != nil || len(b) > 1024 {
 		os.Exit(1)
 	}
-	if os.WriteFile(path, b, 0600) != nil {
+	// Publish atomically: the test polls for the final name and decodes it at once.
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		os.Exit(1)
+	}
+	tmp := f.Name()
+	_, werr := f.Write(b)
+	cerr := f.Close()
+	if werr != nil || cerr != nil || os.Rename(tmp, path) != nil {
+		_ = os.Remove(tmp)
 		os.Exit(1)
 	}
 }
