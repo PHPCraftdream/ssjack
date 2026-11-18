@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	chunks "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/chunks"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 )
 
@@ -23,27 +24,27 @@ func TestTransferBusyboxAcceptance(t *testing.T) {
 	t.Run("overwrite-failure-leaves-old-destination", scenarioOverwriteFailure)
 	t.Run("refuse-destination-exists", scenarioRefuseDestinationExists)
 	t.Run("failure-hash-mismatch-corruption", scenarioFailureCorruption)
-	t.Run("chunk-remote-probe-capabilities", scenarioChunkProbe)
-	t.Run("chunk-remote-staging-lifecycle-and-foreign-objects", scenarioChunkStagingLifecycle)
-	t.Run("chunk-remote-part-upload-and-listing", scenarioChunkPartsAndListing)
-	t.Run("chunk-remote-assembly-and-publication", scenarioChunkAssemblyAndPublication)
-	t.Run("chunk-remote-garbage-collection", scenarioChunkGarbageCollection)
-	t.Run("chunk-remote-read-stat-and-disk", scenarioChunkReadStatAndDisk)
-	t.Run("chunk-upload-stream-drop-continues-chunked", scenarioChunkUploadStreamDrop)
-	t.Run("chunk-upload-drop-mid-chunk", scenarioChunkUploadDropMidChunk)
-	t.Run("chunk-upload-drop-during-assembly", scenarioChunkUploadDropDuringAssembly)
-	t.Run("chunk-upload-resume-by-new-engine", scenarioChunkUploadResumeByNewEngine)
-	t.Run("chunk-upload-source-changed", scenarioChunkUploadSourceChanged)
-	t.Run("chunk-upload-stale-staging-collected", scenarioChunkUploadStaleStagingCollected)
-	t.Run("chunk-upload-stall-detected-and-resumed", scenarioChunkUploadStallDetectedAndResumed)
-	t.Run("chunk-upload-leftover-assembly-cleaned", scenarioChunkUploadLeftoverAssemblyCleaned)
-	t.Run("chunk-download-stream-drop-continues-chunked", scenarioChunkDownloadStreamDrop)
-	t.Run("chunk-download-drop-mid-chunk", scenarioChunkDownloadDropMidChunk)
-	t.Run("chunk-download-drop-during-assembly", scenarioChunkDownloadDropDuringAssembly)
-	t.Run("chunk-download-resume-by-new-engine", scenarioChunkDownloadResumeByNewEngine)
-	t.Run("chunk-download-source-changed", scenarioChunkDownloadSourceChanged)
-	t.Run("chunk-download-stale-staging-collected", scenarioChunkDownloadStaleStagingCollected)
-	t.Run("chunk-download-stall-detected-and-resumed", scenarioChunkDownloadStallDetectedAndResumed)
+	t.Run("chunk-remote-probe-capabilities", chunks.ScenarioChunkProbe)
+	t.Run("chunk-remote-staging-lifecycle-and-foreign-objects", chunks.ScenarioChunkStagingLifecycle)
+	t.Run("chunk-remote-part-upload-and-listing", chunks.ScenarioChunkPartsAndListing)
+	t.Run("chunk-remote-assembly-and-publication", chunks.ScenarioChunkAssemblyAndPublication)
+	t.Run("chunk-remote-garbage-collection", chunks.ScenarioChunkGarbageCollection)
+	t.Run("chunk-remote-read-stat-and-disk", chunks.ScenarioChunkReadStatAndDisk)
+	t.Run("chunk-upload-stream-drop-continues-chunked", chunks.ScenarioChunkUploadStreamDrop)
+	t.Run("chunk-upload-drop-mid-chunk", chunks.ScenarioChunkUploadDropMidChunk)
+	t.Run("chunk-upload-drop-during-assembly", chunks.ScenarioChunkUploadDropDuringAssembly)
+	t.Run("chunk-upload-resume-by-new-engine", chunks.ScenarioChunkUploadResumeByNewEngine)
+	t.Run("chunk-upload-source-changed", chunks.ScenarioChunkUploadSourceChanged)
+	t.Run("chunk-upload-stale-staging-collected", chunks.ScenarioChunkUploadStaleStagingCollected)
+	t.Run("chunk-upload-stall-detected-and-resumed", chunks.ScenarioChunkUploadStallDetectedAndResumed)
+	t.Run("chunk-upload-leftover-assembly-cleaned", chunks.ScenarioChunkUploadLeftoverAssemblyCleaned)
+	t.Run("chunk-download-stream-drop-continues-chunked", chunks.ScenarioChunkDownloadStreamDrop)
+	t.Run("chunk-download-drop-mid-chunk", chunks.ScenarioChunkDownloadDropMidChunk)
+	t.Run("chunk-download-drop-during-assembly", chunks.ScenarioChunkDownloadDropDuringAssembly)
+	t.Run("chunk-download-resume-by-new-engine", chunks.ScenarioChunkDownloadResumeByNewEngine)
+	t.Run("chunk-download-source-changed", chunks.ScenarioChunkDownloadSourceChanged)
+	t.Run("chunk-download-stale-staging-collected", chunks.ScenarioChunkDownloadStaleStagingCollected)
+	t.Run("chunk-download-stall-detected-and-resumed", chunks.ScenarioChunkDownloadStallDetectedAndResumed)
 	// Standalone BusyBox ash can resolve SHA applets independently of restricted PATH,
 	// so that fixture cannot establish that hash utilities are absent.
 }

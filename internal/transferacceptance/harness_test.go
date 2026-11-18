@@ -21,12 +21,28 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	"github.com/PHPCraftdream/ssjack/internal/transfer"
+	chunks "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/chunks"
+	fixture "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/fixture"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/transferlocal"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 
 	"golang.org/x/crypto/ssh"
 )
+
+// init injects the root harness sandbox environment into the chunks
+// scenario package.
+func init() {
+	chunks.SandboxEnv = sandboxEnv
+}
+
+// treeState captures the files and directories of a fixture tree so a later
+// assertTreeSnapshot can prove nothing changed. It delegates to the fixture
+// package helper.
+func treeState(t *testing.T, base string) (map[string][]byte, []string) {
+	t.Helper()
+	return fixture.TreeState(t, base)
+}
 
 const (
 	targetName = "fixture-target"
@@ -261,25 +277,25 @@ func TestTransferAcceptance(t *testing.T) {
 	t.Run("failure-unsupported-remote", scenarioFailureUnsupportedRemote)
 	t.Run("failure-unsupported-publication-primitive", scenarioFailureUnsupportedPublicationPrimitive)
 	t.Run("manager-concurrency-and-duplicate-destination", scenarioManagerBounds)
-	t.Run("chunk-remote-probe-capabilities", scenarioChunkProbe)
-	t.Run("chunk-remote-staging-lifecycle-and-foreign-objects", scenarioChunkStagingLifecycle)
-	t.Run("chunk-remote-part-upload-and-listing", scenarioChunkPartsAndListing)
-	t.Run("chunk-remote-assembly-and-publication", scenarioChunkAssemblyAndPublication)
-	t.Run("chunk-remote-garbage-collection", scenarioChunkGarbageCollection)
-	t.Run("chunk-remote-read-stat-and-disk", scenarioChunkReadStatAndDisk)
-	t.Run("chunk-upload-stream-drop-continues-chunked", scenarioChunkUploadStreamDrop)
-	t.Run("chunk-upload-drop-mid-chunk", scenarioChunkUploadDropMidChunk)
-	t.Run("chunk-upload-drop-during-assembly", scenarioChunkUploadDropDuringAssembly)
-	t.Run("chunk-upload-resume-by-new-engine", scenarioChunkUploadResumeByNewEngine)
-	t.Run("chunk-upload-source-changed", scenarioChunkUploadSourceChanged)
-	t.Run("chunk-upload-stale-staging-collected", scenarioChunkUploadStaleStagingCollected)
-	t.Run("chunk-upload-stall-detected-and-resumed", scenarioChunkUploadStallDetectedAndResumed)
-	t.Run("chunk-upload-leftover-assembly-cleaned", scenarioChunkUploadLeftoverAssemblyCleaned)
-	t.Run("chunk-download-stream-drop-continues-chunked", scenarioChunkDownloadStreamDrop)
-	t.Run("chunk-download-drop-mid-chunk", scenarioChunkDownloadDropMidChunk)
-	t.Run("chunk-download-drop-during-assembly", scenarioChunkDownloadDropDuringAssembly)
-	t.Run("chunk-download-resume-by-new-engine", scenarioChunkDownloadResumeByNewEngine)
-	t.Run("chunk-download-source-changed", scenarioChunkDownloadSourceChanged)
-	t.Run("chunk-download-stale-staging-collected", scenarioChunkDownloadStaleStagingCollected)
-	t.Run("chunk-download-stall-detected-and-resumed", scenarioChunkDownloadStallDetectedAndResumed)
+	t.Run("chunk-remote-probe-capabilities", chunks.ScenarioChunkProbe)
+	t.Run("chunk-remote-staging-lifecycle-and-foreign-objects", chunks.ScenarioChunkStagingLifecycle)
+	t.Run("chunk-remote-part-upload-and-listing", chunks.ScenarioChunkPartsAndListing)
+	t.Run("chunk-remote-assembly-and-publication", chunks.ScenarioChunkAssemblyAndPublication)
+	t.Run("chunk-remote-garbage-collection", chunks.ScenarioChunkGarbageCollection)
+	t.Run("chunk-remote-read-stat-and-disk", chunks.ScenarioChunkReadStatAndDisk)
+	t.Run("chunk-upload-stream-drop-continues-chunked", chunks.ScenarioChunkUploadStreamDrop)
+	t.Run("chunk-upload-drop-mid-chunk", chunks.ScenarioChunkUploadDropMidChunk)
+	t.Run("chunk-upload-drop-during-assembly", chunks.ScenarioChunkUploadDropDuringAssembly)
+	t.Run("chunk-upload-resume-by-new-engine", chunks.ScenarioChunkUploadResumeByNewEngine)
+	t.Run("chunk-upload-source-changed", chunks.ScenarioChunkUploadSourceChanged)
+	t.Run("chunk-upload-stale-staging-collected", chunks.ScenarioChunkUploadStaleStagingCollected)
+	t.Run("chunk-upload-stall-detected-and-resumed", chunks.ScenarioChunkUploadStallDetectedAndResumed)
+	t.Run("chunk-upload-leftover-assembly-cleaned", chunks.ScenarioChunkUploadLeftoverAssemblyCleaned)
+	t.Run("chunk-download-stream-drop-continues-chunked", chunks.ScenarioChunkDownloadStreamDrop)
+	t.Run("chunk-download-drop-mid-chunk", chunks.ScenarioChunkDownloadDropMidChunk)
+	t.Run("chunk-download-drop-during-assembly", chunks.ScenarioChunkDownloadDropDuringAssembly)
+	t.Run("chunk-download-resume-by-new-engine", chunks.ScenarioChunkDownloadResumeByNewEngine)
+	t.Run("chunk-download-source-changed", chunks.ScenarioChunkDownloadSourceChanged)
+	t.Run("chunk-download-stale-staging-collected", chunks.ScenarioChunkDownloadStaleStagingCollected)
+	t.Run("chunk-download-stall-detected-and-resumed", chunks.ScenarioChunkDownloadStallDetectedAndResumed)
 }
