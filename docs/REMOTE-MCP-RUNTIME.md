@@ -113,7 +113,7 @@ transport.go:177); that goroutine is NOT tracked by the connection's
 in-flight accounting, so `Wait` does not join it. Reachability is split: on
 the upstream session, the peer's messages arrive only through the owned
 exchange, which delivers validated JSON-RPC responses and rejects
-method-bearing bodies (`internal/mcpexchange/response.go:49-64`), so an
+method-bearing bodies (`internal/mcpexchange/exchange.go:192-218`), so an
 upstream peer cannot trigger the canceller there. The downstream child stdio
 server DOES admit `notifications/cancelled` (method allowlist
 `supportedMCPMethod` in `cmd/ssjack/remote_mcp_stdio.go`), where the spawned goroutine may run to

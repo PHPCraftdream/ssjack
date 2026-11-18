@@ -147,3 +147,89 @@ func continueRotationRecovery(ctx context.Context, control *ownercontrol.Control
 	fmt.Fprintf(os.Stdout, "Encrypted selected-account commit: durable at revision %d. Old remote key remains authorized; remove it with a separate rotate-key --retire-old before --archive-completed, once every intended client uses the new key. This does not prove adoption by every consumer; active sessions/jobs were not restarted or terminated.\n", plan.Revision)
 	return 0, nil
 }
+
+// runRotationRetire removes the old public key from the remote account after a
+// completed rotation. It is a separate, exact-confirmed invocation and changes
+// no local state; it must run before --archive-completed discards the old key.
+func runRotationRetire(ctx context.Context, control *ownercontrol.Control, command rotationCommand, readSecret func(string) ([]byte, error)) (int, error) {
+	snapshot, err := control.RotationSnapshot(ctx)
+	if err != nil {
+		return 1, err
+	}
+	if err := rotationSnapshotReady(snapshot); err != nil {
+		return 1, err
+	}
+	if snapshot.Rotation == nil || snapshot.Rotation.Phase != vault.RotationComplete {
+		return 1, errors.New("--retire-old requires the selected retained rotation to be complete and not yet archived")
+	}
+	info := *snapshot.Rotation
+	serverID, profile, err := rotationSelection(snapshot, command.Server, command.Account)
+	if err != nil || info.ServerID != serverID || info.Account != command.Account || info.Profile != profile {
+		return 1, errors.New("selected server/account does not match the completed rotation; no action taken")
+	}
+	plan := ownerrotation.Plan{Info: info, Revision: snapshot.Status.Database.Revision, Digest: snapshot.CipherDigest}
+	display, err := makeRotationDisplay(plan)
+	if err != nil {
+		return 1, err
+	}
+	confirmation := retireConfirmation(display)
+	printRotationMetadata(os.Stdout, display, confirmation)
+	fmt.Fprintln(os.Stdout, "This removes only the old client public key shown above from the selected account's authorized_keys on the server, over a session authenticated by the new key. Every other client that still uses the old key loses access. The previous file is kept beside it as authorized_keys.ssjack-retired. A retry is safe. Run this before --archive-completed, which discards the old public key from the journal.")
+	if err := rotationConsent(readSecret, "Type the exact RETIRE-OLD-KEY confirmation shown above: ", confirmation); err != nil {
+		return 1, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	retired, err := control.DecideRotation(ctx, plan.Revision, info.PlanID, info.ID, "retire")
+	if err != nil {
+		return 1, err
+	}
+	if err := validateRotationReceipt(plan, retired, vault.RotationComplete, true); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(os.Stdout, "Old remote key retired: %s is no longer authorized for the selected account (or already was not). The new key authenticated this session. Local journal state is unchanged.\n", display.OldFingerprint)
+	return 0, nil
+}
+
+// abandonRetainedRotation is the local-only exit from a journal stuck after a
+// remote addition attempt. It claims the journal like recovery does, then closes
+// it; the remote addition itself is never undone.
+func abandonRetainedRotation(ctx context.Context, control *ownercontrol.Control, plan ownerrotation.Plan, display rotationDisplay, readSecret func(string) ([]byte, error)) (int, error) {
+	info := plan.Info
+	if !vault.RotationAwaitsVerification(info.Phase) {
+		return 1, errors.New("--abandon is allowed only for an uncommitted rotation after a remote addition attempt; no action taken")
+	}
+	confirmation := abandonConfirmation(display)
+	printRotationMetadata(os.Stdout, display, confirmation)
+	fmt.Fprintln(os.Stdout, "Abandon is local: the encrypted journal and the unused new private key are destroyed and the current key stays in use. The remote addition is not undone: the new public key above may remain authorized on the server until you remove it through a trusted session.")
+	if err := rotationConsent(readSecret, "Type the exact ABANDON confirmation shown above: ", confirmation); err != nil {
+		return 1, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	claimed, err := control.DecideRotation(ctx, plan.Revision, info.PlanID, info.ID, "recover")
+	if err != nil {
+		return 1, err
+	}
+	if err := validateRotationReceipt(plan, claimed, info.Phase, true); err != nil {
+		return 1, err
+	}
+	abandoned, err := control.DecideRotation(ctx, claimed.Revision, info.PlanID, info.ID, "abandon")
+	if err != nil {
+		return 1, err
+	}
+	if abandoned.Info.ID == "" || abandoned.Info.Phase != vault.RotationCancelled {
+		snapshot, snapshotErr := control.RotationSnapshot(ctx)
+		if snapshotErr != nil || snapshot.Rotation == nil || snapshot.Rotation.Phase != vault.RotationCancelled || snapshot.Status.Database.SavedRevision != snapshot.Status.Database.Revision || snapshot.CipherDigest == ([32]byte{}) {
+			return 1, errors.New("abandoned rotation lacks a readable durable receipt")
+		}
+		abandoned = ownerrotation.Plan{Info: *snapshot.Rotation, Revision: snapshot.Status.Database.Revision, Digest: snapshot.CipherDigest}
+	}
+	if err := validateRotationCancellation(claimed, abandoned); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(os.Stdout, "Rotation abandoned locally; the current key remains in use. If the remote addition took effect, remove the new public key (%s) from the server's authorized_keys through a trusted session.\n", display.NewFingerprint)
+	return 0, nil
+}
