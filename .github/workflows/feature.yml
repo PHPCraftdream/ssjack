@@ -351,11 +351,11 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
       - name: Check exact release dependency and notice policy (factual source consistency only)
         run: python3 scripts/check_licenses.py
-      - name: Code layout report (non-blocking)
+      - name: Code layout (blocking)
         run: |
           # setup-go's problem matcher would turn "x.go: N lines" into error annotations.
           echo "::remove-matcher owner=go::"
-          go run -mod=readonly ./tools/layoutlint -report
+          go run -mod=readonly ./tools/layoutlint -strict
 
   plugin-check:
     if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')) }}

@@ -9,8 +9,8 @@ go run ./tools/layoutlint -strict   # print every violation, exit 1 if any
 ```
 
 Exactly one mode is required. Linter failures (git unavailable, unreadable file,
-bad flags) exit 2 in both modes. CI runs `-report` only; moving CI to `-strict` is
-a separate decision. There is no baseline file and no list of allowed offenders.
+bad flags) exit 2 in both modes. CI runs `-strict` in Feature CI and Full CI: a
+violation fails the build. There is no baseline file and no list of allowed offenders.
 
 ## Rules
 
