@@ -116,7 +116,7 @@ exchange, which delivers validated JSON-RPC responses and rejects
 method-bearing bodies (`internal/mcpexchange/exchange.go:192-218`), so an
 upstream peer cannot trigger the canceller there. The downstream child stdio
 server DOES admit `notifications/cancelled` (method allowlist
-`supportedMCPMethod` in `cmd/ssjack/remote_mcp_stdio.go`), where the spawned goroutine may run to
+`supportedMCPMethod` in `cmd/ssjack/internal/remotemcp/remote_mcp_connection.go`), where the spawned goroutine may run to
 cancel one of the child's own in-flight tool calls — bounded, carrying no
 credential material, and the child joins its bridge clients separately. The
 residual unjoinable surface is goroutines a handler implementation leaks

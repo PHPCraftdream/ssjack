@@ -4,6 +4,8 @@ Source-only handoff. All listed authored tests are SOURCE-PRESENT ONLY, AUTHORED
 
 ## Source path and behavior
 
+> Layout note: since this handoff was written, the text-adapter entry moved to `cmd/ssjack/internal/textadapter/run.go` and related sources to `cmd/ssjack/internal/textadapter/`; the historical paths below are preserved as written.
+
 `root register-reverse` / `serve` → `NewReverseTextAdapter` → `ListenWithReverseTextAdapter` → pinned-HTTPS `text_reverse_copy` → grant/store/exact references/snapshot pin → bounded private capture → reverse replacement → late checks → safe text. Raw stdout capture is capped at 1 MiB; stderr is `io.Discard`. Production HMAC comparison uses constant-time comparison. The reverse-only encoded response-body cap is 25,231,360 bytes; distinct forward caps remain unchanged. Once dispatch begins, failures yield status unknown. Forward schema and capabilities are preserved in source; runtime regression validation was NOT RUN. See [TEXT-REVERSE-COPY.md](TEXT-REVERSE-COPY.md).
 
 ## Source inventory

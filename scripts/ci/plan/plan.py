@@ -11,6 +11,13 @@ SHARED = {"go.mod", "go.sum", "go.work", "go.work.sum", ".gitattributes"}
 BUILDERS = {"build.sh", "build.ps1"}
 INSTALLERS = {"install.sh", "install.ps1", "tests/installers.sh",
               "tests/installers.ps1", "tests/installers-local.sh"} | BUILDERS
+CLI_ROOT = "cmd/ssjack"
+
+
+def cli_family(directory):
+    """The facade and every relocated package under it; never a prefix match
+    such as cmd/ssjack-lab."""
+    return directory == CLI_ROOT or directory.startswith(CLI_ROOT + "/")
 
 
 def select(packages, changed):
@@ -57,6 +64,16 @@ def select(packages, changed):
             if parent not in selected:
                 selected.add(parent)
                 pending.append(parent)
+    # The split layout keeps cmd/ssjack as the facade with relocated packages
+    # under cmd/ssjack/internal, some of which are test-only acceptances with
+    # no production import edges. Any CLI path or discovered CLI package runs
+    # the whole CLI family so the facade suite and its gates keep their old
+    # meaning; other families are never expanded.
+    family = {directory for directory in by_dir if cli_family(directory)}
+    cli_touched = any(cli_family(path) or cli_family(str(PurePosixPath(path).parent))
+                      for path in changed if path.endswith(".go"))
+    if cli_touched or family & selected:
+        selected |= family
     return {"packages": ["." if p == "." else "./" + p for p in sorted(selected)],
             "reasons": sorted(reasons), "installers": installers}
 

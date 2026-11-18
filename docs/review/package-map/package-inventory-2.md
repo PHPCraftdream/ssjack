@@ -4,13 +4,13 @@ Continuation of `package-inventory.md`. Status definitions: **supporting/frozen*
 
 | Package | Slice relevance and direct production wiring | Test-only wiring / representative authored test | Status |
 |---|---|---|---|
-| `internal/bridge` | Supporting/frozen existing MCP; imports application/broker/buildinfo/remote (`internal/bridge/internal/tooltext/registry.go:3-16`); CLI imports it (`cmd/ssjack/main.go:19`) | `mcp_test.go:85` (`TestMCPToolsAreTextOnly`); `declarative_test.go:34` tests empty registry | supporting/frozen; U |
+| `internal/bridge` | Supporting/frozen existing MCP; imports application/broker/buildinfo/remote (`internal/bridge/internal/tooltext/registry.go:3-16`); CLI imports it (`cmd/ssjack/internal/remotemcp/mcp_command.go:9`) | `mcp_test.go:85` (`TestMCPToolsAreTextOnly`); `declarative_test.go:34` tests empty registry | supporting/frozen; U |
 | `internal/broker` | Supporting/frozen session broker; imports brokercore/wire/enrollment (`broker.go:7,9-10`); CLI, bridge, application, apptransport, launch import it | `internal/broker/internal/brokercore/server_test.go:286` (`TestDispatchIdentityBindingAndDeny`), `internal/broker/internal/brokercore/client_test.go:158` (`TestEnrollmentDescriptorAuthenticatedSnapshotAndDeny`); bridge declarative tests | supporting/frozen; U |
 | `internal/buildinfo` | Supporting build identity; imported by CLI, bridge, and apptransport (not diagnostic) | `info_test.go:1` | supporting; U |
 | `internal/canonicaljson` | Slice-critical canonicalizer; imported by placeholder, planbinding, planadmission, driverprotocol and enrollment/schema helpers | `canonical_test.go:1`; consumers have tests | slice-critical; U |
 | `internal/declarativedescriptor` | Disconnected/frozen descriptor helper; imports canonicaljson/declarativeschemas (`descriptor.go:9-10`); no CLI/bridge production import found | descriptor/fixture tests | disconnected/frozen; U |
 | `internal/declarativeschemas` | Disconnected/frozen schema/catalog; imports canonicaljson/domain digest (`schema.go:7`, `catalog.go:7`); descriptor imports it | `catalog_test.go:1`, fixtures | disconnected/frozen; U |
-| `internal/diagnostic` | Supporting diagnostics; imports uiplugin (`local.go:11`); CLI imports diagnostic (`cmd/ssjack/diagnostic.go:11`) | `local_test.go:1` | supporting; U |
+| `internal/diagnostic` | Supporting diagnostics; imports uiplugin (`local.go:11`); CLI imports diagnostic (`cmd/ssjack/internal/vaultcmd/maintenance.go:21`) | `local_test.go:1` | supporting; U |
 | `internal/domaindigest` | Supporting domain digest; imports canonicaljson (`digest.go:10`); enrollmentvalidator, planbinding, declarativeschemas import it | `digest_test.go:1` | supporting; U |
 | `internal/driverframe` | Disconnected/frozen frame primitive; imported by driverprotocol, driverprocess, immutableexec | `frame_test.go:1`; protocol tests import it | disconnected/frozen; U |
 | `internal/driverprocess` | Disconnected/frozen process protocol; imports frame/protocol (`process.go:13-14`); no CLI/bridge importer found | `process_test.go:1`, `process_extra_test.go:1` | disconnected/frozen; U |
@@ -23,13 +23,13 @@ Continuation of `package-inventory.md`. Status definitions: **supporting/frozen*
 | `internal/enrollmentvalidator` | Disconnected/frozen ref/network validation; imports canonicaljson/domaindigest/externalschemasubset | `validator_test.go:1`, regression test; signed package imports it | disconnected/frozen; U |
 | `internal/externalconformance` | Disconnected test support only; no non-test source | test files import driverframe/protocol | test-only; U |
 | `internal/externalschemasubset` | Disconnected/frozen schema subset; imports canonicaljson (`schema.go:12`, `helpers.go:6`); enrollmentvalidator imports it | schema/equality/extended tests | disconnected/frozen; U |
-| `internal/hooks` | Supporting existing hooks; imported by CLI and launch (`cmd/ssjack/main.go:23`, `launch.go:17`) | `install_test.go:1`, `remove_test.go:1` | supporting; U |
+| `internal/hooks` | Supporting existing hooks; imported by CLI and remote-MCP command (`cmd/ssjack/internal/cli/run.go:26`, `cmd/ssjack/internal/remotemcp/mcp_command.go:11`) | `install_test.go:1`, `remove_test.go:1` | supporting; U |
 | `internal/immutableexec` | Disconnected/frozen execution primitive; imports driverprotocol/frame; no CLI/bridge importer found | Linux/unsupported implementation tests | disconnected/frozen; U |
 | `internal/immutableexectest` | Disconnected test helper only; no non-test source | only Linux `paths_linux_test.go:1` | test-only; U |
 | `internal/kdfgate` | Slice-critical KDF gate; imported by appstorecrypto/keyfile (`master.go:16`, `internal/keyfile/internal/core/crypto.go:20`) | `gate_test.go:1`; master tests import it | slice-critical; U |
 | `internal/keyfile` | Supporting existing encrypted key formats; imports kdfgate; vault/rotation/CLI import it | `internal/keyfile/internal/core/container_test.go:1`, full-profile test | supporting; U |
 | `internal/launch` | Supporting command launch; imports broker/enrollment/hooks/uiplugin/wire (`launch.go:15-19`); CLI imports it | launch/identity/platform tests | supporting; U |
-| `internal/legacy` | Supporting legacy pins; CLI migrate imports it (`cmd/ssjack/migrate.go:11`) | `pins_test.go:1` | supporting; U |
+| `internal/legacy` | Supporting legacy pins; CLI migrate imports it (`cmd/ssjack/internal/vaultcmd/maintenance.go:23`) | `pins_test.go:1` | supporting; U |
 | `internal/observepositive` | Disconnected Linux test assertions only; no non-test source | three Linux tests; imports driverprotocol in test source | test-only; U |
 | `internal/operationstore` | Disconnected/frozen operation persistence; no CLI/bridge importer found | store/parse/io tests | disconnected/frozen; U |
 | `internal/planadmission` | Disconnected/frozen fixed schema checker; imports canonicaljson/driverprotocol/planbinding (`checker.go:10-12`); no CLI/bridge production importer found | `checker_test.go:51`; test also directly imports planbinding (`:13-15`) | disconnected/frozen; U |
@@ -50,7 +50,7 @@ Continuation of `package-inventory.md`. Status definitions: **supporting/frozen*
 
 ## Reachability interpretation
 
-The full CLI imports and registers the packages actually used by its command/tool paths (`cmd/ssjack/main.go:17-28`; `internal/bridge/internal/tooltext/registry.go:58-96,147-202`). `planadmission` → `planbinding` is a real production helper edge, but neither is imported by CLI/bridge production sources; that is not an executable `resource_plan`/`plan_apply` route. `declarativedescriptor`, schemas, enrollment and driver layers have internal helper/test relationships but no command-reachable authorized apply path established by inspected imports.
+The full CLI imports and registers the packages actually used by its command/tool paths (`cmd/ssjack/internal/cli/run.go:13-30`; `cmd/ssjack/internal/remotemcp/mcp_command.go:9-11`; `cmd/ssjack/internal/vaultcmd/maintenance.go:21-26`; `internal/bridge/internal/tooltext/registry.go:58-96,147-202`). `planadmission` → `planbinding` is a real production helper edge, but neither is imported by CLI/bridge production sources; that is not an executable `resource_plan`/`plan_apply` route. `declarativedescriptor`, schemas, enrollment and driver layers have internal helper/test relationships but no command-reachable authorized apply path established by inspected imports.
 
 ## Recommendation boundary
 

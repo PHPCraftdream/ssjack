@@ -89,7 +89,7 @@ Tests/builds/KDF run in GitHub CI, never implicitly on a contributor's workstati
 For an explicitly authorized CI-only focused production run:
 
 ```sh
-SSJACK_TEST_FULL_KDF=1 go test -mod=readonly -p 1 -run '^TestAppstoreFullProfileCLI$' -count=1 -timeout 1200s ./cmd/ssjack
+SSJACK_TEST_FULL_KDF=1 go test -mod=readonly -p 1 -run '^TestAppstoreFullProfileCLI$' -count=1 -timeout 1200s ./cmd/ssjack/internal/appstore
 ```
 
 [Capability map](../README.md) · [format/design baseline](FORMAT.md) ·

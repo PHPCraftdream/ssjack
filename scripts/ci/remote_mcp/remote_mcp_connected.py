@@ -13,8 +13,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = Path(__file__).resolve()
 POLICY = ROOT / "internal" / "mcphttp" / "policy.go"
-ROUTE_TEST = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_route_test.go"
-CONNECTED = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_harness_test.go"
+ROUTE_TEST = ROOT / "cmd" / "ssjack" / "internal" / "agent" / "remote_mcp_connected_route_test.go"
+CONNECTED = ROOT / "cmd" / "ssjack" / "internal" / "agent" / "remote_mcp_connected_harness_test.go"
 SCENARIOS = ("connected-basic", "connected-bypass", "connected-active-cancel", "connected-empty", "connected-cancel")
 SUPPORTED_PLATFORMS = ("linux", "darwin", "win32")
 
@@ -117,7 +117,7 @@ def main() -> int:
         env.pop("SSJACK_VAULT_PASSWORD", None)
         env["SSJACK_TEST_FULL_KDF"] = "1"
         env["SSJACK_TEST_REMOTE_MCP_CONNECTED"] = "1"
-        command = ["go", "test", "-v", "-mod=readonly", "-p", "1", "-overlay", str(overlay), "-run", "^TestVaultRemoteMCPStartupFullProfile$", "-count=1", "-timeout", "900s", "./cmd/ssjack"]
+        command = ["go", "test", "-v", "-mod=readonly", "-p", "1", "-overlay", str(overlay), "-run", "^TestVaultRemoteMCPStartupFullProfile$", "-count=1", "-timeout", "900s", "./cmd/ssjack/internal/agent"]
         result = subprocess.run(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
         log_path.write_text(result.stdout, encoding="utf-8")
         sys.stdout.write(result.stdout)

@@ -1,0 +1,153 @@
+package keys
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+
+	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/terminal"
+	"github.com/PHPCraftdream/ssjack/internal/keyfile"
+)
+
+func RunKeyCommand(ctx context.Context, generatePath, protectPath, output string) (int, error) {
+	if generatePath != "" && (protectPath != "" || output != "") {
+		return 1, errors.New("--generate-key cannot be combined with --protect-key or --key-output")
+	}
+	if generatePath == "" && protectPath == "" {
+		return 1, errors.New("--key-output requires --protect-key")
+	}
+	if generatePath != "" {
+		return generateKey(ctx, generatePath)
+	}
+	if output == "" {
+		output = protectPath + ".ssjack.ktav"
+	}
+	return protectKey(ctx, protectPath, output)
+}
+
+func RequireNewPath(path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("output already exists; refusing to overwrite it")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if !parent.IsDir() {
+		return errors.New("output parent must be a directory")
+	}
+	return nil
+}
+
+func WriteNewFile(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	n, writeErr := file.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("output may be incomplete: %w", writeErr)
+	}
+	return closeErr
+}
+
+func generateKey(ctx context.Context, path string) (int, error) {
+	for _, output := range []string{path, path + ".pub"} {
+		if err := RequireNewPath(output); err != nil {
+			return 1, err
+		}
+	}
+	fmt.Fprintln(os.Stderr, "The typed secret determines the Ed25519 key together with fresh public salts. Keep the container; the secret alone cannot recover its parameters.")
+	secret, err := terminal.ConfirmedSecret()
+	if err != nil {
+		return 1, err
+	}
+	defer clear(secret)
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	fmt.Fprintln(os.Stderr, "Deriving key: four sequential Argon2id operations at 1 GiB each, then 1000 AES-GCM layers. This can take several seconds or longer.")
+	encoded, public, err := keyfile.Generate(secret)
+	if err != nil {
+		return 1, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	if err := WriteNewFile(path, encoded, 0600); err != nil {
+		return 1, err
+	}
+	if err := WriteNewFile(path+".pub", public, 0644); err != nil {
+		return 1, fmt.Errorf("private container was saved; public key could not be saved: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "Saved encrypted private container and OpenSSH public key. Install only the .pub file on the server.")
+	return 0, nil
+}
+
+func protectKey(ctx context.Context, input, output string) (int, error) {
+	if err := RequireNewPath(output); err != nil {
+		return 1, err
+	}
+	file, err := os.Open(input)
+	if err != nil {
+		return 1, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+	file.Close()
+	defer clear(data)
+	if readErr != nil || len(data) > 1024*1024 {
+		return 1, errors.New("failed to read encrypted SSH key")
+	}
+	encrypted, err := keyfile.RequiresPassphrase(data)
+	if err != nil {
+		return 1, err
+	}
+	var password []byte
+	if encrypted {
+		password, err = terminal.Secret("Existing key passphrase: ")
+		if err != nil {
+			return 1, err
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Source key is unencrypted; it will remain unchanged. Only the new container is protected.")
+	}
+	plaintext, err := keyfile.ImportSSH(data, password)
+	clear(password)
+	if err != nil {
+		return 1, errors.New("failed to unlock input key")
+	}
+	defer clear(plaintext)
+	secret, err := terminal.ConfirmedSecret()
+	if err != nil {
+		return 1, err
+	}
+	defer clear(secret)
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	fmt.Fprintln(os.Stderr, "Protecting key: four sequential Argon2id operations at 1 GiB each, then 1000 AES-GCM layers.")
+	encoded, err := keyfile.Seal(plaintext, secret)
+	if err != nil {
+		return 1, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 1, err
+	}
+	if err := WriteNewFile(output, encoded, 0600); err != nil {
+		return 1, err
+	}
+	fmt.Fprintln(os.Stderr, "Saved the new encrypted container. Input key and configuration were not changed. Older copies retain their original protection.")
+	return 0, nil
+}

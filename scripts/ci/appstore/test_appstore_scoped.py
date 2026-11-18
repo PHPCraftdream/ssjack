@@ -12,6 +12,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 MASTER = ROOT / "internal" / "appstorecrypto" / "masterkey" / "master.go"
 SCRIPT = ROOT / "scripts" / "ci" / "appstore" / "appstore_scoped.py"
+SCOPED_PACKAGES = (
+    "./cmd/ssjack/internal/appstore",
+)
 
 
 def load_overlay_module():
@@ -82,9 +85,20 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
         self.assertIn("-overlay", command)
         self.assertIn("-race", command)
         self.assertEqual(command[command.index("-run") + 1], "^(TestAppstoreScopedCLI.*)$")
-        self.assertEqual(command[-1], "./cmd/ssjack")
+        self.assertEqual(command[-len(SCOPED_PACKAGES):], list(SCOPED_PACKAGES))
         self.assertEqual(observed["kwargs"]["check"], False)
         self.assertEqual(observed["kwargs"]["env"]["SSJACK_TEST_SCOPED_KDF"], "1")
+
+    def test_scoped_selection_covers_relocated_aggregate_and_replay_packages(self):
+        scoped = (ROOT / "cmd" / "ssjack" / "internal" / "appstore" / "appstore_acceptance_test.go").read_text(encoding="utf-8")
+        self.assertIn("func TestAppstoreScopedCLI(t *testing.T)", scoped)
+        self.assertIn("SSJACK_TEST_SCOPED_KDF", scoped)
+        for name in (
+            "TestAppstoreScopedCLICanceledSecretDoesNotMutate",
+            "TestAppstoreScopedCLILostCommitAckNoBlindReplay",
+            "TestAppstoreScopedCLILostCommitAckReconcilesWithoutReplay",
+        ):
+            self.assertIn(f"func {name}(t *testing.T)", scoped)
 
     def test_main_fails_closed_when_original_body_is_not_unique(self):
         module = self.module

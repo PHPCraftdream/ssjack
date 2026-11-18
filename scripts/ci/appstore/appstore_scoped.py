@@ -38,7 +38,7 @@ def main() -> int:
         overlay.write_text(json.dumps({"Replace": {str(MASTER.resolve()): str(overlay_source.resolve())}}), encoding="utf-8")
         env = os.environ.copy()
         env["SSJACK_TEST_SCOPED_KDF"] = "1"
-        command = ["go", "test", "-mod=readonly", "-overlay", str(overlay), "-race", "-count=1", "-timeout=180s", "-run", "^(TestAppstoreScopedCLI.*)$", "./cmd/ssjack"]
+        command = ["go", "test", "-mod=readonly", "-overlay", str(overlay), "-race", "-count=1", "-timeout=180s", "-run", "^(TestAppstoreScopedCLI.*)$", "./cmd/ssjack/internal/appstore"]
         return subprocess.run(command, cwd=ROOT, env=env, check=False).returncode
 
 

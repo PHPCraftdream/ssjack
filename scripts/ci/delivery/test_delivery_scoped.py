@@ -59,6 +59,7 @@ class DeliveryScopedCIGating(unittest.TestCase):
         self.assertIn("SSJACK_TEST_SCOPED_KDF", runner)
         self.assertIn("SSJACK_PUBLIC_CI", runner)
         self.assertIn("TestDeliveryScopedAcceptance", runner)
+        self.assertIn('"./cmd/ssjack/internal/appstore/delivery"', runner)
         self.assertRegex(runner, r"(?i)(?:FAIL|SKIP|PASS)")
 
 

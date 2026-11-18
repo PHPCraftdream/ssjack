@@ -57,7 +57,7 @@ def main():
         subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-overlay", str(overlay), "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, env=env, check=True)
         env.update({"SSJACK_PUBLIC_CI": "1", "SSJACK_DELIVERY_CLI": str(cli),
                     "SSJACK_DELIVERY_ARTIFACTS": str(artifacts), "SSJACK_DELIVERY_DRIVER": str(driver)})
-        result = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
+        result = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack/internal/appstore/delivery"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         output = result.stdout
         passed = "PASS: TestDeliveryScopedAcceptance" in output
         skipped = "SKIP: TestDeliveryScopedAcceptance" in output

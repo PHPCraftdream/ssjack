@@ -100,9 +100,10 @@ the selection. A fresh session still requires explicit owner confirmation.
   harness bridge child first asks, so an untouched session performs no upstream
   network, and the model sees only the selected bindings' inventory under
   digest-based namespaces (`mcp` + hex(SHA-256 of the binding identity)[:6] +
-  `_`, `internal/mcpbridge/internal/supervisor/bounds.go` `bindingNamespace`). `WithMCPLaunch` is a
-  sequential one-shot access path; it
-  does not promise concurrent-call safety.
+  `_`, `internal/mcpbridge/internal/supervisor/bounds.go` `bindingNamespace`). The package-private
+  `withMCPLaunch` method is a sequential one-shot access path; it is not
+  exported and is never exposed at runtime, and does not promise concurrent-call
+  safety.
 - Model-facing credential, owner-store master, header, and grant getters, and
   model-facing grant issuance, are permanently prohibited, not pending work.
   Internal startup issuance of a private bounded launch does not expose a
@@ -197,7 +198,7 @@ separate #359 full gate remains pending.
 The bridge runtime lives only in the startup process. After the receipted
 non-empty confirmation, startup mints the one-shot launch, hands its upstream
 handles and union guard to the runtime, and transfers one-shot access:
-`WithMCPLaunch` refuses afterwards. Upstream credentials never leave the startup
+the package-private `withMCPLaunch` method refuses afterwards (it is not exported and has no runtime-facing surface). Upstream credentials never leave the startup
 process; they appear in no environment, argv, file, log or diagnostic.
 
 The child bridge process (`ssjack mcp`) exposes the confirmed remote tools as
@@ -319,7 +320,7 @@ model-supplied arguments are not widened to float64 by the bridge. Upstream
 structured results are decoded by the pinned SDK, whose own decoding may apply
 float64 semantics; the child bridge re-extracts `structuredContent` as raw
 JSON lexemes from the parent's masked result
-(`cmd/ssjack/remote_mcp_call.go`), so lexemes are preserved from the parent's
+(`cmd/ssjack/internal/remotemcp/mcp_command.go` `remoteMCPTool`), so lexemes are preserved from the parent's
 output through the child to the harness — not necessarily from the upstream
 wire.
 

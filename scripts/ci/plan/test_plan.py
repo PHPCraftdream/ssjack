@@ -128,13 +128,18 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(plan.select(self.graph, ["internal/core/core.go"])["installers"])
 
     def test_source_builders_select_installer_smoke_and_cli_regressions(self):
-        graph = self.graph + [{"directory": "cmd/ssjack", "import": "example.test/ssjack",
-                               "dependencies": []}]
+        graph = self.graph + [
+            {"directory": "cmd/ssjack", "import": "example.test/ssjack",
+             "dependencies": ["example.test/ssjack/internal/keys"]},
+            {"directory": "cmd/ssjack/internal/keys", "import": "example.test/ssjack/internal/keys",
+             "dependencies": []},
+        ]
         for path in ("build.sh", "build.ps1"):
             with self.subTest(path=path):
                 result = plan.select(graph, [path])
                 self.assertTrue(result["installers"])
-                self.assertEqual(result["packages"], ["./cmd/ssjack"])
+                self.assertEqual(result["packages"], ["./cmd/ssjack",
+                                                      "./cmd/ssjack/internal/keys"])
                 self.assertFalse(result["reasons"])
         root = Path(__file__).resolve().parents[3]
         for name in ("feature.yml", "ci.yml"):
@@ -142,6 +147,72 @@ class SelectionTests(unittest.TestCase):
             self.assertIn("sh ./build.sh --install-dir", source)
             self.assertIn(".\\build.ps1 -InstallDir", source)
             self.assertIn("-NoPathUpdate", source)
+
+    def test_cli_family_split_runs_every_cli_package_including_test_only(self):
+        # The split layout keeps cmd/ssjack as the facade and relocates packages
+        # under cmd/ssjack/internal; terminalacceptance is test-only, so no
+        # production import edge reaches it. Any CLI change still runs it all,
+        # which is what preserves the appstorecli gate.
+        graph = self.graph + [
+            {"directory": "cmd/ssjack", "import": "example.test/ssjack",
+             "dependencies": ["example.test/ssjack/internal/terminal"]},
+            {"directory": "cmd/ssjack/internal/terminal",
+             "import": "example.test/ssjack/internal/terminal",
+             "dependencies": ["example.test/app/internal/core"],
+             "inputs": ["cmd/ssjack/internal/terminal/prompts/wording.md"]},
+            {"directory": "cmd/ssjack/internal/terminalacceptance",
+             "import": "example.test/ssjack/internal/terminalacceptance",
+             "dependencies": []},
+        ]
+        family = {"./cmd/ssjack", "./cmd/ssjack/internal/terminal",
+                  "./cmd/ssjack/internal/terminalacceptance"}
+        for path in ("cmd/ssjack/startup_password.go",
+                     "cmd/ssjack/internal/terminal/prompt.go",
+                     "cmd/ssjack/internal/terminal/prompt_test.go",
+                     "cmd/ssjack/internal/terminalacceptance/replay_test.go",
+                     "cmd/ssjack/internal/terminal/prompts/wording.md"):
+            with self.subTest(path=path):
+                result = plan.select(graph, [path])
+                self.assertEqual(set(result["packages"]), family)
+                self.assertIn("./cmd/ssjack", result["packages"])
+
+    def test_non_cli_changes_do_not_expand_the_cli_family(self):
+        graph = self.graph + [
+            {"directory": "cmd/ssjack", "import": "example.test/ssjack",
+             "dependencies": ["example.test/app/internal/consumer"]},
+            {"directory": "cmd/ssjack/internal/terminal",
+             "import": "example.test/ssjack/internal/terminal", "dependencies": []},
+            {"directory": "cmd/ssjack-lab", "import": "example.test/ssjacklab",
+             "dependencies": []},
+        ]
+        self.assertEqual(plan.select(graph, ["internal/independent/new_test.go"])["packages"],
+                         ["./internal/independent"])
+
+    def test_sibling_prefix_directory_never_matches_the_cli_family(self):
+        graph = self.graph + [
+            {"directory": "cmd/ssjack", "import": "example.test/ssjack", "dependencies": []},
+            {"directory": "cmd/ssjack/internal/terminal",
+             "import": "example.test/ssjack/internal/terminal", "dependencies": []},
+            {"directory": "cmd/ssjack-lab", "import": "example.test/ssjacklab",
+             "dependencies": []},
+        ]
+        result = plan.select(graph, ["cmd/ssjack-lab/lab.go"])
+        self.assertEqual(result["packages"], ["./cmd/ssjack-lab"])
+
+    def test_discovered_cli_package_via_reverse_edge_expands_the_family(self):
+        graph = self.graph + [
+            {"directory": "cmd/ssjack/internal/terminal",
+             "import": "example.test/ssjack/internal/terminal",
+             "dependencies": ["example.test/app/internal/terminalconsumer"]},
+            {"directory": "internal/terminalconsumer",
+             "import": "example.test/app/internal/terminalconsumer",
+             "dependencies": []},
+            {"directory": "cmd/ssjack", "import": "example.test/ssjack", "dependencies": []},
+        ]
+        result = plan.select(graph, ["internal/terminalconsumer/consumer_test.go"])
+        self.assertEqual(set(result["packages"]),
+                         {"./cmd/ssjack", "./cmd/ssjack/internal/terminal",
+                          "./internal/terminalconsumer"})
 
     def test_cycles_terminate(self):
         self.graph[1]["dependencies"] = ["example.test/app/internal/consumer"]

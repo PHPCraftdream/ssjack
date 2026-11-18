@@ -51,8 +51,8 @@ class RemoteMCPConnectedCI(unittest.TestCase):
         cls.module = load_module()
         cls.policy = (ROOT / "internal" / "mcphttp" / "policy.go").read_text(encoding="utf-8")
         cls.auth = (ROOT / "internal" / "mcphttp" / "auth.go").read_text(encoding="utf-8")
-        cls.route = (ROOT / "cmd" / "ssjack" / "remote_mcp_connected_route_test.go").read_text(encoding="utf-8")
-        cls.driver = (ROOT / "cmd" / "ssjack" / "remote_mcp_startup_fullprofile_test.go").read_text(encoding="utf-8")
+        cls.route = (ROOT / "cmd" / "ssjack" / "internal" / "agent" / "remote_mcp_connected_route_test.go").read_text(encoding="utf-8")
+        cls.driver = (ROOT / "cmd" / "ssjack" / "internal" / "agent" / "remote_mcp_startup_fullprofile_test.go").read_text(encoding="utf-8")
         cls.feature = (ROOT / ".github" / "workflows" / "feature.yml").read_text(encoding="utf-8")
         cls.workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
@@ -140,17 +140,18 @@ class RemoteMCPConnectedCI(unittest.TestCase):
         self.assertIn("[ci:full]", self.feature)
 
     def test_generic_remote_mcp_fixture_sources_are_platform_neutral_and_scenarios_exact(self):
-        fixture_paths = (
-            "cmd/ssjack/remote_mcp_connected_fixture_test.go",
-            "cmd/ssjack/remote_mcp_connected_harness_test.go",
-            "cmd/ssjack/remote_mcp_connected_lifetime_test.go",
-            "cmd/ssjack/remote_mcp_connected_route_test.go",
-            "cmd/ssjack/remote_mcp_startup_child_test.go",
-            "cmd/ssjack/remote_mcp_startup_driver_test.go",
-            "cmd/ssjack/remote_mcp_startup_helpers_test.go",
-            "cmd/ssjack/remote_mcp_startup_prepared_launch_test.go",
-            "cmd/ssjack/remote_mcp_startup_fullprofile_test.go",
+        fixture_directory = ROOT / "cmd" / "ssjack" / "internal" / "agent"
+        required = (
+            "remote_mcp_connected_route_test.go",
+            "remote_mcp_connected_harness_test.go",
+            "remote_mcp_startup_fullprofile_test.go",
+            "remote_mcp_startup_helpers_test.go",
+            "prepared_launch_test.go",
         )
+        fixture_paths = sorted(path.relative_to(ROOT).as_posix() for path in fixture_directory.glob("*_test.go"))
+        self.assertTrue(fixture_paths, "expected relocated remote MCP fixture sources in cmd/ssjack/internal/agent")
+        for name in required:
+            self.assertIn(f"cmd/ssjack/internal/agent/{name}", fixture_paths)
         for relative_path in fixture_paths:
             with self.subTest(path=relative_path):
                 source = (ROOT / relative_path).read_text(encoding="utf-8")

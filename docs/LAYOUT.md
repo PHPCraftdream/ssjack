@@ -30,6 +30,26 @@ a separate decision. There is no baseline file and no list of allowed offenders.
 - The file list is `git ls-files`: only tracked files. Tracked files missing from
   the working copy are skipped.
 
+## CLI layout
+
+`cmd/ssjack` is the single CLI facade (`package main`): the binary builds with
+`go build ./cmd/ssjack` and tests with `go test ./cmd/ssjack/...`, and the facade holds only signal handling, exit
+status and thin command entry points. All CLI implementation and CLI test code lives in
+`cmd/ssjack/internal/*` subpackages, for example `agent`, `appstore`, `cli`,
+`clitest`, `credential`, `declarative`, `help`, `helpsuite`, `keys`,
+`launchguard`, `ownercmd`, `ownertest`, `shell`, `startup`,
+`terminal`, `testsupport`,
+`textadapter`, `transfercmd`, `transfertest` and `vaultcmd`. New CLI code goes
+into the matching subpackage, not the facade. The scoped/full-profile CLI acceptance suites live in
+`cmd/ssjack/internal/appstore`: the `package appstore_test` external test files,
+including replay and owner tests, share the appstore test binary for self-exec
+child tests; the Linux-only delivery suite lives in the separate
+`cmd/ssjack/internal/appstore/delivery` test binary. remote-MCP acceptance is exercised by the
+external tests in `cmd/ssjack/internal/agent` (files in `package agent_test`,
+e.g. the connected-acceptance harness and full-profile remote startup tests);
+the file and folder-count rules above apply to
+the facade and every subpackage alike.
+
 ## Output
 
 One line per violation, sorted by path, then the summary:
