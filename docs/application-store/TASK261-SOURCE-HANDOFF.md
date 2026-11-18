@@ -19,7 +19,7 @@ Source-only handoff. All listed authored tests are SOURCE-PRESENT ONLY, AUTHORED
 - `internal/appstorecrypto/text_reverse_effect_edges_linux_amd64_test.go`
 - `internal/appstorecrypto/text_reverse_authority_linux_amd64_test.go`, `text_reverse_capture_linux_amd64_test.go`
 - `internal/appstorecrypto/text_adapter_linux_amd64.go`
-- `internal/apptransport/server.go`, `text_reverse_response.go`, `text_reverse_test.go`, `text_reverse_response_test.go`, `text_reverse_wire_test.go`, `text_reverse_write_test.go`, `text_reverse_request.go`, `text_reverse_request_test.go`
+- `internal/apptransport/internal/server/server.go`, `text_reverse_response.go` (merged old response+request), `text_reverse_test.go` (merged old named reverse test files)
 - `docs/application-store/TEXT-ADAPTER.md`, `TEXT-REVERSE-COPY.md`
 - `scripts/ci/test_declarative_scoped.py`, `scripts/ci/text_adapter_scoped.py` (inventory previously missing)
 - `.github/workflows/feature.yml` and `.github/workflows/ci.yml` are read-only existing callsites; not changed.

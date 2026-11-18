@@ -16,13 +16,13 @@ binding ordinal bound server-side, so the model never issues internal operation
 names and never selects URLs, accounts, headers or upstream methods: only
 inventory-listed namespaced tools of the selected captured bindings are
 reachable, under digest-based namespaces: `mcp` + hex(SHA-256 of the binding
-identity)[:6] + `_` (`internal/mcpbridge/bounds.go` `bindingNamespace`), so
+identity)[:6] + `_` (`internal/mcpbridge/internal/supervisor/bounds.go` `bindingNamespace`), so
 each binding keeps a distinct tool namespace.
 
 Sessions are lazy: no upstream network happens before the child bridge asks.
 Unknown protocol versions are refused by the pinned SDK. The runtime does not
 use the SDK `StreamableClientTransport`. `LaunchUpstream.TakeTransport`
-(`internal/mcpbridge/runtime.go`) accepts only the one-shot `mcphttp` transport
+(`internal/mcpbridge/internal/supervisor/runtime.go`) accepts only the one-shot `mcphttp` transport
 (requires `MaxRetries == -1` and a non-default, non-nil HTTP client) and wraps
 it as `mcpexchange.New(endpoint, client)`: an owned, POST-only, one-use
 Streamable HTTP transport with fixed `errExchange` diagnostics. The SDK's
@@ -44,7 +44,7 @@ remain `Content-Type`, `Mcp-Protocol-Version` and `Mcp-Session-Id`; modern
 identity, capabilities, `resultType`, `ttlMs` and `cacheScope` remain in JSON.
 This describes these header rules only, not full MCP conformance.
 
-The only wrapper is `capturingTransport` (`internal/mcpbridge/lifecycle.go`):
+The only wrapper is `capturingTransport` (`internal/mcpbridge/internal/supervisor/lifecycle.go`):
 it wraps solely our `mcpexchange` transport and records the returned
 `mcp.Connection` on the slot so cleanup can close it even if initialization
 fails before a session is stored. The captured observed connection preserves `Close` errors and maps discovery transport refusals to a fixed local rejected error so the pinned fallback can run.
@@ -135,15 +135,15 @@ close when initialization failed before a session was stored), and only then
 invokes the launch close callback, which joins `mcpflow` owned I/O and clears
 credential material. Incomplete cleanup retains state, reports the fixed
 `ErrBridge` sentinel, and never claims success. Three outcomes are implemented
-exactly (`internal/mcpbridge/lifecycle.go`): (1) an unfinished join — a slot's
+exactly (`internal/mcpbridge/internal/supervisor/lifecycle.go` `cleanupWorker`/`cleanupAttemptRun`): (1) an unfinished join — a slot's
 session/connection close or `Wait` had not finished within the attempt —
-reports `ErrBridge` and is non-sticky (:224–225), so a later Close with a
-fresh context re-attempts cleanup (:259); (2) a retryable launch-callback
-failure — `closeLaunch` returned an error (:234–235) — retains credentials and
+reports `ErrBridge` and is non-sticky, so a later Close with a
+fresh context re-attempts cleanup; (2) a retryable launch-callback
+failure — `closeLaunch` returned an error — retains credentials and
 is re-run by a later Close; (3) a terminal slot cleanup error — the session
-`Close`/`Wait` returned a nonnil error (:230–231) — sets `cleanupTerminal`
-(:193–198) so every later Close reports the fixed `ErrBridge` with no retry
-(:259), and the retained state is never dropped. The composed exchange boundary
+`Close`/`Wait` returned a nonnil error — sets `cleanupTerminal`
+so every later Close reports the fixed `ErrBridge` with no retry,
+and the retained state is never dropped. The composed exchange boundary
 (`internal/mcpexchange/connection.go`): admission classifies owned-stop vs genuine refusal
 atomically under one lock, so an owned stop of an otherwise-admissible message reports
 io.EOF while genuine method/state/limit refusals stay the fixed `errExchange` sentinel;

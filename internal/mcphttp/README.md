@@ -63,7 +63,7 @@ format raw SDK errors into model output, and must never replay an uncertain muta
 The pinned SDK also speaks newer protocol versions, and its client opens with
 `server/discover` and offers the latest one. The upstream session therefore pins
 `ClientSessionOptions.ProtocolVersion` to `2025-06-18`
-(`internal/mcpbridge/lifecycle.go`), and the exchange admits only `2025-06-18`,
+(`internal/mcpbridge/internal/supervisor/lifecycle.go`), and the exchange admits only `2025-06-18`,
 `2025-03-26` and `2024-11-05` and rejects unsupported initialization versions.
 This is not a claim of 2026 protocol support on the upstream side. The bridge
 must preserve that explicit compatibility boundary rather than silently

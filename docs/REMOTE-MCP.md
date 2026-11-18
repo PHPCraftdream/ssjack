@@ -100,7 +100,7 @@ the selection. A fresh session still requires explicit owner confirmation.
   harness bridge child first asks, so an untouched session performs no upstream
   network, and the model sees only the selected bindings' inventory under
   digest-based namespaces (`mcp` + hex(SHA-256 of the binding identity)[:6] +
-  `_`, `internal/mcpbridge/bounds.go` `bindingNamespace`). `WithMCPLaunch` is a
+  `_`, `internal/mcpbridge/internal/supervisor/bounds.go` `bindingNamespace`). `WithMCPLaunch` is a
   sequential one-shot access path; it
   does not promise concurrent-call safety.
 - Model-facing credential, owner-store master, header, and grant getters, and
@@ -204,7 +204,7 @@ The child bridge process (`ssjack mcp`) exposes the confirmed remote tools as
 namespaced stdio MCP tools on the existing single per-launch
 `ssjack` server. The startup-process runtime internally handles exactly three
 bounded keeper operations (`mcp_remote_bindings`, `mcp_remote_describe`,
-`mcp_remote_call`; `internal/mcpbridge/bounds.go:23-25`), but the child's
+`mcp_remote_call`; `internal/mcpbridge/internal/supervisor/bounds.go:24-27`), but the child's
 channel wire admits only `describe` and `call` per binding
 (`internal/mcpchannel/channel.go:240-260`): binding ordinal selection is
 server-side and never caller-selected, with one broker per confirmed binding.
@@ -292,7 +292,7 @@ state and reports the fixed failure; no grant is reissued. Of the failures,
 unfinished joins and launch-callback failures are retryable with a later
 Close using a fresh context, while terminal slot cleanup errors are retained
 and every later Close reports the fixed failure
-(`internal/mcpbridge/lifecycle.go:224–235, :259`).
+(`internal/mcpbridge/internal/supervisor/lifecycle.go` `cleanupWorker`/`cleanupAttemptRun`).
 
 The runtime's output guard combines per-binding local channel-bootstrap
 tokens, the per-launch keeper bootstrap token, and the caller-supplied

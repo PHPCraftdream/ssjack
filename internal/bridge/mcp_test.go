@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/apptransport"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/transfer"
@@ -213,5 +214,26 @@ func TestMCPFullModeKeeperErrorKeepsTheSession(t *testing.T) {
 	case <-keeper.Done():
 		t.Fatal("a tool error ended the keeper session")
 	default:
+	}
+}
+
+// testForeignGeneric is declared at the test root to pin the historical type
+// name of a generic instantiated with an implementation package argument.
+type testForeignGeneric[T any] struct{ value T }
+
+func TestMCPParseResultRejectsForeignAndNonPointerResults(t *testing.T) {
+	for _, out := range []struct {
+		result any
+		want   string
+	}{
+		{&remote.ReadOutput{}, "unsupported result type *remote.ReadOutput"},
+		{map[string]remote.ReadOutput{}, "unsupported result type map[string]remote.ReadOutput"},
+		{ReadOutput{}, "unsupported result type bridge.ReadOutput"},
+		{&apptransport.InfoOutput{}, "unsupported result type *apptransport.InfoOutput"},
+		{testForeignGeneric[remote.ReadOutput]{}, "unsupported result type bridge.testForeignGeneric[github.com/PHPCraftdream/ssjack/internal/remote.ReadOutput]"},
+	} {
+		if err := ParseResult("", out.result); err == nil || err.Error() != out.want {
+			t.Fatalf("ParseResult accepted or mislabeled %T: err %v, want %q", out.result, err, out.want)
+		}
 	}
 }

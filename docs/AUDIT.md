@@ -8,11 +8,11 @@ The historical v1 profile below remains readable. New containers use opaque v2 w
 
 ## Review entry points
 
-- `internal/keyfile/container.go`: parsing, fixed parameters, public header, size limits.
-- `internal/keyfile/opaque.go`: one-field v2 parser, packet/envelope bounds, authenticated inner profile.
+- `internal/keyfile/internal/core/container.go`: parsing, fixed parameters, public header, size limits.
+- `internal/keyfile/internal/core/crypto.go`: one-field v2 parser, packet/envelope bounds, authenticated inner profile.
 - `internal/vault/internal/recovery/upgrade.go`: verified format conversion, exact recovery copy, explicit publication.
-- `internal/keyfile/crypto.go`: four KDF calls, master derivation, layer keys/nonces/AAD, full-data encryption/decryption.
-- `internal/keyfile/generate.go`: secret-derived Ed25519 seed, domain separation, temporary private-buffer ownership.
+- `internal/keyfile/internal/core/crypto.go`: four KDF calls, master derivation, layer keys/nonces/AAD, full-data encryption/decryption.
+- `internal/keyfile/internal/core/crypto.go`: `Generate`/`generateIdentity`/`deriveSeed` secret-derived Ed25519 seed, domain separation, temporary private-buffer ownership.
 - `internal/keyfile/openssh.go`: supported key conversion, no empty-passphrase private export.
 - `internal/vault`: encrypted payload schema, strict optional usage field, file writes, locks, revision checks, backup/restore.
 - `internal/broker`: canonical loopback-only endpoint, TLS pinning, memory-only single-use environment capability, session cancellation.
@@ -84,4 +84,4 @@ Review the complete [v2 specification](OPAQUE-FORMAT-PROPOSAL.md) and its implem
 
 ## Memory-only bootstrap and cached-key delta
 
-The source now uses version-2 token authentication over the existing pinned-loopback TLS connection, without filesystem bootstrap. This is a one-channel capability, not the previous two-channel model. Normal vault writes retain an owned master after four Argon2id calls and execute all 1000 layers with fresh random nonces; password changes replace the retained context only after commit. Review [BOOTSTRAP.md](BOOTSTRAP.md), `internal/keyfile/unlocked.go`, the vault store, launcher environment, and broker together. The earlier audit does not certify this change. OS swap, dumps, environment capture, and same-user inspection remain separate limits.
+The source now uses version-2 token authentication over the existing pinned-loopback TLS connection, without filesystem bootstrap. This is a one-channel capability, not the previous two-channel model. Normal vault writes retain an owned master after four Argon2id calls and execute all 1000 layers with fresh random nonces; password changes replace the retained context only after commit. Review [BOOTSTRAP.md](BOOTSTRAP.md), `internal/keyfile/internal/core/crypto.go`, the vault store, launcher environment, and broker together. The earlier audit does not certify this change. OS swap, dumps, environment capture, and same-user inspection remain separate limits.
