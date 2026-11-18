@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
+	"github.com/PHPCraftdream/ssjack/internal/transferremote/core"
+	"github.com/PHPCraftdream/ssjack/internal/transferremote/probe"
+	"github.com/PHPCraftdream/ssjack/internal/transferremote/tree"
 )
 
 func TestCapsSelectVariants(t *testing.T) {
@@ -40,18 +43,18 @@ func TestCapsSelectVariants(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+			f := &fakeRunner{Respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 				if strings.Contains(command, "SSJACK-CAPS") {
 					_, _ = io.WriteString(stdout, tt.report)
 				}
 				return 0, nil
 			}}
-			r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+			r := New(f.Run, "t", sampleLimits()).(*remoteRunner)
 			ctx := context.Background()
 			if err := r.Probe(ctx); err != nil {
 				t.Fatal(err)
 			}
-			probe := f.recorded()[0]
+			probe := f.Recorded()[0]
 			if !regexp.MustCompile(`'/\.ssjack-probe-[0-9a-f]{16}'`).MatchString(probe) {
 				t.Errorf("probe lacks random scratch path with leading slash: %s", probe)
 			}
@@ -79,7 +82,7 @@ func TestCapsSelectVariants(t *testing.T) {
 			_ = r.PublishFile(ctx, "/srv/staging", "/srv/dest", true)
 			_ = r.PublishDir(ctx, "/srv/staging", "/srv/dest", false)
 			_ = r.PublishDir(ctx, "/srv/staging", "/srv/dest", true)
-			commands := f.recorded()
+			commands := f.Recorded()
 			if len(commands) != 11 {
 				t.Fatalf("got %d commands, want 11", len(commands))
 			}
@@ -104,16 +107,16 @@ func TestCapsSelectVariants(t *testing.T) {
 
 func TestTarInCanonicalEmptyArchive(t *testing.T) {
 	const root = "/srv/tree"
-	f := &fakeRunner{respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
+	f := &fakeRunner{Respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
 		if stdin != nil {
 			t.Errorf("canonical empty archive stdin = %T, want nil", stdin)
 		}
 		return 0, nil
 	}}
-	if err := New(f.run, "t", sampleLimits()).TarIn(context.Background(), root, bytes.NewReader(make([]byte, 1024))); err != nil {
+	if err := New(f.Run, "t", sampleLimits()).TarIn(context.Background(), root, bytes.NewReader(make([]byte, 1024))); err != nil {
 		t.Fatalf("TarIn canonical empty archive = %v, want nil", err)
 	}
-	commands := f.recorded()
+	commands := f.Recorded()
 	want := `set -eu
 root='/srv/tree'
 if [ ! -d "$root" ] || [ -L "$root" ]; then
@@ -133,20 +136,20 @@ func TestTarInNonCanonicalEmptyStreamsPreserveGNUCommandAndBytes(t *testing.T) {
 		t.Run(fmt.Sprintf("%d-zero-bytes", size), func(t *testing.T) {
 			payload := make([]byte, size)
 			var drained []byte
-			f := &fakeRunner{respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
+			f := &fakeRunner{Respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
 				if stdin != nil {
 					drained = drainReader(t, stdin)
 				}
 				return 0, nil
 			}}
-			if err := New(f.run, "t", sampleLimits()).TarIn(context.Background(), "/srv/tree", bytes.NewReader(payload)); err != nil {
+			if err := New(f.Run, "t", sampleLimits()).TarIn(context.Background(), "/srv/tree", bytes.NewReader(payload)); err != nil {
 				t.Fatalf("TarIn = %v, want nil", err)
 			}
 			if !bytes.Equal(drained, payload) {
 				t.Errorf("forwarded %d bytes, want exact %d-byte payload", len(drained), size)
 			}
-			commands := f.recorded()
-			want := fmt.Sprintf(tarInTemplate, shellQuote("/srv/tree"))
+			commands := f.Recorded()
+			want := fmt.Sprintf(tree.TarInTemplate, core.ShellQuote("/srv/tree"))
 			if len(commands) != 1 || commands[0] != want {
 				t.Errorf("commands = %#v, want unchanged GNU script %q", commands, want)
 			}
@@ -155,24 +158,24 @@ func TestTarInNonCanonicalEmptyStreamsPreserveGNUCommandAndBytes(t *testing.T) {
 }
 
 func TestTarInNilSourcePreservesGNUCommand(t *testing.T) {
-	f := &fakeRunner{respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
+	f := &fakeRunner{Respond: func(command string, stdin io.Reader, _, _ io.Writer) (int, error) {
 		if stdin != nil {
 			t.Errorf("nil source stdin = %T, want nil", stdin)
 		}
 		return 0, nil
 	}}
-	if err := New(f.run, "t", sampleLimits()).TarIn(context.Background(), "/srv/tree", nil); err != nil {
+	if err := New(f.Run, "t", sampleLimits()).TarIn(context.Background(), "/srv/tree", nil); err != nil {
 		t.Fatalf("TarIn nil source = %v, want nil", err)
 	}
-	commands := f.recorded()
-	want := fmt.Sprintf(tarInTemplate, shellQuote("/srv/tree"))
+	commands := f.Recorded()
+	want := fmt.Sprintf(tree.TarInTemplate, core.ShellQuote("/srv/tree"))
 	if len(commands) != 1 || commands[0] != want {
 		t.Fatalf("commands = %#v, want unchanged GNU script %q", commands, want)
 	}
 }
 
 func TestProbeSelectsWCFilenameCapability(t *testing.T) {
-	probe := fmt.Sprintf(probeTemplate, shellQuote("/.ssjack-probe-0123456789abcdef"))
+	probe := fmt.Sprintf(probe.ProbeTemplate, core.ShellQuote("/.ssjack-probe-0123456789abcdef"))
 	utf8Fixture := `wc_path="$d/wc name ' $(printf '\303\274 \303\261')"`
 	if !strings.Contains(probe, utf8Fixture) {
 		t.Errorf("probe does not exercise wc with the funky UTF-8 filename (literal or octal escaped)")
@@ -192,24 +195,24 @@ func TestProbeSelectsWCFilenameCapability(t *testing.T) {
 }
 
 func TestCapsAcceptsAllCapabilityCombinations(t *testing.T) {
-	for _, hash := range []string{hashSha256sum, hashShasum, hashSha256q} {
+	for _, hash := range []string{core.HashSha256sum, core.HashShasum, core.HashSha256q} {
 		for _, rename := range []string{"t", "p"} {
 			for _, wc := range []string{"names", "stdin"} {
 				t.Run(hash+"/"+rename+"/"+wc, func(t *testing.T) {
 					report := fmt.Sprintf("SSJACK-CAPS %s %s gnu %s\n", hash, rename, wc)
-					f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+					f := &fakeRunner{Respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 						if strings.Contains(command, "SSJACK-CAPS") {
 							_, err := io.WriteString(stdout, report)
 							return 0, err
 						}
 						return 0, nil
 					}}
-					r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+					r := New(f.Run, "t", sampleLimits()).(*remoteRunner)
 					if err := r.Probe(context.Background()); err != nil {
 						t.Fatalf("Probe(%q) = %v", report, err)
 					}
-					got := r.capabilities()
-					if got.hash != hash || got.mvT != (rename == "t") || got.wcNames != (wc == "names") || !got.tarGNU {
+					got := r.Capabilities()
+					if got.Hash != hash || got.MvT != (rename == "t") || got.WcNames != (wc == "names") || !got.TarGNU {
 						t.Errorf("capabilities = %#v, want hash %q, mvT %t, wcNames %t, tarGNU true", got, hash, rename == "t", wc == "names")
 					}
 				})
@@ -236,25 +239,25 @@ func TestCapsRejectMalformedReports(t *testing.T) {
 	}
 	for i, report := range reports {
 		t.Run(fmt.Sprintf("report-%d", i), func(t *testing.T) {
-			f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+			f := &fakeRunner{Respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 				if strings.Contains(command, "SSJACK-CAPS") {
 					_, _ = io.WriteString(stdout, report)
 				}
 				return 0, nil
 			}}
-			err := New(f.run, "t", sampleLimits()).Probe(context.Background())
+			err := New(f.Run, "t", sampleLimits()).Probe(context.Background())
 			expectClass(t, err, transfercore.ClassUnsupportedRemote)
 			expectCode(t, err, 20)
 		})
 	}
 	t.Run("valid report with failure code", func(t *testing.T) {
-		f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+		f := &fakeRunner{Respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 			if strings.Contains(command, "SSJACK-CAPS") {
 				_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 			}
 			return 20, nil
 		}}
-		err := New(f.run, "t", sampleLimits()).Probe(context.Background())
+		err := New(f.Run, "t", sampleLimits()).Probe(context.Background())
 		expectClass(t, err, transfercore.ClassUnsupportedRemote)
 		expectCode(t, err, 20)
 	})
@@ -294,14 +297,14 @@ func TestCapsPublishExitCodeMapping(t *testing.T) {
 	for _, op := range operations {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("%s-code-%d", op.name, tc.code), func(t *testing.T) {
-				f := &fakeRunner{respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
+				f := &fakeRunner{Respond: func(command string, _ io.Reader, stdout, _ io.Writer) (int, error) {
 					if strings.Contains(command, "SSJACK-CAPS") {
 						_, _ = io.WriteString(stdout, "SSJACK-CAPS sha256sum t gnu names\n")
 						return 0, nil
 					}
 					return tc.code, nil
 				}}
-				r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+				r := New(f.Run, "t", sampleLimits()).(*remoteRunner)
 				if err := r.Probe(context.Background()); err != nil {
 					t.Fatal(err)
 				}
@@ -315,12 +318,12 @@ func TestCapsPublishExitCodeMapping(t *testing.T) {
 
 func TestCapsGNUCommandBaselines(t *testing.T) {
 	f := &fakeRunner{}
-	r := New(f.run, "t", sampleLimits()).(*remoteRunner)
+	r := New(f.Run, "t", sampleLimits()).(*remoteRunner)
 	ctx := context.Background()
 	_, _, _ = r.StatFile(ctx, "/srv/file.bin")
 	_ = r.TarIn(ctx, "/srv/tree", strings.NewReader(""))
 	_ = r.PublishFile(ctx, "/srv/staging", "/srv/dest", false)
-	commands := f.recorded()
+	commands := f.Recorded()
 	want := []string{
 		"set -eu\npath='/srv/file.bin'\nif [ -L \"$path\" ] || [ ! -f \"$path\" ]; then\n\texit 21\nfi\nwc -c < \"$path\"\nsha256sum \"$path\"\n",
 		"set -eu\nroot='/srv/tree'\nif [ ! -d \"$root\" ] || [ -L \"$root\" ]; then\n\texit 21\nfi\ncd \"$root\" || exit 21\ntar -x --no-same-owner --no-same-permissions -f - || exit 24\n",
