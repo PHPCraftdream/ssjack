@@ -395,7 +395,7 @@ jobs:
         run: |
           set -o pipefail
           tmux -V
-          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -skip '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile|TestVaultOwnerRotationRecoveryFullProfile|TestVaultTransferFullProfile|TestVaultOutputFilterFullProfile|TestVaultOwnerArchiveFullProfile|TestVaultRemoteMCPStartupFullProfile)$' -count=1 -timeout 1800s ./internal/vault ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
+          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -skip '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile|TestVaultOwnerRotationRecoveryFullProfile|TestVaultTransferFullProfile|TestVaultOutputFilterFullProfile|TestVaultOwnerArchiveFullProfile|TestVaultRemoteMCPStartupFullProfile)$' -count=1 -timeout 1800s ./internal/vault/... ./internal/keyfile ./internal/appstorecrypto ./internal/ownerpacket ./cmd/ssjack | tee "$RUNNER_TEMP/full-profile.log"
           for name in TestVaultStartupPasswordFullProfile TestVaultLegacyWriterFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done

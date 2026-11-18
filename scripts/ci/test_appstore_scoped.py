@@ -49,7 +49,7 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
         self.assertRegex(self.workflow, r"TestKeyfileFullProfile")
         self.assertRegex(self.workflow, r"TestAppstoreMasterFullProfile")
         self.assertRegex(self.workflow, r"TestAppstoreFullProfileCLI")
-        self.assertRegex(self.workflow, r"\./internal/vault .*\./internal/keyfile .*\./internal/appstorecrypto .*\./cmd/ssjack")
+        self.assertRegex(self.workflow, r"\./internal/vault/\.\.\. .*\./internal/keyfile .*\./internal/appstorecrypto .*\./cmd/ssjack")
 
     def test_feature_overlay_requires_impacted_cli_package(self):
         self.assertIn(

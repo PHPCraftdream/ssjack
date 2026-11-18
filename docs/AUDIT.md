@@ -10,7 +10,7 @@ The historical v1 profile below remains readable. New containers use opaque v2 w
 
 - `internal/keyfile/container.go`: parsing, fixed parameters, public header, size limits.
 - `internal/keyfile/opaque.go`: one-field v2 parser, packet/envelope bounds, authenticated inner profile.
-- `internal/vault/upgrade.go`: verified format conversion, exact recovery copy, explicit publication.
+- `internal/vault/internal/recovery/upgrade.go`: verified format conversion, exact recovery copy, explicit publication.
 - `internal/keyfile/crypto.go`: four KDF calls, master derivation, layer keys/nonces/AAD, full-data encryption/decryption.
 - `internal/keyfile/generate.go`: secret-derived Ed25519 seed, domain separation, temporary private-buffer ownership.
 - `internal/keyfile/openssh.go`: supported key conversion, no empty-passphrase private export.
