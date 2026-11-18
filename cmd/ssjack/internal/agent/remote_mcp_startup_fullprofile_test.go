@@ -315,8 +315,9 @@ func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, f
 			ending = '\r'
 		}
 		input := append(append([]byte(nil), fixture.password...), ending)
+		_, writeErr := terminal.Input.Write(input)
 		clear(input)
-		if _, writeErr := terminal.Input.Write(input); writeErr != nil {
+		if writeErr != nil {
 			t.Fatal(writeErr)
 		}
 		fixture.phases.Mark("password input")
