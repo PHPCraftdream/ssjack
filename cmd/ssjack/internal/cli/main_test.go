@@ -340,7 +340,7 @@ func TestPolicySnapshotCLIReachesAuthenticatedKeeper(t *testing.T) {
 	}
 	metadataPath, policyPath := filepath.Join(dir, "metadata.json"), filepath.Join(dir, "policy.json")
 	const metadataRaw = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1}`
-	const policyRaw = `{"format":"ssjack-enrollment-metadata-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"rev-1"}`
+	const policyRaw = `{"format":"ssjack-policy-subset-v1","enrollment_id":"AAAAAAAAAAAAAAAAAAAAAA","driver_id":"before","driver_protocol":1,"revision":"rev-1"}`
 	for path, raw := range map[string]string{metadataPath: metadataRaw, policyPath: policyRaw} {
 		if err = os.WriteFile(path, []byte(raw), 0600); err != nil {
 			t.Fatal(err)
