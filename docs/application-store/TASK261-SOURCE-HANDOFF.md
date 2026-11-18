@@ -10,15 +10,15 @@ Source-only handoff. All listed authored tests are SOURCE-PRESENT ONLY, AUTHORED
 
 - `cmd/ssjack/text_adapter_linux_amd64.go`
 - `internal/declarativeauthority/text_adapter_linux_amd64.go`
-- `internal/appstorecrypto/text_reverse_adapter_linux_amd64.go`, `text_reverse_outcome.go`
-- `internal/appstorecrypto/text_reverse_connected_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_mapping_connected_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_late_connected_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_expiry_connected_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_expiry_control_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_effect_edges_linux_amd64_test.go`
-- `internal/appstorecrypto/text_reverse_authority_linux_amd64_test.go`, `text_reverse_capture_linux_amd64_test.go`
-- `internal/appstorecrypto/text_adapter_linux_amd64.go`
+- `internal/appstorecrypto/textadapter/reverse_linux_amd64.go`, `types.go`
+- `internal/appstorecrypto/reverse/text_reverse_connected_linux_amd64_test.go`
+- `internal/appstorecrypto/reverse/text_reverse_mapping_connected_linux_amd64_test.go`
+- `internal/appstorecrypto/reverse/text_reverse_late_connected_linux_amd64_test.go`
+- `internal/appstorecrypto/reverse/text_reverse_expiry_connected_linux_amd64_test.go`
+- `internal/appstorecrypto/reverse/text_reverse_expiry_control_linux_amd64_test.go`
+- `internal/appstorecrypto/reverse/text_reverse_effect_edges_linux_amd64_test.go`
+- `internal/appstorecrypto/textadapter/reverse_linux_amd64_test.go`
+- `internal/appstorecrypto/textadapter/adapter_linux_amd64.go`
 - `internal/apptransport/internal/server/server.go`, `text_reverse_response.go` (merged old response+request), `text_reverse_test.go` (merged old named reverse test files)
 - `docs/application-store/TEXT-ADAPTER.md`, `TEXT-REVERSE-COPY.md`
 - `scripts/ci/test_declarative_scoped.py`, `scripts/ci/text_adapter_scoped.py` (inventory previously missing)

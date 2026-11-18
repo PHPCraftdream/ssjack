@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
+PACKAGES = ("connected", "reverse", "stream")
 
 
 def main() -> int:
@@ -19,12 +20,15 @@ def main() -> int:
         raise SystemExit("connected text-adapter acceptance requires root")
     with tempfile.TemporaryDirectory(prefix="ssjack-text-adapter-", dir="/tmp") as tempdir:
         Path(tempdir).chmod(0o755)
-        binary = Path(tempdir) / "acceptance"
-        build = subprocess.run(["go", "test", "-mod=readonly", "-c", "-o", str(binary), "./internal/appstorecrypto"], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        sys.stdout.write(build.stdout)
-        if build.returncode != 0:
-            return build.returncode
-        binary.chmod(0o755)
+        binaries = []
+        for package in PACKAGES:
+            binary = Path(tempdir) / package
+            build = subprocess.run(["go", "test", "-mod=readonly", "-c", "-o", str(binary), "./internal/appstorecrypto/" + package], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            sys.stdout.write(build.stdout)
+            if build.returncode != 0:
+                return build.returncode
+            binary.chmod(0o755)
+            binaries.append(binary)
         cli = Path(tempdir) / "ssjack"
         build_cli = subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         sys.stdout.write(build_cli.stdout)
@@ -35,14 +39,17 @@ def main() -> int:
         env["SSJACK_TEXT_OWNER_CLI"] = str(cli)
         env["SSJACK_TEXT_OWNER_BRIDGE"] = str(ROOT / "scripts" / "ci" / "owner" / "owner_pty_bridge.py")
         env["SSJACK_TEXT_ADAPTER_CI_ACCEPTANCE"] = "1"
-        acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected)|(Reverse)?StreamConnected|OwnerCLIConnected)$", "-test.timeout=480s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=540)
-        sys.stdout.write(acceptance.stdout)
-        if acceptance.returncode != 0:
-            return acceptance.returncode
+        output = ""
+        for binary in binaries:
+            acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected)|(Reverse)?StreamConnected|OwnerCLIConnected)$", "-test.timeout=480s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=540)
+            sys.stdout.write(acceptance.stdout)
+            if acceptance.returncode != 0:
+                return acceptance.returncode
+            output += acceptance.stdout
         for name in ("TestTextAdapterConnected", "TestTextOwnerCLIConnected", "TestTextAdapterBounds", "TestTextReverseConnected", "TestTextReverseMappingsConnected", "TestTextReverseLateConnected", "TestTextReverseExpiryConnected", "TestTextStreamConnected", "TestTextReverseStreamConnected"):
-            if re.search(rf"(?m)^--- SKIP: {re.escape(name)}(?:\s|$)", acceptance.stdout):
+            if re.search(rf"(?m)^--- SKIP: {re.escape(name)}(?:\s|$)", output):
                 raise SystemExit(f"{name} was skipped")
-            if not re.search(rf"(?m)^--- PASS: {re.escape(name)}(?:\s|$)", acceptance.stdout):
+            if not re.search(rf"(?m)^--- PASS: {re.escape(name)}(?:\s|$)", output):
                 raise SystemExit(f"{name} did not report PASS")
         return 0
 

@@ -59,9 +59,9 @@ def main() -> int:
             f"Conformance source: ssjack={source} consumer={env['SSJACK_CONSUMER_COMMAND']} revision={label}",
             flush=True,
         )
-        binary = directory / "appstorecrypto.test"
+        binary = directory / "conformance.test"
         subprocess.run(
-            ["go", "test", "-c", "-mod=readonly", "-o", str(binary), "./internal/appstorecrypto"],
+            ["go", "test", "-c", "-mod=readonly", "-o", str(binary), "./internal/appstorecrypto/conformance"],
             cwd=ROOT,
             check=True,
             timeout=180,

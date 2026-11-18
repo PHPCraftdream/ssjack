@@ -5,8 +5,9 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-MASTER = ROOT / "internal/appstorecrypto/master.go"
-RECORD = ROOT / "internal/appstorecrypto/record.go"
+MASTER = ROOT / "internal/appstorecrypto/masterkey/master.go"
+INSTALLATION = ROOT / "internal/appstorecrypto/masterkey/installation.go"
+RECORD = ROOT / "internal/appstorecrypto/masterkey/record.go"
 FEATURE = ROOT / ".github/workflows/feature.yml"
 FULL = ROOT / ".github/workflows/ci.yml"
 SCOPED = ROOT / "scripts/ci/delivery/delivery_scoped.py"
@@ -29,7 +30,7 @@ class DeliveryScopedCIGating(unittest.TestCase):
         overlay = source.replace(old, new, 1)
         self.assertIn(new, overlay)
         self.assertIn("argon2.IDKey(password, salt, 1, 1048576, 1, 32)", source)
-        self.assertIn("const installationLayers = 1000", source)
+        self.assertIn("const installationLayers = 1000", INSTALLATION.read_text(encoding="utf-8"))
         self.assertIn('[]byte("ssjack-appstore/v1/master")', source)
         record = RECORD.read_text(encoding="utf-8")
         self.assertIn("const recordLayers = 1000", record)

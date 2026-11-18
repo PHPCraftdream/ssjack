@@ -23,3 +23,15 @@ The private pinned-spool work is a prerequisite within the unfinished delivery t
 Application operation admission permits two operations per process and one per store. Composite transactions retain one lease and their actual filesystem lock across all work; private helpers must not acquire a nested public operation lease. Cancellation releases resources only when the actual operation returns.
 
 Clearing is best-effort for owned buffers. No guaranteed erasure of runtime/AES/Argon copies, swap or dumps, hostile same-UID/root protection, power-loss proof, independently authenticated human enrollment or positive production MCP authority is claimed. The application-store passphrase remains separate from SSH credentials and must never be collected through model-visible tools, argv, environment or plaintext files.
+
+## Package layout
+
+`internal/appstorecrypto` is a thin public facade of type aliases and constructors; the implementation lives in subpackages that import only downward:
+
+- `masterkey`: master derivation, the 1000-layer record primitives, installation sealing and whole-snapshot verification.
+- `snapshotstore`: the snapshot writer, recovery, owner proposals and the unlocked `Installation`.
+- `delivery`: pinned private snapshot reads, native-sink delivery and the confidential `DeliveryCapability`.
+- `ownereditor`: the owner value editor over an unlocked installation.
+- `textadapter`: text hydration, reverse copy and streaming adapters (Linux amd64).
+
+`anchorfixture`, `testkit` and `connectedkit` are test support only; `conformance`, `connected`, `reverse` and `stream` hold the external acceptance tests. The code layout rules in [LAYOUT.md](../LAYOUT.md) bound every folder to seven code files of at most 1000 lines.

@@ -12,7 +12,7 @@ Application-store snapshot writing, durable reservation/intent, sealing, publica
 
 Source review confirms handling for unused imports/inputs and `EEXIST`; authenticated `Rejected` responses are terminal and are not retried. Suffix conflicts are durably quarantined before CAS-confirmed reservation burns; anchored orphan candidates without intent burn rather than being adopted. Quarantined snapshots cannot be adopted during recovery. `ErrWriterBurned` prevents false-success reporting; a fresh write uses new IDs.
 
-Production `internal/appstorecrypto/master.go` is unchanged: real production derivation remains four sequential 1-GiB derivations, and records retain 1000 AES layers. Scoped lightweight tests use the existing private synthetic fake-KDF helper in test code only. They do not use the full production KDF or alter production crypto. Scoped tests reside in existing `record_test.go`/`record_edges_test.go` and writer test files; CI selectors were not changed. Full-profile tests remain separately gated.
+Production `internal/appstorecrypto/masterkey/master.go` is unchanged: real production derivation remains four sequential 1-GiB derivations, and records retain 1000 AES layers. Scoped lightweight tests use the existing private synthetic fake-KDF helper in test code only. They do not use the full production KDF or alter production crypto. Scoped tests reside in existing `record_test.go`/`record_edges_test.go` and writer test files; CI selectors were not changed. Full-profile tests remain separately gated.
 
 Relevant authored evidence (not executed after final changes):
 

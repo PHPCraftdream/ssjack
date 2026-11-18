@@ -74,10 +74,10 @@ Without Python, the equivalent direct commands from the ssjack checkout are:
 
 ```sh
 install -d -m 0755 /tmp/ssjack-kit
-go test -c -mod=readonly -o /tmp/ssjack-kit/appstorecrypto.test ./internal/appstorecrypto
-chmod 0755 /tmp/ssjack-kit/appstorecrypto.test
+go test -c -mod=readonly -o /tmp/ssjack-kit/conformance.test ./internal/appstorecrypto/conformance
+chmod 0755 /tmp/ssjack-kit/conformance.test
 SSJACK_CONSUMER_CONFORMANCE=1 SSJACK_CONSUMER_COMMAND=/opt/consumer/bin/consumer \
-  /tmp/ssjack-kit/appstorecrypto.test -test.v \
+  /tmp/ssjack-kit/conformance.test -test.v \
   -test.run '^(TestConsumerConformance|TestConsumerStreamConformance)$' -test.timeout=300s
 ```
 

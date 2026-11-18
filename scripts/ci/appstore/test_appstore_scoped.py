@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
-MASTER = ROOT / "internal" / "appstorecrypto" / "master.go"
+MASTER = ROOT / "internal" / "appstorecrypto" / "masterkey" / "master.go"
 SCRIPT = ROOT / "scripts" / "ci" / "appstore" / "appstore_scoped.py"
 
 
@@ -49,7 +49,7 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
         self.assertRegex(self.workflow, r"TestKeyfileFullProfile")
         self.assertRegex(self.workflow, r"TestAppstoreMasterFullProfile")
         self.assertRegex(self.workflow, r"TestAppstoreFullProfileCLI")
-        self.assertRegex(self.workflow, r"\./internal/vault/\.\.\. .*\./internal/keyfile .*\./internal/appstorecrypto .*\./cmd/ssjack")
+        self.assertRegex(self.workflow, r"\./internal/vault/\.\.\. .*\./internal/keyfile .*\./internal/appstorecrypto/masterkey .*\./cmd/ssjack")
 
     def test_feature_overlay_requires_impacted_cli_package(self):
         self.assertIn(
