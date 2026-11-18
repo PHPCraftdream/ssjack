@@ -33,7 +33,7 @@ func (f *deliveryFixture) deliveryTextReverseAcceptance(t *testing.T, ref string
 
 	buildDir := t.TempDir()
 	consumer := filepath.Join(buildDir, "textconsumer")
-	source, err := filepath.Abs(filepath.Join("..", "..", "internal", "appstorecrypto", "testdata", "textconsumer"))
+	source, err := filepath.Abs(filepath.Join("..", "..", "internal", "appstorecrypto", "delivery", "testdata", "textconsumer"))
 	if err != nil {
 		t.Fatal("resolve fixed text consumer source")
 	}
