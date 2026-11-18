@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/PHPCraftdream/ssjack/internal/transfercore"
+	"github.com/PHPCraftdream/ssjack/internal/transferlocal/pathsafe"
 )
 
 // Root is one owner-registered transfer root directory.
@@ -32,10 +32,6 @@ func (r *Root) Dir() string {
 	return r.path
 }
 
-func refusedPath(message string) error {
-	return transfercore.Fail(transfercore.ClassRefusedPath, message)
-}
-
 // ParseRoot parses "[NAME=]DIR" and verifies the directory as a transfer root.
 func ParseRoot(spec string, vaultPath string) (*Root, error) {
 	name, dir, hasName := strings.Cut(spec, "=")
@@ -48,17 +44,17 @@ func ParseRoot(spec string, vaultPath string) (*Root, error) {
 			return nil, err
 		}
 	} else if hasName {
-		return nil, refusedPath("transfer root name is invalid")
+		return nil, pathsafe.Refused("transfer root name is invalid")
 	}
 	if !filepath.IsAbs(dir) {
-		return nil, refusedPath("transfer root must be an absolute path")
+		return nil, pathsafe.Refused("transfer root must be an absolute path")
 	}
 	path := filepath.Clean(dir)
-	if err := verifyRealDirTree(path); err != nil {
+	if err := pathsafe.VerifyRealDirTree(path); err != nil {
 		return nil, err
 	}
-	if isFilesystemRoot(path) {
-		return nil, refusedPath("transfer root must not be a filesystem root")
+	if pathsafe.IsFilesystemRoot(path) {
+		return nil, pathsafe.Refused("transfer root must not be a filesystem root")
 	}
 	if vaultPath != "" {
 		if err := checkVaultOutside(path, vaultPath); err != nil {
@@ -71,13 +67,13 @@ func ParseRoot(spec string, vaultPath string) (*Root, error) {
 // validRootName accepts 1..64 bytes of [A-Za-z0-9._-].
 func validRootName(name string) error {
 	if len(name) < 1 || len(name) > 64 {
-		return refusedPath("transfer root name is invalid")
+		return pathsafe.Refused("transfer root name is invalid")
 	}
 	for _, r := range name {
 		ok := r == '.' || r == '_' || r == '-' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 		if !ok {
-			return refusedPath("transfer root name is invalid")
+			return pathsafe.Refused("transfer root name is invalid")
 		}
 	}
 	return nil
@@ -86,11 +82,11 @@ func validRootName(name string) error {
 // checkVaultOutside refuses a vault path inside the root (or equal to it).
 func checkVaultOutside(root, vault string) error {
 	if !filepath.IsAbs(vault) {
-		return refusedPath("vault path must be absolute")
+		return pathsafe.Refused("vault path must be absolute")
 	}
 	vault = filepath.Clean(vault)
 	if vault == root || strings.HasPrefix(vault, root+string(os.PathSeparator)) {
-		return refusedPath("transfer root must not contain the vault")
+		return pathsafe.Refused("transfer root must not contain the vault")
 	}
 	return nil
 }
@@ -110,7 +106,7 @@ func NewRoots() *Roots {
 // Add registers a root, refusing nil roots and duplicate names.
 func (rs *Roots) Add(root *Root) error {
 	if root == nil {
-		return refusedPath("transfer root is missing")
+		return pathsafe.Refused("transfer root is missing")
 	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -118,7 +114,7 @@ func (rs *Roots) Add(root *Root) error {
 		rs.byName = make(map[string]*Root)
 	}
 	if _, ok := rs.byName[root.name]; ok {
-		return refusedPath("duplicate transfer root name")
+		return pathsafe.Refused("duplicate transfer root name")
 	}
 	rs.byName[root.name] = root
 	return nil
@@ -129,11 +125,11 @@ func (rs *Roots) Select(name string) (*Root, error) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if len(rs.byName) == 0 {
-		return nil, refusedPath("no transfer roots are registered")
+		return nil, pathsafe.Refused("no transfer roots are registered")
 	}
 	if name == "" {
 		if len(rs.byName) != 1 {
-			return nil, refusedPath("a transfer root name is required when several roots are registered")
+			return nil, pathsafe.Refused("a transfer root name is required when several roots are registered")
 		}
 		for _, root := range rs.byName {
 			return root, nil
@@ -141,7 +137,7 @@ func (rs *Roots) Select(name string) (*Root, error) {
 	}
 	root, ok := rs.byName[name]
 	if !ok {
-		return nil, refusedPath("transfer root was not registered")
+		return nil, pathsafe.Refused("transfer root was not registered")
 	}
 	return root, nil
 }

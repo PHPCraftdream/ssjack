@@ -7,6 +7,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/faultproxy/pace"
 )
 
 // chunkSize is the read buffer of one forwarding direction.
@@ -44,7 +46,7 @@ type Conn struct {
 	// Set by configure before run starts; read-only afterwards.
 	limits  []*limit
 	rates   [2]*rateSpec
-	buckets [2]*bucket
+	buckets [2]*pace.Bucket
 	timers  []Timer
 
 	halted    chan struct{} // closed when forwarding stops for any Reason
@@ -155,7 +157,7 @@ func (c *Conn) configure(rules []Rule) {
 	now := c.p.clock.Now()
 	for i, spec := range c.rates {
 		if spec != nil {
-			c.buckets[i] = newBucket(spec.rate, spec.burst, now)
+			c.buckets[i] = pace.NewBucket(spec.rate, spec.burst, now)
 		}
 	}
 	for _, l := range c.limits {
@@ -325,7 +327,7 @@ func closeWrite(conn net.Conn) {
 
 // pump copies src to dst until EOF, an error or a halt. A clean EOF is passed
 // on as a half-close so request/response protocols finish normally.
-func (c *Conn) pump(dir Direction, src, dst net.Conn, tokens *bucket) {
+func (c *Conn) pump(dir Direction, src, dst net.Conn, tokens *pace.Bucket) {
 	buf := make([]byte, chunkSize)
 	for {
 		n, err := src.Read(buf)
@@ -350,14 +352,14 @@ func (c *Conn) pump(dir Direction, src, dst net.Conn, tokens *bucket) {
 // returns false when forwarding must stop. After a stall engaged it discards
 // the data and returns true, so the pump keeps reading and the sockets stay
 // open.
-func (c *Conn) forward(dir Direction, dst net.Conn, data []byte, tokens *bucket) bool {
+func (c *Conn) forward(dir Direction, dst net.Conn, data []byte, tokens *pace.Bucket) bool {
 	for len(data) > 0 {
 		if c.isStalled() {
 			return true
 		}
 		want := int64(len(data))
-		if tokens != nil && want > tokens.burst {
-			want = tokens.burst
+		if tokens != nil && want > tokens.Burst() {
+			want = tokens.Burst()
 		}
 		grant := c.reserve(dir, want)
 		if grant == 0 {
@@ -442,9 +444,9 @@ func (c *Conn) account(dir Direction, n int) {
 
 // take spends n tokens, waiting on the proxy clock until they exist. It
 // returns false when the connection halted first.
-func (c *Conn) take(tokens *bucket, n int64) bool {
+func (c *Conn) take(tokens *pace.Bucket, n int64) bool {
 	for {
-		wait := tokens.try(c.p.clock.Now(), n)
+		wait := tokens.Try(c.p.clock.Now(), n)
 		if wait == 0 {
 			return true
 		}

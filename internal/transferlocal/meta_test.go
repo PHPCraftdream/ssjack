@@ -99,8 +99,8 @@ func TestExtractRestoresModTimesAndSkipsAbsurdOnes(t *testing.T) {
 		t.Fatal(err)
 	}
 	withTime := func(entry tarEntry, modTime time.Time) tarEntry {
-		entry.header.ModTime = modTime
-		entry.header.Format = tar.FormatPAX // USTAR cannot hold the year 2400
+		entry.Header.ModTime = modTime
+		entry.Header.Format = tar.FormatPAX // USTAR cannot hold the year 2400
 		return entry
 	}
 	archive := tarArchive(t, []tarEntry{

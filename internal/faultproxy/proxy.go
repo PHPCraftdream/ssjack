@@ -6,7 +6,24 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/PHPCraftdream/ssjack/internal/faultproxy/pace"
 )
+
+// The time source lives in package pace; these names keep the public API.
+type (
+	// Timer is a scheduled callback that can be cancelled.
+	Timer = pace.Timer
+	// Clock is the time source of duration drops and throttling.
+	Clock = pace.Clock
+	// RealClock is the wall clock (monotonic). It is the default.
+	RealClock = pace.RealClock
+	// ManualClock is a Clock that only moves when Advance is called.
+	ManualClock = pace.ManualClock
+)
+
+// NewManualClock returns a clock standing at start (a fixed epoch when zero).
+func NewManualClock(start time.Time) *ManualClock { return pace.NewManualClock(start) }
 
 // defaultLinger bounds how long a cut connection waits for its peers to
 // close after the proxy half-closed them (see Conn.teardown).
