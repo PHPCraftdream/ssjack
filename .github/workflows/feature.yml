@@ -354,7 +354,7 @@ jobs:
       - name: Code layout report (non-blocking)
         run: |
           # setup-go's problem matcher would turn "x.go: N lines" into error annotations.
-          echo "::remove-matcher owner=go"
+          echo "::remove-matcher owner=go::"
           go run -mod=readonly ./tools/layoutlint -report
 
   plugin-check:
