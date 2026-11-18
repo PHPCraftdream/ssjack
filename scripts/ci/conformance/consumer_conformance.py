@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 NAME = "TestConsumerConformance"
 STREAM_NAME = "TestConsumerStreamConformance"
 SYNTHETIC_ARGS = '["--consumer","synthetic"]'

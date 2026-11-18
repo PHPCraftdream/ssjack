@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def main() -> int:
@@ -33,7 +33,7 @@ def main() -> int:
         cli.chmod(0o755)
         env = os.environ.copy()
         env["SSJACK_TEXT_OWNER_CLI"] = str(cli)
-        env["SSJACK_TEXT_OWNER_BRIDGE"] = str(ROOT / "scripts" / "ci" / "owner_pty_bridge.py")
+        env["SSJACK_TEXT_OWNER_BRIDGE"] = str(ROOT / "scripts" / "ci" / "owner" / "owner_pty_bridge.py")
         env["SSJACK_TEXT_ADAPTER_CI_ACCEPTANCE"] = "1"
         acceptance = subprocess.run([str(binary), "-test.v", "-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected)|(Reverse)?StreamConnected|OwnerCLIConnected)$", "-test.timeout=480s"], cwd=ROOT, env=env, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=540)
         sys.stdout.write(acceptance.stdout)

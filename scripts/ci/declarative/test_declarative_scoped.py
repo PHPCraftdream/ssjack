@@ -9,13 +9,13 @@ import unittest
 from unittest import mock
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class DeclarativeScopedSelectionTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "PTY runner is Linux-only")
     def test_pty_close_waits_for_child_exit_before_declaring_timeout(self):
-        path = ROOT / "scripts/ci/declarative_scoped.py"
+        path = ROOT / "scripts/ci/declarative/declarative_scoped.py"
         spec = importlib.util.spec_from_file_location("declarative_scoped", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -46,15 +46,15 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn("id: scope", section)
         self.assertIn('git config --global --add safe.directory "$GITHUB_WORKSPACE"', section)
         self.assertNotIn('safe.directory "*"', section)
-        self.assertIn("scripts/ci/plan.py plan --base", section)
+        self.assertIn("scripts/ci/plan/plan.py plan --base", section)
         self.assertIn("if: steps.scope.outputs.declarative == 'true'", section)
-        self.assertIn("python3 scripts/ci/declarative_scoped.py", section)
-        self.assertIn("python3 scripts/ci/text_adapter_scoped.py", section)
+        self.assertIn("python3 scripts/ci/declarative/declarative_scoped.py", section)
+        self.assertIn("python3 scripts/ci/declarative/text_adapter_scoped.py", section)
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         root_delivery = ci.split("  delivery-root:\n", 1)[1].split("  full-profile:\n", 1)[0]
         self.assertIn("container:\n      image: golang:1.26.0", root_delivery)
-        self.assertIn("python3 scripts/ci/text_adapter_scoped.py", root_delivery)
-        runner = (ROOT / "scripts/ci/text_adapter_scoped.py").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/ci/declarative/text_adapter_scoped.py", root_delivery)
+        runner = (ROOT / "scripts/ci/declarative/text_adapter_scoped.py").read_text(encoding="utf-8")
         self.assertIn("os.geteuid() != 0", runner)
         self.assertIn('"-test.run", "^TestText(Adapter(Connected|Bounds)|Reverse(Connected|MappingsConnected|LateConnected|ExpiryConnected)|(Reverse)?StreamConnected|OwnerCLIConnected)$"', runner)
         self.assertIn('"TestTextOwnerCLIConnected"', runner)
@@ -67,7 +67,7 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         self.assertIn("TestTextReverseLateConnected", runner)
         self.assertIn("TestTextReverseExpiryConnected", runner)
         self.assertIn('"TestTextStreamConnected", "TestTextReverseStreamConnected"):', runner)
-        planner = (ROOT / "scripts/ci/plan.py").read_text(encoding="utf-8")
+        planner = (ROOT / "scripts/ci/plan/plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./internal/declarativeslice" in plan["packages"]).lower()', planner)
 
     def test_consumer_conformance_is_mandatory_in_both_tiers(self):
@@ -79,10 +79,10 @@ class DeclarativeScopedSelectionTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/consumer-conformance.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("actions/checkout@"), 1)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("python3 scripts/ci/consumer_conformance.py --synthetic", workflow)
+        self.assertIn("python3 scripts/ci/conformance/consumer_conformance.py --synthetic", workflow)
         for path in (ROOT / ".github/workflows").glob("*.yml"):
             self.assertNotIn("repository:", path.read_text(encoding="utf-8"), path.name)
-        runner = (ROOT / "scripts/ci/consumer_conformance.py").read_text(encoding="utf-8")
+        runner = (ROOT / "scripts/ci/conformance/consumer_conformance.py").read_text(encoding="utf-8")
         self.assertIn("os.geteuid() != 0", runner)
         self.assertIn("SSJACK_CONSUMER_COMMAND is required without --synthetic", runner)
         self.assertIn('env["SSJACK_CONSUMER_CONFORMANCE"] = "1"', runner)

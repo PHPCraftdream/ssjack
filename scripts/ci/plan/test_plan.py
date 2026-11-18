@@ -94,7 +94,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_dependency_ci_and_unknown_changes_broaden(self):
         for path in ["go.mod", "go.sum", "go.work", ".github/workflows/feature.yml",
-                     "scripts/ci/plan.py", "unknown/config.yaml", "scripts/unknown.py"]:
+                     "scripts/ci/plan/plan.py", "unknown/config.yaml", "scripts/unknown.py"]:
             with self.subTest(path=path):
                 result = plan.select(self.graph, [path])
                 self.assertEqual(len(result["packages"]), len(self.graph))
@@ -136,7 +136,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(result["installers"])
                 self.assertEqual(result["packages"], ["./cmd/ssjack"])
                 self.assertFalse(result["reasons"])
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parents[3]
         for name in ("feature.yml", "ci.yml"):
             source = (root / ".github" / "workflows" / name).read_text(encoding="utf-8")
             self.assertIn("sh ./build.sh --install-dir", source)

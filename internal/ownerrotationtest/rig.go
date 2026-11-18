@@ -124,7 +124,7 @@ func (r *rig) finish() {
 }
 
 func rotationPTYBridge() (string, error) {
-	return filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_pty_bridge.py"))
+	return filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
 }
 
 // spawn starts a PTY process; cancelling ctx stops only that process.

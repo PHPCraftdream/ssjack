@@ -74,7 +74,7 @@ func ownerConnectionAcceptance(t *testing.T, ctx context.Context, path string, p
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_connect.py"))
+	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_connect.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

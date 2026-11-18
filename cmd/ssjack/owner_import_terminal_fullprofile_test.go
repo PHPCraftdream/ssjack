@@ -58,7 +58,7 @@ func runImportTerminal(t *testing.T, ctx context.Context, database string, passw
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_import.py"))
+	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_import.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

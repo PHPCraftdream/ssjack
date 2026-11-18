@@ -28,7 +28,7 @@ func ownerProxyTerminalAcceptance(t *testing.T, ctx context.Context, path string
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_proxy.py"))
+	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_proxy.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

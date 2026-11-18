@@ -200,7 +200,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_pty_bridge.py"))
+	bridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

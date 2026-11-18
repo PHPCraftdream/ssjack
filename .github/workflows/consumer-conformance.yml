@@ -40,4 +40,4 @@ jobs:
           apt-get install -y --no-install-recommends python3
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Require the synthetic consumer and private keeper round trip
-        run: python3 scripts/ci/consumer_conformance.py --synthetic
+        run: python3 scripts/ci/conformance/consumer_conformance.py --synthetic

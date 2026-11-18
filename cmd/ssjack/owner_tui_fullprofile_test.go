@@ -60,7 +60,7 @@ func ownerTerminalAcceptance(t *testing.T, ctx context.Context, path string, pas
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_tui.py"))
+	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_tui.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

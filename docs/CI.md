@@ -3,7 +3,7 @@
 ## Feature CI
 
 Pushes and pull requests run `.github/workflows/feature.yml`, not the full suite.
-For each native platform (Linux, Windows, macOS), `scripts/ci/plan.py` obtains the
+For each native platform (Linux, Windows, macOS), `scripts/ci/plan/plan.py` obtains the
 current Go package graph and compares the push's previous commit, or the pull
 request's base SHA, with the checked-out revision. It selects changed packages
 and all transitive reverse dependencies, including `TestImports` and
@@ -26,6 +26,14 @@ license consistency/rejection gate run on every feature revision. License
 checks are not complete legal clearance. JSON selection evidence is retained as
 a CI artifact. Newer runs cancel obsolete feature runs for the same event ref;
 full sprint/release checks are not cancelled by this feature concurrency group.
+
+The CI Python helpers live in per-topic folders under `scripts/ci/` (`plan`,
+`workflows`, `owner`, `appstore`, `declarative`, `delivery`, `conformance`,
+`remote_mcp`), at most seven code files each. Unittest discovery does not enter
+folders without `__init__.py`, so `python3 scripts/ci/run_tests.py` runs
+`unittest discover` once per folder containing `test_*.py` and fails if any
+folder fails or none is found. A new test file is picked up by placing it in any
+folder under `scripts/ci/`.
 
 The cheap Linux license job also runs the [code layout linter](LAYOUT.md) in
 report-only mode (`-report`): violations are printed, never fail the run.
@@ -78,7 +86,7 @@ and connected-bridge gates on Linux, Windows and macOS when relevant CLI sources
 are selected (and unconditionally in the full workflow). The full workflow's
 separate production-KDF full-profile job does not repeat them or any other
 production-KDF test the matrix steps already own: its `-skip` list is checked
-against those steps by `scripts/ci/test_full_trigger.py`, so each such test runs
+against those steps by `scripts/ci/workflows/test_full_trigger.py`, so each such test runs
 once per platform. Startup covers selector/refusal and prepared-launch cases;
 connected acceptance uses a temporary private local TLS route overlay and
 exercises the real launched stdio bridge. The source runner verifies complete

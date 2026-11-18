@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+from pathlib import Path
 import select
 import signal
 import subprocess
@@ -9,7 +10,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import owner_terminal as terminal
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import owner_terminal as terminal  # noqa: E402
 
 
 class ProcessIdentityTests(unittest.TestCase):

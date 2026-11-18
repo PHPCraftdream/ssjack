@@ -11,8 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "ci" / "remote_mcp_connected.py"
+ROOT = Path(__file__).resolve().parents[3]
+SCRIPT = ROOT / "scripts" / "ci" / "remote_mcp" / "remote_mcp_connected.py"
 
 
 def load_module():
@@ -117,7 +117,7 @@ class RemoteMCPConnectedCI(unittest.TestCase):
             self.assertIn("^[[:space:]]*--- SKIP: TestVaultRemoteMCPStartupFullProfile(/| )", step)
         connected_list = f"for name in {' '.join(connected)}; do"
         for step in (feature_connected, full_connected):
-            self.assertIn("python3 scripts/ci/remote_mcp_connected.py", step)
+            self.assertIn("python3 scripts/ci/remote_mcp/remote_mcp_connected.py", step)
             self.assertIn("^--- PASS: TestVaultRemoteMCPStartupFullProfile ", step)
             self.assertIn(connected_list, step)
             self.assertIn('"--- PASS: TestVaultRemoteMCPStartupFullProfile/$name "', step)

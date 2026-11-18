@@ -161,7 +161,7 @@ with synthetic input. The `internal/ownertui` Program tests (including the impor
 flow: form, preview, `IMPORT` confirmation, wrong-password message, Escape abort)
 run a real `tea.Program` on an in-memory output with a fake backend. They test the
 model's event loop and rendering only and are not terminal acceptance. Real-terminal
-import acceptance is the tmux driver `scripts/ci/owner_import.py` in the
+import acceptance is the tmux driver `scripts/ci/owner/owner_import.py` in the
 full-profile CI job. Full-profile Linux acceptance additionally drives the CLI
 through a real pseudo-terminal and a production-encrypted synthetic database:
 unlock, rename, cancel a credential form, exit, and reopen to verify persistence
@@ -173,7 +173,7 @@ checks encrypted selected export and import, fresh MCP identities and revision-1
 records, selected `Last` remapping, unselected credentials, metadata-only preview
 and MCP-only selection. It adds no CI workflow and no executed result is claimed.
 The same full-profile run then reuses that database for a real-terminal connection
-acceptance (`scripts/ci/owner_connect.py`): a synthetic SSH server listens on
+acceptance (`scripts/ci/owner/owner_connect.py`): a synthetic SSH server listens on
 `127.0.0.1` inside the test process with a fresh host key, and the fixture accounts
 are retargeted to it with matching host pins. Through tmux the driver unlocks once
 (the `Vault secret:` prompt must appear exactly once in the whole run, including

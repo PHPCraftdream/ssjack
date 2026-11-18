@@ -216,7 +216,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 scripts/ci/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
+          python3 scripts/ci/remote_mcp/remote_mcp_connected.py | tee "$RUNNER_TEMP/remote-mcp-connected.log"
           grep -q '^--- PASS: TestVaultRemoteMCPStartupFullProfile ' "$RUNNER_TEMP/remote-mcp-connected.log"
           for name in connected-basic connected-bypass connected-active-cancel connected-empty connected-cancel; do
             grep -q -- "--- PASS: TestVaultRemoteMCPStartupFullProfile/$name " "$RUNNER_TEMP/remote-mcp-connected.log" || { echo "Mandatory connected remote MCP acceptance did not report PASS: $name"; exit 1; }
@@ -298,7 +298,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Verify CI selection regressions
-        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+        run: python3 scripts/ci/run_tests.py
       - name: Exercise fail-closed audit rejection cases
         run: python3 -m unittest discover -s scripts -p 'test_check_licenses.py'
       - name: Check exact release dependency and notice policy (factual source consistency only)
@@ -339,7 +339,7 @@ jobs:
       - name: Run scoped CLI acceptance with private overlay
         env:
           CGO_ENABLED: '1'
-        run: python3 scripts/ci/appstore_scoped.py
+        run: python3 scripts/ci/appstore/appstore_scoped.py
 
   delivery-root:
     name: Root confidential-delivery acceptance
@@ -362,9 +362,9 @@ jobs:
       - name: Public confidential-delivery acceptance
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 scripts/ci/delivery_scoped.py
+          python3 scripts/ci/delivery/delivery_scoped.py
       - name: Connected text-adapter acceptance
-        run: python3 scripts/ci/text_adapter_scoped.py
+        run: python3 scripts/ci/declarative/text_adapter_scoped.py
 
   full-profile:
     name: Encrypted vault with production 1 GiB KDF

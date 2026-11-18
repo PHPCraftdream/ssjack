@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 FEATURE = ROOT / ".github" / "workflows" / "feature.yml"
 ACCEPTANCE = ROOT / "internal" / "transferacceptance"

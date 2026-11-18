@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 MASTER = ROOT / "internal" / "appstorecrypto" / "master.go"
 OLD = '''func argonDerive(password, salt []byte) []byte {
 \tpart := argon2.IDKey(password, salt, 1, 1048576, 1, 32)

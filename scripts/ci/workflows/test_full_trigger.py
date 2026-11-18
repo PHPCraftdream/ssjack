@@ -5,7 +5,7 @@ import re
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 PREDICATE = "github.event_name == 'push' && contains(github.event.head_commit.message, '[ci:full]')"
 
 

@@ -63,7 +63,7 @@ jobs:
           SSJACK_CONSUMER_COMMAND: /opt/consumer/bin/consumer
           SSJACK_CONSUMER_ARGS: '["--some-fixed-flag","value"]'
           SSJACK_CONSUMER_REVISION: ${{ github.sha }}
-        run: python3 ssjack-kit/scripts/ci/consumer_conformance.py
+        run: python3 ssjack-kit/scripts/ci/conformance/consumer_conformance.py
 ```
 
 The runner builds the kit's test binary, runs only the two conformance tests as
@@ -92,7 +92,7 @@ either test:
 Pin the ssjack revision by full 40-character SHA and bump it deliberately; a
 contract change shows up as a diff of this document and of the kit.
 
-For ssjack's own CI: `python3 scripts/ci/consumer_conformance.py --synthetic`
+For ssjack's own CI: `python3 scripts/ci/conformance/consumer_conformance.py --synthetic`
 builds the synthetic consumer and runs the same kit. Feature and full workflows
 both call `.github/workflows/consumer-conformance.yml`; the job is mandatory.
 

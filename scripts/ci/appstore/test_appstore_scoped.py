@@ -9,9 +9,9 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 MASTER = ROOT / "internal" / "appstorecrypto" / "master.go"
-SCRIPT = ROOT / "scripts" / "ci" / "appstore_scoped.py"
+SCRIPT = ROOT / "scripts" / "ci" / "appstore" / "appstore_scoped.py"
 
 
 def load_overlay_module():
@@ -43,8 +43,8 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
         self.assertNotIn("SSJACK_TEST_SCOPED_KDF", self.source)
 
     def test_workflows_select_scoped_and_production_full_profile_tests(self):
-        self.assertIn("python3 scripts/ci/appstore_scoped.py", self.workflow)
-        self.assertIn("python3 scripts/ci/appstore_scoped.py", self.feature)
+        self.assertIn("python3 scripts/ci/appstore/appstore_scoped.py", self.workflow)
+        self.assertIn("python3 scripts/ci/appstore/appstore_scoped.py", self.feature)
         self.assertRegex(self.workflow, r"TestVault\.\*FullProfile")
         self.assertRegex(self.workflow, r"TestKeyfileFullProfile")
         self.assertRegex(self.workflow, r"TestAppstoreMasterFullProfile")
@@ -56,7 +56,7 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
             "if: runner.os == 'Linux' && steps.scope.outputs.appstorecli == 'true'",
             self.feature,
         )
-        planner = (ROOT / "scripts" / "ci" / "plan.py").read_text(encoding="utf-8")
+        planner = (ROOT / "scripts" / "ci" / "plan" / "plan.py").read_text(encoding="utf-8")
         self.assertIn('str("./cmd/ssjack" in plan["packages"]).lower()', planner)
 
     @unittest.skipUnless(sys.platform == "linux", "overlay runner is Linux-only")

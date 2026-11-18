@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = Path(__file__).resolve()
 POLICY = ROOT / "internal" / "mcphttp" / "policy.go"
 ROUTE_TEST = ROOT / "cmd" / "ssjack" / "remote_mcp_connected_route_test.go"

@@ -63,7 +63,7 @@ func ownerCommandAcceptance(t *testing.T, ctx context.Context, path string, pass
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_command.py"))
+	driver, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_command.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

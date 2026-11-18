@@ -24,7 +24,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 	defer cancel()
 	executable, err := os.Executable()
 	nativeArchiveMust(t, err)
-	bridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_pty_bridge.py"))
+	bridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
 	nativeArchiveMust(t, err)
 	environment := make([]string, 0)
 	for _, entry := range os.Environ() {

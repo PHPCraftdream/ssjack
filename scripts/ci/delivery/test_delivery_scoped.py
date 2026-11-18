@@ -4,23 +4,23 @@ from pathlib import Path
 import re
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 MASTER = ROOT / "internal/appstorecrypto/master.go"
 RECORD = ROOT / "internal/appstorecrypto/record.go"
 FEATURE = ROOT / ".github/workflows/feature.yml"
 FULL = ROOT / ".github/workflows/ci.yml"
-SCOPED = ROOT / "scripts/ci/delivery_scoped.py"
+SCOPED = ROOT / "scripts/ci/delivery/delivery_scoped.py"
 
 
 class DeliveryScopedCIGating(unittest.TestCase):
     def test_delivery_helpers_parse(self):
         for name in ("delivery_pty.py", "delivery_scoped.py"):
-            path = ROOT / "scripts/ci" / name
+            path = ROOT / "scripts/ci/delivery" / name
             with self.subTest(helper=name):
                 ast.parse(path.read_text(encoding="utf-8"), filename=name)
 
     def test_overlay_is_exactly_private_and_production_profile_is_unchanged(self):
-        helper_path = ROOT / "scripts/ci/appstore_scoped.py"
+        helper_path = ROOT / "scripts/ci/appstore/appstore_scoped.py"
         source = MASTER.read_text(encoding="utf-8")
         namespace = {"__file__": str(helper_path.resolve()), "__name__": "ci_overlay_test"}
         exec(compile(helper_path.read_text(encoding="utf-8"), str(helper_path), "exec"), namespace)
@@ -41,13 +41,13 @@ class DeliveryScopedCIGating(unittest.TestCase):
     def test_feature_gates_delivery_acceptance_on_relevant_scope(self):
         workflow = FEATURE.read_text(encoding="utf-8")
         self.assertRegex(workflow, r"if:\s*steps\.scope\.outputs\.(?:declarative|appstorecli)\s*==\s*'true'\s*\|\|\s*steps\.scope\.outputs\.(?:declarative|appstorecli)\s*==\s*'true'")
-        self.assertIn("python3 scripts/ci/delivery_scoped.py", workflow)
+        self.assertIn("python3 scripts/ci/delivery/delivery_scoped.py", workflow)
 
     def test_full_ci_runs_delivery_after_root_metadata_acceptance(self):
         workflow = FULL.read_text(encoding="utf-8")
         self.assertIn("Verify CI selection regressions", workflow)
-        self.assertRegex(workflow, r"(?s)  scoped-appstore:.*?run:\s*python3 scripts/ci/appstore_scoped\.py")
-        self.assertRegex(workflow, r"(?s)  delivery-root:\n    name: Root confidential-delivery acceptance\n    runs-on: ubuntu-latest\n    container:\n      image: golang:1.26.0\n      options: --user 0\n    steps:.*?run:\s*\|\n\s*git config --global --add safe\.directory \"\$GITHUB_WORKSPACE\"\n\s*python3 scripts/ci/delivery_scoped\.py")
+        self.assertRegex(workflow, r"(?s)  scoped-appstore:.*?run:\s*python3 scripts/ci/appstore/appstore_scoped\.py")
+        self.assertRegex(workflow, r"(?s)  delivery-root:\n    name: Root confidential-delivery acceptance\n    runs-on: ubuntu-latest\n    container:\n      image: golang:1.26.0\n      options: --user 0\n    steps:.*?run:\s*\|\n\s*git config --global --add safe\.directory \"\$GITHUB_WORKSPACE\"\n\s*python3 scripts/ci/delivery/delivery_scoped\.py")
         self.assertIn("apt-get update", workflow)
         self.assertIn("apt-get install -y python3", workflow)
 

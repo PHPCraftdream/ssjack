@@ -144,7 +144,7 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	ptyBridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner_pty_bridge.py"))
+	ptyBridge, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

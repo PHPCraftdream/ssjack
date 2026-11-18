@@ -6,7 +6,7 @@ import threading
 import unittest
 
 
-PATH = Path(__file__).with_name("owner_import.py")
+PATH = Path(__file__).resolve().parents[1] / "owner_import.py"
 SPEC = importlib.util.spec_from_file_location("owner_import_terminal", PATH)
 DRIVER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DRIVER)

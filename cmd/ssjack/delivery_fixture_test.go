@@ -93,7 +93,7 @@ func (f *deliveryFixture) tryDeliveryCLIAsWithText(t *testing.T, uid int, answer
 		t.Fatal(err)
 	}
 	defer clear(payload)
-	helper, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "delivery_pty.py"))
+	helper, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci", "delivery", "delivery_pty.py"))
 	if err != nil {
 		return "", errors.New("delivery helper path unavailable")
 	}

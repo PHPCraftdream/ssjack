@@ -36,7 +36,7 @@ opening a database; global flags precede commands.
 | Back up a reference-only selected copy | Root `register-reverse`, non-root `serve` | [Reverse copy v1](application-store/TEXT-REVERSE-COPY.md) |
 | Deploy/back up larger text through streaming | Root `register-stream` / `register-reverse-stream`, non-root `serve-stream` | [Streaming HTTP](application-store/TEXT-STREAM-HTTP.md), [framing](application-store/TEXT-STREAM-FRAMING.md) |
 | Bind/revoke an adapter credential/grant | `text-adapter identity`, `revoke ID`, `revoke-stream ID` | [Text adapter](application-store/TEXT-ADAPTER.md) |
-| Verify a consumer CLI against the text contract | `scripts/ci/consumer_conformance.py` with `SSJACK_CONSUMER_COMMAND` | [Consumer conformance](CONSUMER-CONFORMANCE.md) |
+| Verify a consumer CLI against the text contract | `scripts/ci/conformance/consumer_conformance.py` with `SSJACK_CONSUMER_COMMAND` | [Consumer conformance](CONSUMER-CONFORMANCE.md) |
 | Use the narrow synthetic declarative metadata path | `declarative setup|register|revoke|run` | [Authority](declarative/authority.md) |
 | Approve/revoke fixed synthetic confidential delivery | `declarative register-delivery|revoke-delivery`, then `appstore unlock` | [Delivery runtime](application-store/DELIVERY-RUNTIME.md) |
 | Build this checkout and install globally | Root `sh ./build.sh` (Linux/macOS), `.\build.ps1` (Windows) | [Build/install permissions](INSTALL.md#build-this-checkout-and-install-globally) |

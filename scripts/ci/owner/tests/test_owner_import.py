@@ -1,7 +1,10 @@
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
-import owner_import
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import owner_import  # noqa: E402
 
 
 class OwnerImportExitReadinessTests(unittest.TestCase):
