@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kdfseam import overlay as kdf_overlay
+
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGES = ("connected", "reverse", "stream")
 
@@ -21,14 +24,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="ssjack-text-adapter-", dir="/tmp") as tempdir:
         Path(tempdir).chmod(0o755)
         binaries = []
-        for package in PACKAGES:
-            binary = Path(tempdir) / package
-            build = subprocess.run(["go", "test", "-mod=readonly", "-c", "-o", str(binary), "./internal/appstorecrypto/" + package], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            sys.stdout.write(build.stdout)
-            if build.returncode != 0:
-                return build.returncode
-            binary.chmod(0o755)
-            binaries.append(binary)
+        with kdf_overlay.temporary_overlay("test") as overlay:
+            for package in PACKAGES:
+                binary = Path(tempdir) / package
+                build = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(overlay), "-c", "-o", str(binary), "./internal/appstorecrypto/" + package], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                sys.stdout.write(build.stdout)
+                if build.returncode != 0:
+                    return build.returncode
+                binary.chmod(0o755)
+                binaries.append(binary)
         cli = Path(tempdir) / "ssjack"
         build_cli = subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         sys.stdout.write(build_cli.stdout)

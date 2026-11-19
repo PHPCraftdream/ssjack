@@ -2,9 +2,12 @@
 import ast
 from pathlib import Path
 import re
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts" / "ci"))
+from kdfseam import overlay as kdf_overlay
 MASTER = ROOT / "internal/appstorecrypto/masterkey/master.go"
 INSTALLATION = ROOT / "internal/appstorecrypto/masterkey/installation.go"
 RECORD = ROOT / "internal/appstorecrypto/masterkey/record.go"
@@ -21,11 +24,8 @@ class DeliveryScopedCIGating(unittest.TestCase):
                 ast.parse(path.read_text(encoding="utf-8"), filename=name)
 
     def test_overlay_is_exactly_private_and_production_profile_is_unchanged(self):
-        helper_path = ROOT / "scripts/ci/appstore/appstore_scoped.py"
         source = MASTER.read_text(encoding="utf-8")
-        namespace = {"__file__": str(helper_path.resolve()), "__name__": "ci_overlay_test"}
-        exec(compile(helper_path.read_text(encoding="utf-8"), str(helper_path), "exec"), namespace)
-        old, new = namespace["OLD"], namespace["NEW"]
+        old, new = kdf_overlay.OLD, kdf_overlay.NEW
         self.assertEqual(source.count(old), 1)
         overlay = source.replace(old, new, 1)
         self.assertIn(new, overlay)
@@ -61,6 +61,19 @@ class DeliveryScopedCIGating(unittest.TestCase):
         self.assertIn("TestDeliveryScopedAcceptance", runner)
         self.assertIn('"./cmd/ssjack/internal/appstore/delivery"', runner)
         self.assertRegex(runner, r"(?i)(?:FAIL|SKIP|PASS)")
+
+    def test_delivery_runner_uses_distinct_shared_kdf_variants(self):
+        runner = SCOPED.read_text(encoding="utf-8")
+        self.assertIn("sys.path.insert(0, str(Path(__file__).resolve().parents[1]))", runner)
+        self.assertIn("from kdfseam import overlay as kdf_overlay", runner)
+        self.assertIn('kdf_overlay.temporary_overlay("scoped-build")', runner)
+        self.assertIn('kdf_overlay.temporary_overlay("scoped-test")', runner)
+        self.assertIn('"-overlay", str(build_overlay)', runner)
+        self.assertIn(
+            '"-overlay", str(test_overlay)',
+            runner,
+            "the go test must receive the separately generated scoped-test overlay",
+        )
 
 
 if __name__ == "__main__":

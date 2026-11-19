@@ -43,7 +43,10 @@ jobs:
         run: go vet -mod=readonly . ./cmd/... ./internal/... ./plugins/ssjack-ui ./tests/fixtures/... ./tools/...
       - name: Test selected packages (race detector on Linux)
         shell: bash
-        run: python3 scripts/ci/plan/plan.py test --output "$RUNNER_TEMP/ci-plan.json"
+        run: |
+          set -o pipefail
+          overlay="$(python3 scripts/ci/kdfseam/overlay.py)"
+          python3 scripts/ci/plan/plan.py test --output "$RUNNER_TEMP/ci-plan.json" --overlay "$overlay"
       - name: Repeat MCP inventory-refusal cleanup evidence
         if: runner.os == 'Linux'
         shell: bash

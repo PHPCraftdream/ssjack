@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +16,8 @@ SCRIPT = ROOT / "scripts" / "ci" / "appstore" / "appstore_scoped.py"
 SCOPED_PACKAGES = (
     "./cmd/ssjack/internal/appstore",
 )
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kdfseam import overlay as kdf_overlay
 
 
 def load_overlay_module():
@@ -33,14 +36,20 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
         cls.workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         cls.feature = (ROOT / ".github" / "workflows" / "feature.yml").read_text(encoding="utf-8")
 
+    def test_runner_uses_shared_scoped_test_variant(self):
+        runner = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("sys.path.insert(0, str(Path(__file__).resolve().parents[1]))", runner)
+        self.assertIn("from kdfseam import overlay as kdf_overlay", runner)
+        self.assertIn('kdf_overlay.temporary_overlay("scoped-test")', runner)
+
     def test_overlay_is_a_single_narrow_source_replacement(self):
-        module = self.module
-        self.assertEqual(self.source.count(module.OLD), 1)
+        old, new = kdf_overlay.OLD, kdf_overlay.NEW
+        self.assertEqual(self.source.count(old), 1)
         self.assertIn("argon2.IDKey(password, salt, 1, 1048576, 1, 32)", self.source)
-        patched = self.source.replace(module.OLD, module.NEW, 1)
-        self.assertEqual(patched.replace(module.NEW, module.OLD, 1), self.source)
-        self.assertIn("sha256.Sum256(input)", module.NEW)
-        self.assertNotIn("argon2.IDKey(", module.NEW)
+        patched = self.source.replace(old, new, 1)
+        self.assertEqual(patched.replace(new, old, 1), self.source)
+        self.assertIn("sha256.Sum256(input)", new)
+        self.assertNotIn("argon2.IDKey(", new)
 
     def test_production_has_no_private_selector(self):
         self.assertNotIn("SSJACK_TEST_SCOPED_KDF", self.source)
@@ -72,14 +81,26 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
             observed["kwargs"] = kwargs
             overlay_path = Path(command[command.index("-overlay") + 1])
             overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+            self.assertEqual(list(overlay["Replace"]), [str(MASTER.resolve())])
             source_path = Path(next(iter(overlay["Replace"].values())))
             patched = source_path.read_text(encoding="utf-8")
+            expected = kdf_overlay.patched_source(self.source, "scoped-test")
+            self.assertEqual(patched, expected)
+            self.assertIn(kdf_overlay.EXPECTED_PLACEHOLDER_LINE, patched)
+            self.assertNotIn(kdf_overlay.EXPECTED_KEY_LINE, patched)
+            self.assertIn(kdf_overlay.EXPECTED_SEAM_KEY_LINE, patched)
+            self.assertNotIn(kdf_overlay.OLD, patched)
+            self.assertEqual(patched.count(kdf_overlay.NEW), 1)
+            self.assertIn("sha256.Sum256(input)", patched)
+            self.assertNotIn("argon2.IDKey(password, salt", patched)
             observed["patched"] = patched
-            self.assertEqual(patched, self.source.replace(module.OLD, module.NEW, 1))
             return subprocess.CompletedProcess(command, 7)
 
-        with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
-            self.assertEqual(module.main(), 7)
+        with tempfile.TemporaryDirectory() as runner_temp:
+            with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": runner_temp}), mock.patch.object(
+                module.subprocess, "run", side_effect=fake_run
+            ):
+                self.assertEqual(module.main(), 7)
         command = observed["command"]
         self.assertEqual(command[0:2], ["go", "test"])
         self.assertIn("-overlay", command)
@@ -102,15 +123,20 @@ class AppstoreScopedCIRegressionTests(unittest.TestCase):
 
     def test_main_fails_closed_when_original_body_is_not_unique(self):
         module = self.module
+        modified = self.source.replace(kdf_overlay.OLD, "", 1)
+        self.assertNotIn(kdf_overlay.OLD, modified)
         with tempfile.TemporaryDirectory() as directory:
             fake_master = Path(directory) / "master.go"
-            fake_master.write_text("no expected body", encoding="utf-8")
-            with mock.patch.object(module, "MASTER", fake_master), mock.patch.object(
+            fake_master.write_text(modified, encoding="utf-8")
+            with tempfile.TemporaryDirectory() as runner_temp:
+                with mock.patch.object(kdf_overlay, "MASTER", fake_master), mock.patch.object(
                 module.sys, "platform", "linux"
-            ), mock.patch.object(module.subprocess, "run") as run:
-                with self.assertRaisesRegex(SystemExit, "exactly one"):
-                    module.main()
-                run.assert_not_called()
+            ), mock.patch.dict(
+                    os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": runner_temp}
+                ), mock.patch.object(module.subprocess, "run") as run:
+                    with self.assertRaisesRegex(SystemExit, "exactly one"):
+                        module.main()
+                    run.assert_not_called()
 
 
 if __name__ == "__main__":

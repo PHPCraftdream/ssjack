@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -260,6 +261,39 @@ class SelectionTests(unittest.TestCase):
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0], ["gofmt", "-d", "fixture.go"])
         self.assertFalse(run.call_args.kwargs["check"])
+
+    def _run_test_mode(self, argv, runner_os="Windows"):
+        selected = json.dumps({"packages": ["./internal/example"]})
+        with patch("sys.argv", argv), \
+                patch.object(Path, "read_text", return_value=selected), \
+                patch.object(Path, "glob", return_value=[Path("fixture.go")]), \
+                patch.object(subprocess, "check_output", return_value=""), \
+                patch.dict(os.environ, {"RUNNER_OS": runner_os}), \
+                patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            plan.main()
+        return run.call_args.args[0]
+
+    def test_overlay_flag_added_only_with_value(self):
+        command = self._run_test_mode(
+            ["plan.py", "test", "--output", "unused.json",
+             "--overlay", "/runner/temp/kdf-overlay.json"])
+        self.assertIn("-overlay", command)
+        self.assertEqual(command[command.index("-overlay") + 1],
+                         "/runner/temp/kdf-overlay.json")
+        plain = self._run_test_mode(["plan.py", "test", "--output", "unused.json"])
+        self.assertNotIn("-overlay", plain)
+        for flag in ("-mod=readonly", "-count=1", "-timeout=180s"):
+            self.assertIn(flag, command)
+            self.assertIn(flag, plain)
+
+    def test_overlay_flag_precedes_race_and_packages(self):
+        command = self._run_test_mode(
+            ["plan.py", "test", "--output", "unused.json",
+             "--overlay", "/runner/temp/kdf-overlay.json"],
+            runner_os="Linux")
+        self.assertLess(command.index("-overlay"), command.index("-race"))
+        self.assertLess(command.index("-race"),
+                        command.index("./internal/example"))
 
 
 if __name__ == "__main__":

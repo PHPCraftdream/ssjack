@@ -143,6 +143,7 @@ def main():
     parser.add_argument("--base", default="")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--overlay", default="")
     args = parser.parse_args()
     output = Path(args.output)
     if args.mode == "plan":
@@ -178,6 +179,8 @@ def main():
                     text=True, check=False)
                 raise RuntimeError("Go formatting differs:\n" + formatted + diff.stdout)
         command = ["go", "test", "-mod=readonly", "-count=1", "-timeout=180s"]
+        if args.overlay:
+            command += ["-overlay", args.overlay]
         if os.environ.get("RUNNER_OS") == "Linux":
             command.append("-race")
         subprocess.run(command + packages, check=True)

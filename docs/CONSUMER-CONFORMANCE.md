@@ -69,17 +69,12 @@ jobs:
 The runner builds the kit's test binary, runs only the two conformance tests as
 root and fails unless **both** report PASS with no SKIP. It prints
 `Conformance source: ssjack=<sha> consumer=<command> revision=<label>`.
-
-Without Python, the equivalent direct commands from the ssjack checkout are:
-
-```sh
-install -d -m 0755 /tmp/ssjack-kit
-go test -c -mod=readonly -o /tmp/ssjack-kit/conformance.test ./internal/appstorecrypto/conformance
-chmod 0755 /tmp/ssjack-kit/conformance.test
-SSJACK_CONSUMER_CONFORMANCE=1 SSJACK_CONSUMER_COMMAND=/opt/consumer/bin/consumer \
-  /tmp/ssjack-kit/conformance.test -test.v \
-  -test.run '^(TestConsumerConformance|TestConsumerStreamConformance)$' -test.timeout=300s
-```
+The test binary is built through the CI KDF seam overlay helper
+(`scripts/ci/kdfseam/overlay.py`, invoked inside
+`scripts/ci/conformance/consumer_conformance.py`); the workflow that calls it is
+already wired into `ci.yml` and `feature.yml`. A directly built, unpatched
+`go test -c` binary will not enable the KDF seams, so the Python helper is
+required; running the same tests by hand without it is not equivalent.
 
 Required markers on the output, exit status 0, and no `--- SKIP:` line for
 either test:

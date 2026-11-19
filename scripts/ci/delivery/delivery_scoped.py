@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Build nonsecret native delivery fixtures and run the public-CI test."""
-import json
 import os
 from pathlib import Path
 import re
@@ -9,6 +8,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kdfseam import overlay as kdf_overlay
 
 
 def build(source, package, output, ldflags=()):
@@ -43,21 +44,13 @@ def main():
             build(ROOT, "./internal/declarativeslice/tests/fixtures/secretconsumer", artifacts / f"consumer-{mode}",
                   (f"-X main.behavior={mode}",))
         build(ROOT, "./internal/declarativeslice/tests/fixtures/secretharness", harness)
-        # The private overlay accelerates only Argon2 derivation in this isolated CI process.
-        sys.path.insert(0, str(ROOT / "scripts" / "ci" / "appstore"))
-        from appstore_scoped import OLD, NEW, MASTER
-        source = MASTER.read_text(encoding="utf-8")
-        if source.count(OLD) != 1:
-            raise SystemExit("expected one isolated KDF overlay target")
-        overlay_source = artifacts / "master.go"
-        overlay_source.write_text(source.replace(OLD, NEW, 1), encoding="utf-8")
-        overlay = artifacts / "overlay.json"
-        overlay.write_text(json.dumps({"Replace": {str(MASTER.resolve()): str(overlay_source.resolve())}}), encoding="utf-8")
-        env = {**os.environ, "SSJACK_TEST_SCOPED_KDF": "1"}
-        subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-overlay", str(overlay), "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, env=env, check=True)
-        env.update({"SSJACK_PUBLIC_CI": "1", "SSJACK_DELIVERY_CLI": str(cli),
-                    "SSJACK_DELIVERY_ARTIFACTS": str(artifacts), "SSJACK_DELIVERY_DRIVER": str(driver)})
-        result = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack/internal/appstore/delivery"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
+        # The shared overlay accelerates only Argon2 derivation in this isolated CI process.
+        with kdf_overlay.temporary_overlay("scoped-build") as build_overlay, kdf_overlay.temporary_overlay("scoped-test") as test_overlay:
+            env = {**os.environ, "SSJACK_TEST_SCOPED_KDF": "1"}
+            subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-overlay", str(build_overlay), "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, env=env, check=True)
+            env.update({"SSJACK_PUBLIC_CI": "1", "SSJACK_DELIVERY_CLI": str(cli),
+                        "SSJACK_DELIVERY_ARTIFACTS": str(artifacts), "SSJACK_DELIVERY_DRIVER": str(driver)})
+            result = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(test_overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack/internal/appstore/delivery"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         output = result.stdout
         passed = "PASS: TestDeliveryScopedAcceptance" in output
         skipped = "SKIP: TestDeliveryScopedAcceptance" in output

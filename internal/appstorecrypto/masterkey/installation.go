@@ -85,11 +85,16 @@ func (b Binding) Validate() error {
 }
 
 func NewInstallation(ctx context.Context, h appstoreheader.Header, p []byte, b Binding) ([]byte, error) {
-	return NewInstallationWith(ctx, h, p, b, Derive)
+	return newInstallation(ctx, h, p, b, Derive)
 }
 
 // NewInstallationWith is a test seam: NewInstallation with a caller-supplied derivation.
 func NewInstallationWith(ctx context.Context, h appstoreheader.Header, p []byte, b Binding, derive DeriveFunc) ([]byte, error) {
+	requireKDFSeam()
+	return newInstallation(ctx, h, p, b, derive)
+}
+
+func newInstallation(ctx context.Context, h appstoreheader.Header, p []byte, b Binding, derive DeriveFunc) ([]byte, error) {
 	if ctx == nil || derive == nil || len(p) == 0 || len(p) > 16384 || !h.Valid() || b.Header != h || b.Validate() != nil {
 		return nil, ErrInstallation
 	}
@@ -164,11 +169,16 @@ func NewInstallationWith(ctx context.Context, h appstoreheader.Header, p []byte,
 
 // OpenInstallation decrypts an installation and returns its master, binding and encoded hash.
 func OpenInstallation(ctx context.Context, encoded, p []byte) (*Master, Binding, [32]byte, error) {
-	return OpenInstallationWith(ctx, encoded, p, Derive)
+	return openInstallation(ctx, encoded, p, Derive)
 }
 
 // OpenInstallationWith is a test seam: OpenInstallation with a caller-supplied derivation.
 func OpenInstallationWith(ctx context.Context, encoded, p []byte, derive DeriveFunc) (*Master, Binding, [32]byte, error) {
+	requireKDFSeam()
+	return openInstallation(ctx, encoded, p, derive)
+}
+
+func openInstallation(ctx context.Context, encoded, p []byte, derive DeriveFunc) (*Master, Binding, [32]byte, error) {
 	prefix := len(installationMagic) + appstoreheader.Size
 	if ctx == nil || derive == nil || len(encoded) < prefix || len(encoded) > maxInstallation || len(p) == 0 || len(p) > 16384 || string(encoded[:len(installationMagic)]) != string(installationMagic) {
 		return nil, Binding{}, [32]byte{}, ErrInstallation

@@ -8,6 +8,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kdfseam import overlay as kdf_overlay
+
 
 ROOT = Path(__file__).resolve().parents[3]
 NAME = "TestConsumerConformance"
@@ -60,12 +63,13 @@ def main() -> int:
             flush=True,
         )
         binary = directory / "conformance.test"
-        subprocess.run(
-            ["go", "test", "-c", "-mod=readonly", "-o", str(binary), "./internal/appstorecrypto/conformance"],
-            cwd=ROOT,
-            check=True,
-            timeout=180,
-        )
+        with kdf_overlay.temporary_overlay("test") as overlay:
+            subprocess.run(
+                ["go", "test", "-c", "-mod=readonly", "-overlay", str(overlay), "-o", str(binary), "./internal/appstorecrypto/conformance"],
+                cwd=ROOT,
+                check=True,
+                timeout=180,
+            )
         binary.chmod(0o755)
         env["SSJACK_CONSUMER_CONFORMANCE"] = "1"
         completed = subprocess.run(

@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"os"
 	"runtime"
@@ -299,6 +300,113 @@ func TestInstallationCertificatesParse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestKDFSeamPredicate(t *testing.T) {
+	synthetic := "ssjack-kdf-synthetic"
+	sum := sha256.Sum256([]byte(synthetic))
+	good := hex.EncodeToString(sum[:])
+	placeholderSum := sha256.Sum256([]byte(kdfSeamPlaceholder))
+	placeholderDigest := hex.EncodeToString(placeholderSum[:])
+	rows := []struct {
+		key, digest string
+		isTesting   bool
+		want        bool
+	}{
+		{kdfSeamPlaceholder, placeholderDigest, true, false},
+		{kdfSeamPlaceholder, good, true, false},
+		{synthetic, kdfSeamDigest, true, false},
+		{synthetic, placeholderDigest, true, false},
+		{synthetic, "zz-not-hex", true, false},
+		{synthetic, "abc", true, false},
+		{synthetic, hex.EncodeToString(make([]byte, 32)), true, false},
+		{synthetic, good, false, false},
+		{synthetic, good, true, true},
+	}
+	for _, row := range rows {
+		if got := kdfSeamAllowed(row.key, row.digest, row.isTesting); got != row.want {
+			t.Fatalf("kdfSeamAllowed(%q,%q,%v)=%v", row.key, row.digest, row.isTesting, got)
+		}
+	}
+}
+
+func TestKDFSeamGuard(t *testing.T) {
+	h := header(t)
+	placeholder := kdfSeamKey == kdfSeamPlaceholder
+	seams := []struct {
+		name string
+		call func() error
+		want error
+	}{
+		{"DeriveWith", func() error {
+			_, err := DeriveWith(context.Background(), h, nil, fake)
+			return err
+		}, ErrInvalid},
+		{"DeriveHeld", func() error {
+			_, err := DeriveHeld(context.Background(), h, nil, fake)
+			return err
+		}, ErrInvalid},
+		{"NewInstallationWith", func() error {
+			_, err := NewInstallationWith(context.Background(), h, []byte("passphrase"), Binding{}, installationDerive)
+			return err
+		}, ErrInstallation},
+		{"OpenInstallationWith", func() error {
+			_, _, _, err := OpenInstallationWith(context.Background(), nil, []byte("passphrase"), installationDerive)
+			return err
+		}, ErrInstallation},
+	}
+	for _, seam := range seams {
+		seam := seam
+		t.Run(seam.name, func(t *testing.T) {
+			var panicked bool
+			var message string
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						panicked = true
+						m, ok := r.(string)
+						if !ok {
+							t.Fatalf("seam panicked with %T, want string", r)
+						}
+						message = m
+					}
+				}()
+				err = seam.call()
+			}()
+			if placeholder {
+				if !panicked {
+					t.Fatal("guarded seam accepted under placeholder key")
+				}
+				if !strings.Contains(message, "scripts/ci/kdfseam/overlay.py") {
+					t.Fatalf("seam panic %q lacks overlay guidance", message)
+				}
+				if strings.Contains(message, kdfSeamKey) {
+					t.Fatal("seam panic leaked key material")
+				}
+				return
+			}
+			if panicked {
+				t.Fatalf("guarded seam panicked with real key applied: %s", message)
+			}
+			if !errors.Is(err, seam.want) {
+				t.Fatalf("guarded seam returned %v, want %v", err, seam.want)
+			}
+			if err != nil && strings.Contains(err.Error(), kdfSeamKey) {
+				t.Fatal("seam error leaked key material")
+			}
+		})
+	}
+	t.Run("ProductionNewInstallation", func(t *testing.T) {
+		if _, err := NewInstallation(context.Background(), h, nil, Binding{}); !errors.Is(err, ErrInstallation) {
+			t.Fatalf("production NewInstallation returned %v, want ErrInstallation", err)
+		}
+	})
+	t.Run("ProductionOpenInstallation", func(t *testing.T) {
+		if _, _, _, err := OpenInstallation(context.Background(), nil, []byte("passphrase")); !errors.Is(err, ErrInstallation) {
+			t.Fatalf("production OpenInstallation returned %v, want ErrInstallation", err)
+		}
+	})
 }
 
 func testBinding(t *testing.T) (appstoreheader.Header, Binding) {

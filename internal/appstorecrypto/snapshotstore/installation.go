@@ -63,7 +63,11 @@ func (i *Installation) CheckSnapshot(ctx context.Context, r io.Reader, expected 
 }
 
 func UnlockInstallation(ctx context.Context, encoded, p []byte) (*Installation, error) {
-	return UnlockInstallationWith(ctx, encoded, p, masterkey.Derive)
+	m, binding, encodedHash, err := masterkey.OpenInstallation(ctx, encoded, p)
+	if err != nil {
+		return nil, err
+	}
+	return &Installation{master: m, binding: binding, encodedHash: encodedHash}, nil
 }
 
 // UnlockInstallationWith is a test seam: UnlockInstallation with a caller-supplied derivation.

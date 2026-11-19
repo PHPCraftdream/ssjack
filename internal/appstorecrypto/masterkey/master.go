@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"runtime"
 	"sync"
+	"testing"
 	"unicode/utf8"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstorebudget"
@@ -17,6 +19,33 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
+
+const kdfSeamKey = "ssjack-kdf-seam-key-placeholder"
+const kdfSeamPlaceholder = "ssjack-kdf-seam-key-placeholder"
+const kdfSeamDigest = "2c4f1ed9031077b397d8a7f776f03578af45b4e520ec902821379fdd39cb7490"
+
+func kdfSeamAllowed(key, digest string, isTesting bool) bool {
+	if !isTesting || key == kdfSeamPlaceholder {
+		return false
+	}
+	want, err := hex.DecodeString(digest)
+	if err != nil || len(want) != 32 {
+		return false
+	}
+	return sha256.Sum256([]byte(key)) == [32]byte(want)
+}
+
+func requireKDFSeam() {
+	if !kdfSeamAllowed(kdfSeamKey, kdfSeamDigest, testing.Testing()) {
+		panic("masterkey KDF test seam is locked: apply scripts/ci/kdfseam/overlay.py to run seam-guarded tests")
+	}
+}
+
+func init() {
+	if kdfSeamKey != kdfSeamPlaceholder && !testing.Testing() {
+		panic("masterkey KDF seam key must be applied only via scripts/ci/kdfseam/overlay.py")
+	}
+}
 
 var ErrInvalid = errors.New("invalid application-store master derivation input")
 var ErrDerivation = errors.New("application-store master derivation failed")
@@ -50,11 +79,13 @@ type KDF = func(password, salt []byte) []byte
 
 // DeriveWith is a test seam: Derive with a caller-supplied KDF. Production uses Derive.
 func DeriveWith(ctx context.Context, header appstoreheader.Header, passphrase []byte, fn KDF) (*Master, error) {
+	requireKDFSeam()
 	return deriveAdmitted(ctx, header, passphrase, fn)
 }
 
 // DeriveHeld is a test seam for callers that already hold the store budget.
 func DeriveHeld(ctx context.Context, header appstoreheader.Header, passphrase []byte, fn KDF) (*Master, error) {
+	requireKDFSeam()
 	return derive(ctx, header, passphrase, fn)
 }
 

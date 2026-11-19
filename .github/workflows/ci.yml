@@ -68,7 +68,11 @@ jobs:
           "$RUNNER_TEMP/source-install/ssjack$suffix" --licenses > "$RUNNER_TEMP/source-install-licenses.txt"
           grep -F 'MIT OR Apache-2.0' "$RUNNER_TEMP/source-install-licenses.txt"
       - name: Test
-        run: go test -mod=readonly -count=1 -timeout 180s . ./cmd/ssjack/... ./internal/... ./plugins/ssjack-ui ./tools/...
+        shell: bash
+        run: |
+          set -o pipefail
+          overlay="$(python3 scripts/ci/kdfseam/overlay.py)"
+          go test -mod=readonly -count=1 -timeout 180s -overlay "$overlay" . ./cmd/ssjack/... ./internal/... ./plugins/ssjack-ui ./tools/...
       - name: Native owner with production KDF
         shell: bash
         env:
@@ -321,9 +325,13 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test with race detector
+        shell: bash
         env:
           CGO_ENABLED: '1'
-        run: go test -mod=readonly -race -count=1 -timeout 180s . ./cmd/ssjack/... ./internal/... ./plugins/ssjack-ui ./tools/...
+        run: |
+          set -o pipefail
+          overlay="$(python3 scripts/ci/kdfseam/overlay.py)"
+          go test -mod=readonly -race -count=1 -timeout 180s -overlay "$overlay" . ./cmd/ssjack/... ./internal/... ./plugins/ssjack-ui ./tools/...
 
   scoped-appstore:
     name: Scoped app-store CLI acceptance
@@ -394,8 +402,9 @@ jobs:
           SSJACK_TEST_FULL_KDF: '1'
         run: |
           set -o pipefail
+          overlay="$(python3 scripts/ci/kdfseam/overlay.py)"
           tmux -V
-          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -skip '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile|TestVaultOwnerRotationRecoveryFullProfile|TestVaultTransferFullProfile|TestVaultOutputFilterFullProfile|TestVaultOwnerArchiveFullProfile|TestVaultRemoteMCPStartupFullProfile)$' -count=1 -timeout 1800s ./internal/vault/... ./internal/keyfile ./internal/appstorecrypto/masterkey ./internal/ownerpacket ./cmd/ssjack/... | tee "$RUNNER_TEMP/full-profile.log"
+          go test -v -mod=readonly -p 1 -run '^(TestVault.*FullProfile|TestKeyfileFullProfile|TestAppstoreMasterFullProfile|TestAppstoreFullProfileCLI|TestOwnerPacketFullProfile)$' -skip '^(TestVaultOwnerControlFullProfile|TestVaultKeeperLifetimeFullProfile|TestVaultOwnerRotationRecoveryFullProfile|TestVaultTransferFullProfile|TestVaultOutputFilterFullProfile|TestVaultOwnerArchiveFullProfile|TestVaultRemoteMCPStartupFullProfile)$' -count=1 -timeout 1800s -overlay "$overlay" ./internal/vault/... ./internal/keyfile ./internal/appstorecrypto/masterkey ./internal/ownerpacket ./cmd/ssjack/... | tee "$RUNNER_TEMP/full-profile.log"
           for name in TestVaultStartupPasswordFullProfile TestVaultLegacyWriterFullProfile TestVaultTextOwnerFullProfile TestOwnerPacketFullProfile TestVaultDirectoryFullProfile TestVaultProxyFullProfile TestVaultRemoteMCPCaptureFullProfile TestKeyfileFullProfile TestAppstoreMasterFullProfile TestAppstoreFullProfileCLI; do
             grep -q "^--- PASS: $name " "$RUNNER_TEMP/full-profile.log" || { echo "Mandatory full-profile acceptance did not report PASS: $name"; exit 1; }
           done
