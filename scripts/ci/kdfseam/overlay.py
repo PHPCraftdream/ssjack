@@ -144,12 +144,10 @@ def _emit(line: str) -> None:
     that bash command substitution keeps."""
     raw = getattr(sys.stdout, "buffer", None)
     if raw is None:
-        sys.stdout.write(line + "
-")
+        sys.stdout.write(line + "\n")
         return
     sys.stdout.flush()
-    raw.write((line + "
-").encode("utf-8"))
+    raw.write((line + "\n").encode("utf-8"))
     raw.flush()
 
 

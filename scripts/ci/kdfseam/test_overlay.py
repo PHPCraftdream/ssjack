@@ -257,12 +257,10 @@ class KdfSeamOverlayRegressionTests(unittest.TestCase):
             pass
 
         raw = io.BytesIO()
-        console = Console(raw, encoding="utf-8", newline="
-")
+        console = Console(raw, encoding="utf-8", newline="\r\n")
         with contextlib.redirect_stdout(console):
             self.module._emit("D:/runner/overlay.json")
-        self.assertEqual(raw.getvalue(), b"D:/runner/overlay.json
-")
+        self.assertEqual(raw.getvalue(), b"D:/runner/overlay.json\n")
 
     def test_diagnostics_never_contain_the_real_key(self):
         module = self.module
