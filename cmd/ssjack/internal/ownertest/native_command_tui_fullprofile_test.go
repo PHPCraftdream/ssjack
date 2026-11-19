@@ -231,9 +231,9 @@ func renderNativeRedaction(data []byte, mask []bool) []byte {
 
 func TestNativeScreenDiagnosticsMasksEcho(t *testing.T) {
 	const credential = "sensitive-value"
-	const password = "unlock-value"
+	const password = "Zq83wVkp"
 	trace := &nativeTerminalTrace{}
-	trace.screenDiagnostics([]byte("Credential: hidden\r\nEcho: sensitive-\x1b[31mvalue\x1b[0m\r\nUnlock: unlock-value"), true, []byte(credential), []byte(password))
+	trace.screenDiagnostics([]byte("Credential: hidden\r\nEcho: sensitive-\x1b[31mvalue\x1b[0m\r\nUnlock: Zq83wVkp"), true, []byte(credential), []byte(password))
 	if strings.Contains(trace.screenRows, credential) || strings.Contains(trace.screenRows, password) ||
 		!strings.Contains(trace.screenRows, "Credential: <redacted>") ||
 		!strings.Contains(trace.screenRows, "Echo: ███") || !strings.Contains(trace.screenRows, "Unlock: ███") {
