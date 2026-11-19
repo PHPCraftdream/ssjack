@@ -386,8 +386,8 @@ func ownerChildExecFail(t *testing.T, what string, command *exec.Cmd, output []b
 }
 
 // ownerChildTerminal registers failure-only evidence for a PTY terminal child:
-// command name, start time, elapsed time, exit status and a 16 KiB tail of the
-// captured output plus a goroutine dump. Passing runs add no work.
+// command name, start time, elapsed time, exit status and a goroutine dump.
+// A non-nil tail also enables exit error details and a 16 KiB output tail.
 func ownerChildTerminal(t *testing.T, what, executableName string, terminal *ownerterminal.Terminal, tail *ownerChildTail, started time.Time) {
 	t.Helper()
 	flakediag.OnFailure(t, func() string {
@@ -398,16 +398,21 @@ func ownerChildTerminal(t *testing.T, what, executableName string, terminal *own
 			state = "exited cleanly"
 		case ctx.Err() == nil:
 			// The child ended on its own: the error is its exit status.
-			state = "exited with error: " + flakediag.Tail(err.Error(), 200)
+			state = "exited with error"
+			if tail != nil {
+				state += ": " + flakediag.Tail(err.Error(), 200)
+			}
 		}
 		stop()
-		return "owner terminal child: what=" + what +
+		evidence := "owner terminal child: what=" + what +
 			" name=" + filepath.Base(executableName) +
 			" started=" + started.Format(time.RFC3339) +
 			" elapsed=" + time.Since(started).Round(time.Millisecond).String() +
-			" exit=" + state +
-			"\noutput tail:" + flakediag.Tail(tail.snapshot(), 16*1024) +
-			"\ngoroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+			" exit=" + state
+		if tail != nil {
+			evidence += "\noutput tail:" + flakediag.Tail(tail.snapshot(), 16*1024)
+		}
+		return evidence + "\ngoroutine dump:\n" + flakediag.GoroutineDump(64*1024)
 	})
 }
 

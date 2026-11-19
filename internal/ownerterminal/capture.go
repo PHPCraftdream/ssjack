@@ -10,6 +10,7 @@ import (
 type Capture struct {
 	mu       sync.Mutex
 	data     []byte
+	total    int
 	overflow bool
 	changed  chan struct{}
 	done     chan struct{}
@@ -24,6 +25,7 @@ func CaptureOutput(output io.Reader) *Capture {
 		for {
 			n, err := output.Read(buffer)
 			capture.mu.Lock()
+			capture.total += n
 			if len(capture.data)+n <= 64<<10 && !capture.overflow {
 				capture.data = append(capture.data, buffer[:n]...)
 			} else {
@@ -42,11 +44,40 @@ func CaptureOutput(output io.Reader) *Capture {
 	return capture
 }
 
+func (c *Capture) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.data)
+}
+
+// Inspect calls inspect with c.mu held, passing the retained data, the total
+// bytes read (including bytes not retained), and whether capture overflowed.
+// inspect must not mutate or retain the data or re-enter Capture.
+func (c *Capture) Inspect(inspect func(data []byte, total int, overflow bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	inspect(c.data, c.total, c.overflow)
+}
+
 func (c *Capture) Wait(ctx context.Context, text string) error {
-	for {
+	return c.WaitFor(ctx, func(data []byte) bool {
+		return bytes.Contains(data, []byte(text))
+	})
+}
+
+// WaitFor calls match with c.mu held and only when capture has not overflowed.
+// match must not mutate or retain the data or re-enter Capture.
+func (c *Capture) WaitFor(ctx context.Context, match func([]byte) bool) error {
+	check := func() (found, overflow bool) {
 		c.mu.Lock()
-		found, overflow := bytes.Contains(c.data, []byte(text)), c.overflow
-		c.mu.Unlock()
+		defer c.mu.Unlock()
+		if c.overflow {
+			return false, true
+		}
+		return match(c.data), false
+	}
+	for {
+		found, overflow := check()
 		if overflow {
 			return ErrTerminal
 		}
@@ -57,10 +88,8 @@ func (c *Capture) Wait(ctx context.Context, text string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-c.done:
-			c.mu.Lock()
-			found, overflow := bytes.Contains(c.data, []byte(text)), c.overflow
-			c.mu.Unlock()
-			if found && !overflow {
+			found, _ := check()
+			if found {
 				return nil
 			}
 			return ErrTerminal
