@@ -204,6 +204,34 @@ class DeliveryScopedDiagnostics(unittest.TestCase):
             b"failure location: delivery_concurrent_test.go:295", *records,
         ])
 
+    def test_environment_go_continuations_are_allowlisted_and_prioritized(self):
+        tracked = (b"environment: pass=3 num_cpu=8 gomaxprocs=4 process_elapsed>=1h0m2.031s"
+                   b" test_elapsed=12ms goroutines=9 goos/goarch=linux/amd64")
+        fallback = (b"environment: pass=unknown num_cpu=8 gomaxprocs=4 process_elapsed>=1m0s"
+                    b" test_elapsed>=0s goroutines=9 goos/goarch=linux/amd64")
+        output = b"\n".join((
+            b"    delivery_concurrent_test.go:205: failure diagnostics:",
+            b"        " + fallback,
+            b"        delivery_concurrent_test.go:205: failure diagnostics:",
+            b"            " + tracked,
+            b"            " + tracked + b" raw=/private/path",
+            b"            " + tracked.replace(b"linux/amd64", b"windows/amd64"),
+            b"            " + tracked.replace(b"linux/amd64", b"linux/arm64"),
+            b"            " + tracked.replace(b"pass=3", b"pass=" + b"9" * 21),
+            b"            " + tracked.replace(b"num_cpu=8", b"num_cpu=0"),
+            b"            " + tracked.replace(b"12ms", b"1.2345s"),
+            b"            " + tracked.replace(b"test_elapsed=", b"test_elapsed>="),
+            b"",
+        ))
+        location = b"failure location: delivery_concurrent_test.go:205"
+        self.assertEqual(list(delivery_scoped.diagnostic_lines(output)), [location, fallback, location, tracked])
+        with patch.object(delivery_scoped, "MAX_DIAGNOSTIC_LINES", 2):
+            with redirect_stderr(StringIO()) as stderr, self.assertRaises(SystemExit):
+                delivery_scoped.report_failure("failed", output)
+        self.assertEqual(stderr.getvalue().splitlines(), [
+            "delivery acceptance test failed", fallback.decode("ascii"), tracked.decode("ascii"),
+        ])
+
     def test_late_pty_suffix_is_atomic_and_only_forwarded_for_returned_helpers(self):
         base = RACE[4]
         late = (base + b" pty_class=timeout pty_cleanup=reap-failed"

@@ -98,7 +98,26 @@ RACE_SIDE_CLEANUP = re.compile(
     HELPER_PROCESS + RACE_CLEANUP_FIELDS + rb"| helper=returned" + PROCESS_FIELDS + RACE_CLEANUP_FIELDS +
     rb" pty_class=" + PTY_CLASS + rb" pty_cleanup=" + PTY_CLEANUP + PTY_COUNTERS + rb")"
 )
-EVIDENCE = (PTY_EVIDENCE, RACE_EVENT, RACE_FAILURE, RACE_RECEIPT, RACE_SIDE_FAILURE, RACE_SIDE_CLEANUP)
+# time.Duration.String after millisecond truncation: positive subsecond values
+# use integer ms; longer values use seconds with optional minute/hour fields.
+ENV_POSITIVE_1_TO_59 = rb"(?:[1-9]|[1-5][0-9])"
+ENV_0_TO_59 = rb"(?:[0-9]|[1-5][0-9])"
+ENV_SECONDS_SUFFIX = rb"(?:\.[0-9]{0,2}[1-9])?s"
+ENV_DURATION = (
+    rb"(?:0s|[1-9][0-9]{0,2}ms|" + ENV_POSITIVE_1_TO_59 + ENV_SECONDS_SUFFIX +
+    rb"|(?:[1-9][0-9]{0,6}h" + ENV_0_TO_59 + rb"|" + ENV_POSITIVE_1_TO_59 + rb")m" +
+    ENV_0_TO_59 + ENV_SECONDS_SUFFIX + rb")"
+)
+ENV_POSITIVE = rb"[1-9][0-9]{0,18}"
+ENVIRONMENT = re.compile(
+    rb"environment: pass=(?:(?P<tracked>[1-9][0-9]{0,19})|unknown) num_cpu=" + ENV_POSITIVE +
+    rb" gomaxprocs=" + ENV_POSITIVE + rb" process_elapsed>=" + ENV_DURATION +
+    rb" test_elapsed(?(tracked)=|>=)" + ENV_DURATION + rb" goroutines=" + ENV_POSITIVE +
+    rb" goos/goarch=linux/amd64"
+)
+EVIDENCE = (
+    PTY_EVIDENCE, RACE_EVENT, RACE_FAILURE, RACE_RECEIPT, RACE_SIDE_FAILURE, RACE_SIDE_CLEANUP, ENVIRONMENT,
+)
 EVIDENCE_LINE = re.compile(rb"(?: {4}){2,4}([^ ].*)")
 
 
@@ -122,7 +141,7 @@ def report_failure(status, stdout):
     print(f"delivery acceptance test {status}", file=sys.stderr)
     lines = list(diagnostic_lines(stdout))
     if len(lines) > MAX_DIAGNOSTIC_LINES:
-        lines.sort(key=lambda line: not line.startswith(b"delivery "))
+        lines.sort(key=lambda line: not line.startswith((b"delivery ", b"environment: ")))
     for line in lines[:MAX_DIAGNOSTIC_LINES]:
         print(line.decode("ascii"), file=sys.stderr)
     raise SystemExit(1)

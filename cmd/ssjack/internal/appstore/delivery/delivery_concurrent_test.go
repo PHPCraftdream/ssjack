@@ -105,6 +105,7 @@ func (f *deliveryFixture) deliveryConcurrentAcceptance(t *testing.T, ref string,
 	} {
 		joined := true
 		t.Run(round.name, func(t *testing.T) {
+			flakediag.Begin(t)
 			f.concurrentRound(t, round.name, ref, artifacts, round.first, round.winner, round.loser, round.winnerDelivery, round.loserDelivery, round.delta, &joined)
 		})
 		if !joined {
@@ -192,6 +193,7 @@ func (f *deliveryFixture) concurrentRound(t *testing.T, round, ref, artifacts, f
 	captureFailure := func(condition, detail string) {
 		var snapshot strings.Builder
 		if !failureCaptured {
+			fmt.Fprintln(&snapshot, flakediag.EnvironmentLine(t, start))
 			drain()
 		}
 		for _, e := range events[printedEvents:] {

@@ -34,6 +34,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
@@ -361,6 +362,7 @@ func nativeArchiveApply(value string) []byte {
 }
 
 func TestVaultOwnerArchiveFullProfile(t *testing.T) {
+	flakediag.Begin(t)
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("production native archive process acceptance is CI-only")
 	}

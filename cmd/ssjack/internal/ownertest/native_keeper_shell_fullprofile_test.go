@@ -16,6 +16,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/cli"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/credential"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/sshfixture"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
@@ -77,6 +78,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 	}
 	for _, cycle := range cycles {
 		if !t.Run(cycle, func(t *testing.T) {
+			flakediag.Begin(t)
 			serviceBudget := nativeKeeperServiceBudget
 			if cycle == "restart" {
 				serviceBudget = 6 * time.Minute
@@ -182,6 +184,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				stopInteractive()
 				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
+					flakediag.Begin(t)
 					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
 				}) {
 					stopHuman()
@@ -214,6 +217,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			} else {
 				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
+					flakediag.Begin(t)
 					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
 				}) {
 					stopHuman()
@@ -512,6 +516,7 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 		t.Fatal("SSH authentication was disclosed before deliberate human output")
 	}
 	t.Run("legacy-writer-refusal", func(t *testing.T) {
+		flakediag.Begin(t)
 		nativeWriterRefusal(t, ctx, path, password, name, loopback)
 	})
 	// Later owner edits must not replace or terminate the captured live shell.

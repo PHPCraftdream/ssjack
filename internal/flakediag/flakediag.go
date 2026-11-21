@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strings"
 	"testing"
+	"time"
 )
 
 // GoroutineDump renders the goroutine profile (debug=2), truncated to limit
@@ -55,17 +56,26 @@ func Short(b []byte) string {
 // depend on state torn down before cleanup. If render panics, the panic
 // message is logged instead of propagating.
 func OnFailure(t *testing.T, render func() string) {
+	onFailureSince(t, time.Now(), render)
+}
+
+func onFailureSince(t *testing.T, started time.Time, render func() string) {
 	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		defer func() {
-			if r := recover(); r != nil {
-				t.Logf("failure diagnostics: render panicked: %v", r)
-			}
-		}()
-		t.Logf("failure diagnostics:\n%s", render())
+		logFailure(t.Failed(), t.Logf, func() string { return EnvironmentLine(t, started) }, render)
 	})
+}
+
+func logFailure(failed bool, logf func(string, ...any), environment, render func() string) {
+	if !failed {
+		return
+	}
+	env := environment()
+	defer func() {
+		if r := recover(); r != nil {
+			logf("failure diagnostics:\n%s\nrender panicked: %v", env, r)
+		}
+	}()
+	logf("failure diagnostics:\n%s\n%s", env, render())
 }
 
 // Join renders evidence lines with a trailing newline per non-empty part.

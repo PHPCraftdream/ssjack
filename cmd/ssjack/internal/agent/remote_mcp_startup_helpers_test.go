@@ -148,6 +148,7 @@ func TestNativeRemoteMCPStartupChild(t *testing.T) {
 }
 
 func TestNativeRemoteMCPStartupHarness(t *testing.T) {
+	flakediag.Begin(t)
 	if os.Getenv("SSJACK_REMOTE_MCP_STARTUP_CHILD") != "1" {
 		t.Skip("native startup harness only")
 	}

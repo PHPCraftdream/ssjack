@@ -30,6 +30,7 @@ import (
 )
 
 func TestVaultOwnerControlFullProfile(t *testing.T) {
+	flakediag.Begin(t)
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("production owner helper control is CI-only")
 	}
@@ -154,6 +155,7 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	}
 	phases.Mark("native-command-helper-start")
 	if t.Run("native-command-helper", func(t *testing.T) {
+		flakediag.Begin(t)
 		nativeOwnerCommandAcceptance(t, ctx, path, password, serverID, "native-added", local)
 	}) {
 		phases.Mark("native-command-helper-ok")

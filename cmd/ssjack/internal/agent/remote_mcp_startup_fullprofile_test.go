@@ -47,6 +47,7 @@ func TestVaultRemoteMCPStartupFullProfile(t *testing.T) {
 }
 
 func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario string) {
+	flakediag.Begin(t)
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
@@ -159,6 +160,7 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 }
 
 func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) {
+	flakediag.Begin(t)
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()

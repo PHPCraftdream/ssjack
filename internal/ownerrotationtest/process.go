@@ -51,6 +51,7 @@ fi
 // Child is a process-only entry point. Its roles are supplied only by the
 // synthetic test harness, never by application startup or secret inputs.
 func Child(t *testing.T, run func(context.Context, []string) (int, error)) {
+	flakediag.Begin(t)
 	role := os.Getenv("SSJACK_OWNER_ROTATION_CHILD")
 	switch role {
 	case "":

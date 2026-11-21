@@ -856,6 +856,7 @@ func TestNativeInteractiveProcessChild(t *testing.T) {
 }
 
 func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server string, observer *ownercontrol.Control) {
+	flakediag.Begin(t)
 	t.Helper()
 	metadata, err := observer.Backend().Metadata()
 	if err != nil {

@@ -84,6 +84,7 @@ func TestNativeRemoteMCPConnectedBridge(t *testing.T) {
 // This real SDK client is the launcher harness and calls namespaced tools over
 // the production stdio bridge; the separate bridge process uses remotemcp.Run above.
 func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
+	flakediag.Begin(t)
 	scenario := os.Getenv(remoteMCPConnectedScenarioEnv)
 	if !remoteMCPConnectedScenario(scenario) {
 		t.Skip("connected MCP harness only")

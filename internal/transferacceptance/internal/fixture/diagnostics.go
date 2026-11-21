@@ -336,9 +336,12 @@ func sanitizeGoroutineDump(dump string) string {
 
 // RegisterFailureDiagnostics registers a failure snapshot ahead of earlier cleanups.
 func (s *ExecServer) RegisterFailureDiagnostics(t *testing.T) {
+	registeredAt := time.Now()
 	t.Cleanup(func() {
 		if t.Failed() {
-			s.reportOnce.Do(func() { t.Logf("failure diagnostics:\n%s", s.renderDiagnostics()) })
+			s.reportOnce.Do(func() {
+				t.Logf("failure diagnostics:\n%s\n%s", flakediag.EnvironmentLine(t, registeredAt), s.renderDiagnostics())
+			})
 		}
 	})
 }

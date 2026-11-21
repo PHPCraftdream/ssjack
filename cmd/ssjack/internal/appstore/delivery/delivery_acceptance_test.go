@@ -19,6 +19,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type deliveryFixture struct {
@@ -126,6 +127,7 @@ func (f *deliveryFixture) registerDeliveryGrant(t *testing.T, ref string, fields
 // TestDeliveryScopedAcceptance exercises the complete positive delivery route
 // using the isolated native fixtures provisioned by delivery_scoped.py.
 func TestDeliveryScopedAcceptance(t *testing.T) {
+	flakediag.Begin(t)
 	f := newDeliveryFixture(t)
 	if os.Geteuid() != 0 {
 		t.Fatal("delivery acceptance requires root provisioning")

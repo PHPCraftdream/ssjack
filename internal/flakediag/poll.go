@@ -62,6 +62,6 @@ func waitForAll(t *testing.T, what string, timeout time.Duration, probe func() (
 			what, timeout, elapsed, attempts, lastDesc, lastErr, GoroutineDump(64*1024),
 		)
 	}
-	OnFailure(t, render)
+	onFailureSince(t, start, render)
 	return false, lastDesc, lastErr
 }

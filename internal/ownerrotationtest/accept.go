@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -34,6 +35,7 @@ func Accept(t *testing.T) {
 		{"retire-old-key", (*rig).retireOldKey},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
+			flakediag.Begin(t)
 			r := newRig(t)
 			r.startKeeper()
 			if r.waitHold("scenario-old-job-hold-ready") != nil {
@@ -45,6 +47,7 @@ func Accept(t *testing.T) {
 }
 
 func runSuccessfulAcceptance(t *testing.T) {
+	flakediag.Begin(t)
 	r := newRig(t)
 	r.startKeeper()
 	if r.waitHold("composed-old-job-hold-ready") != nil {
