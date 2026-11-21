@@ -12,6 +12,141 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kdfseam import overlay as kdf_overlay
 
 
+GO_TEST_WATCHDOG_SECONDS = 300
+MAX_DIAGNOSTIC_BYTES = 256 * 1024
+MAX_DIAGNOSTIC_LINES = 96
+TEST_ROOT = rb"TestDeliveryScopedAcceptance"
+TEST_NAME = TEST_ROOT + (
+    rb"(?:/(?:secret-wins|metadata-wins|lost|partial|wrong-secret|wrong-ready|wait|"
+    rb"actual-revocation|legacy-metadata-only-registration|tampered-snapshot-ciphertext|"
+    rb"anchor-unavailable|infrastructurecontrols|missing-grant|recipient-uid|"
+    rb"desired-schema-id|projection-schema-id|expired|revoked|reference-substitution|"
+    rb"store-substitution|driver-digest|consumer-digest|target|purpose|policy|"
+    rb"desired-schema|projection-schema|installation-digest|encoded-hash|"
+    rb"directory-device|directory-inode))?"
+)
+DURATION = rb" \([0-9]{1,3}\.[0-9]{2}s\)"
+ROOT_PASS = re.compile(rb"--- PASS: " + TEST_ROOT + DURATION)
+SCOPED_SKIP = re.compile(
+    rb"(?:--- SKIP: " + TEST_ROOT + rb"|(?: {4})*--- SKIP: " + TEST_ROOT + rb"/\S+)" + DURATION
+)
+RUN_EVENT = re.compile(rb"=== RUN   " + TEST_NAME)
+RESULT_EVENT = re.compile(rb"(?: {4}){0,3}(--- (?:PASS|FAIL|SKIP): " + TEST_NAME + DURATION + rb")")
+SOURCE_LOCATION = re.compile(
+    rb"(?: {4}){1,4}((?:delivery_acceptance_test|delivery_concurrent_test|"
+    rb"delivery_concurrent_unsupported_test)\.go:[1-9][0-9]{0,3}): [^\x00-\x1f\x7f]{1,512}"
+)
+PROCESS_FIELDS = (
+    rb" wrapper_pid=[0-9]{1,10} wrapper_exit=-?[0-9]{1,3}"
+    rb" child_pid=[0-9]{1,10} child_exit=-?[0-9]{1,3}"
+)
+PTY_CLASS = (
+    rb"(?:input|spawn|timeout|stdout-overflow|stdout-decode|"
+    rb"io|reap|prompts|child-exit|refusal|preflight|wrapper-exec|envelope-size|"
+    rb"envelope-decode|envelope-shape|envelope-range|envelope-trailing|envelope-class|"
+    rb"disclosure|success)"
+)
+PTY_CLEANUP = rb"(?:ok|reap-failed|unknown)"
+PTY_COUNTERS = (
+    rb" prompts_answered=(?:-1|[0-9]{1,3})"
+    rb" stdout_bytes=(?:-1|[0-9]{1,6}) terminal_bytes=(?:-1|[0-9]{1,6})"
+    rb" elapsed_ms=(?:-1|[0-9]{1,6})"
+)
+PTY_EVIDENCE = re.compile(
+    rb"delivery pty evidence: class=" + PTY_CLASS + rb" cleanup=" + PTY_CLEANUP + PROCESS_FIELDS + PTY_COUNTERS
+)
+SIDE = rb"(?:secret|metadata)"
+ROUND = rb" round=(?:secret-wins|metadata-wins)"
+ERROR_CLASS = rb"(?:missing|permission_denied|io_error)"
+MARKER_STATUS = rb"(?:regular|not_regular|" + ERROR_CLASS + rb")"
+MARKER = rb"(?:" + SIDE + rb"\.(?:planned|apply|calling|admitted|result)|driver\.(?:waiting|release))"
+RACE_EVENT = re.compile(
+    rb"delivery race event:" + ROUND + rb" elapsed_ms=[0-9]{1,6} event=(?:"
+    rb"(?:helper_launched|helper_returned) detail=" + SIDE + rb"|"
+    rb"(?:marker_seen|marker_written|cleanup_write|cleanup_write_failed) detail=" + MARKER + rb"|"
+    rb"(?:lock_acquired|lock_released|cleanup_lock_released|cleanup_lock_release_failed) detail=cas|"
+    rb"(?:lock_open_failed|lock_acquire_failed|lock_release_failed) detail=(?:deadline|" + ERROR_CLASS + rb")|"
+    rb"(?:winner_state|loser_state) detail=(?:SUCCEEDED|FAILED|UNKNOWN|invalid)|"
+    rb"(?:winner_delivery|loser_delivery) detail=(?:RECEIVED|WITHHELD|UNKNOWN|empty|invalid))"
+)
+RACE_FAILURE = re.compile(
+    rb"delivery race failure:" + ROUND + rb" condition=(?:helper_join detail=timeout|(?:"
+    rb"unknown|marker_reset|lock_open|lock_acquire|receipt_read|" + SIDE + rb"_(?:planned|calling|admitted|result)|"
+    rb"plan_decode|plan_id_missing|plan_revision_mismatch|marker_write|driver_waiting|"
+    rb"receipt_changed_under_lock|early_result|early_result_stat|lock_release|helpers_complete|"
+    rb"cli_error|harness_incomplete|result_decode|result_id_missing|winner_state|winner_delivery|"
+    rb"loser_state|loser_delivery|receipt_delta|state_read|state_decode|state_operation)"
+    rb" detail=(?:unknown|deadline(?:_(?:missing|contended|interrupted|one_returned|none_returned))?|"
+    rb"helper_returned_before_marker|both|length_mismatch|invalid_json|mismatch|" + SIDE + rb"|" + MARKER_STATUS + rb"))"
+    rb" driver_waiting=" + MARKER_STATUS + rb" driver_release=" + MARKER_STATUS
+)
+LENGTH = rb"(?:unknown|[0-9]{1,10})"
+RACE_RECEIPT = re.compile(
+    rb"delivery race receipt:" + ROUND + rb" phase=(?:baseline|lock_held|final)"
+    rb" baseline_len=" + LENGTH + rb" expected_len=" + LENGTH + rb" observed_len=" + LENGTH +
+    rb" failure_len=" + LENGTH + rb" failure_status=" + MARKER_STATUS
+)
+HELPER_PROCESS = rb" helper=(?:returned|in_flight|not_launched)" + PROCESS_FIELDS
+RACE_SIDE_FAILURE = re.compile(
+    rb"delivery race side:" + ROUND + rb" phase=failure side=" + SIDE +
+    rb" stage=(?:not_launched|launched|planned|apply|calling|admitted|driver_waiting|result)" + HELPER_PROCESS +
+    b"".join(b" " + field + b"=" + MARKER_STATUS for field in (b"planned", b"apply", b"calling", b"admitted", b"result"))
+)
+RACE_CLEANUP_FIELDS = rb" join=(?:complete|timeout) cleanup=(?:ok|io_error)"
+RACE_SIDE_CLEANUP = re.compile(
+    rb"delivery race side:" + ROUND + rb" phase=after_cleanup side=" + SIDE + rb"(?:" +
+    HELPER_PROCESS + RACE_CLEANUP_FIELDS + rb"| helper=returned" + PROCESS_FIELDS + RACE_CLEANUP_FIELDS +
+    rb" pty_class=" + PTY_CLASS + rb" pty_cleanup=" + PTY_CLEANUP + PTY_COUNTERS + rb")"
+)
+EVIDENCE = (PTY_EVIDENCE, RACE_EVENT, RACE_FAILURE, RACE_RECEIPT, RACE_SIDE_FAILURE, RACE_SIDE_CLEANUP)
+EVIDENCE_LINE = re.compile(rb"(?: {4}){2,4}([^ ].*)")
+
+
+def diagnostic_lines(stdout):
+    lines = (stdout or b"")[:MAX_DIAGNOSTIC_BYTES].split(b"\n")
+    for line in lines[:-1]:
+        if len(line) > 640:
+            continue
+        if event := RUN_EVENT.fullmatch(line):
+            yield b"test event: " + event[0]
+        elif event := RESULT_EVENT.fullmatch(line):
+            yield b"test event: " + event[1]
+        elif location := SOURCE_LOCATION.fullmatch(line):
+            yield b"failure location: " + location[1]
+        elif record := EVIDENCE_LINE.fullmatch(line):
+            if any(schema.fullmatch(record[1]) for schema in EVIDENCE):
+                yield record[1]
+
+
+def report_failure(status, stdout):
+    print(f"delivery acceptance test {status}", file=sys.stderr)
+    lines = list(diagnostic_lines(stdout))
+    if len(lines) > MAX_DIAGNOSTIC_LINES:
+        lines.sort(key=lambda line: not line.startswith(b"delivery "))
+    for line in lines[:MAX_DIAGNOSTIC_LINES]:
+        print(line.decode("ascii"), file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run_acceptance(command, env):
+    try:
+        result = subprocess.run(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=GO_TEST_WATCHDOG_SECONDS)
+    except subprocess.TimeoutExpired as timeout:
+        partial_stdout = timeout.stdout
+    else:
+        output = result.stdout
+        lines = output.split(b"\n")[:-1]
+        passed = any(ROOT_PASS.fullmatch(line) for line in lines)
+        skipped = any(SCOPED_SKIP.fullmatch(line) for line in lines)
+        if result.returncode != 0 or not passed or skipped:
+            status = "failed" if result.returncode != 0 else "unexpected SKIP" if skipped else "missing PASS"
+            report_failure(status, output)
+        print("delivery acceptance test PASS")
+        return
+    report_failure("failed: class=watchdog-timeout", partial_stdout)
+
+
 def build(source, package, output, ldflags=()):
     command = ["go", "build", "-mod=readonly", "-trimpath", "-buildmode=exe"]
     if ldflags:
@@ -50,25 +185,7 @@ def main():
             subprocess.run(["go", "build", "-mod=readonly", "-trimpath", "-overlay", str(build_overlay), "-o", str(cli), "./cmd/ssjack"], cwd=ROOT, env=env, check=True)
             env.update({"SSJACK_PUBLIC_CI": "1", "SSJACK_DELIVERY_CLI": str(cli),
                         "SSJACK_DELIVERY_ARTIFACTS": str(artifacts), "SSJACK_DELIVERY_DRIVER": str(driver)})
-            result = subprocess.run(["go", "test", "-mod=readonly", "-overlay", str(test_overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack/internal/appstore/delivery"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
-        output = result.stdout
-        passed = "PASS: TestDeliveryScopedAcceptance" in output
-        skipped = "SKIP: TestDeliveryScopedAcceptance" in output
-        if result.returncode != 0 or not passed or skipped:
-            status = "failed" if result.returncode != 0 else "missing PASS" if not passed else "unexpected SKIP"
-            print(f"delivery acceptance test {status}", file=sys.stderr)
-            for line in output.splitlines():
-                event = re.search(r"(?:=== RUN|--- (?:PASS|FAIL|SKIP):)\s+(Test[A-Za-z0-9_/.-]+)", line)
-                location = re.search(r"([A-Za-z0-9_]+\.go:\d+):", line)
-                if event:
-                    print("test event: " + event.group(0), file=sys.stderr)
-                if location:
-                    print("failure location: " + location.group(1), file=sys.stderr)
-                helper = re.search(r"delivery helper command=(?:appstore|declarative)/[a-z-]+ exit=-?\d+", line)
-                if helper:
-                    print(helper.group(0), file=sys.stderr)
-            raise SystemExit(1)
-        print("delivery acceptance test PASS")
+            run_acceptance(["go", "test", "-mod=readonly", "-overlay", str(test_overlay), "-count=1", "-v", "-timeout=240s", "-run", "^TestDeliveryScopedAcceptance$", "./cmd/ssjack/internal/appstore/delivery"], env)
 
 
 if __name__ == "__main__":

@@ -3,13 +3,36 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const concurrentDir = "/var/lib/ssjack/synthetic/concurrent"
+
+func registerApplyReceipt(server *mcp.Server, mode string) {
+	var side string
+	switch mode {
+	case "race-secret":
+		side = "secret"
+	case "race-metadata":
+		side = "metadata"
+	default:
+		return
+	}
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				if call, ok := request.(*mcp.CallToolRequest); ok && call != nil && call.Params != nil && call.Params.Name == "plan_apply" {
+					boundedWrite(filepath.Join(concurrentDir, side+".admitted"), map[string]bool{"admitted": true})
+				}
+			}
+			return next(ctx, method, request)
+		}
+	})
+}
 
 // runConcurrentMode is activated only by fixture mode names; synchronization files contain metadata only.
 func runConcurrentMode(ctx context.Context, peer *mcp.ClientSession, ref, mode string) bool {

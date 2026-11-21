@@ -1,30 +1,24 @@
 package delivery
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/appanchor"
-	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/childdiag"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeauthority"
-	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 )
 
 type deliveryFixture struct {
@@ -64,128 +58,6 @@ func newDeliveryFixture(t *testing.T) *deliveryFixture {
 	return &deliveryFixture{anchor: f, store: dir, cli: cli}
 }
 
-type deliveryAnswer struct {
-	Prompt string `json:"prompt"`
-	Answer []byte `json:"answer"`
-}
-
-type deliveryCLIResult struct {
-	ExitCode        int    `json:"exit_code"`
-	PromptsAnswered int    `json:"prompts_answered"`
-	Refusal         string `json:"refusal"`
-	Stdout          string `json:"stdout"`
-}
-type deliveryCLIRefusal struct{ Class, Code string }
-
-func (e *deliveryCLIRefusal) Error() string { return "delivery CLI authority refusal" }
-
-func (f *deliveryFixture) tryDeliveryCLIAs(t *testing.T, uid int, answers []deliveryAnswer, args ...string) (string, error) {
-	return f.tryDeliveryCLIAsWithText(t, uid, answers, nil, args...)
-}
-
-func (f *deliveryFixture) tryDeliveryCLIAsWithText(t *testing.T, uid int, answers []deliveryAnswer, text []byte, args ...string) (string, error) {
-	t.Helper()
-	payloadAnswers := make([]struct {
-		Prompt string `json:"prompt"`
-		Answer string `json:"answer"`
-	}, len(answers))
-	for i, a := range answers {
-		payloadAnswers[i].Prompt = a.Prompt
-		payloadAnswers[i].Answer = base64.StdEncoding.EncodeToString(append([]byte(nil), a.Answer...))
-	}
-	payload, err := json.Marshal(payloadAnswers)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(payload)
-	helper, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "..", "scripts", "ci", "delivery", "delivery_pty.py"))
-	if err != nil {
-		return "", errors.New("delivery helper path unavailable")
-	}
-	workspace, err := os.MkdirTemp("/tmp", "ssjack-delivery-project-")
-	if err != nil {
-		return "", errors.New("delivery workspace creation failed")
-	}
-	defer os.RemoveAll(workspace)
-	if err := os.Chown(workspace, uid, uid); err != nil {
-		return "", errors.New("delivery workspace ownership failed")
-	}
-	cmd := exec.Command("python3", append([]string{helper, f.cli}, args...)...)
-	var readFD *os.File
-	var writeFD *os.File
-	if text != nil {
-		if len(text) > 4096 {
-			return "", errors.New("text selection exceeds bounded fixture limit")
-		}
-		readFD, writeFD, err = os.Pipe()
-		if err != nil {
-			return "", errors.New("text selection pipe unavailable")
-		}
-		if _, err = writeFD.Write(text); err != nil {
-			_ = readFD.Close()
-			_ = writeFD.Close()
-			return "", errors.New("text selection pipe write failed")
-		}
-		_ = writeFD.Close()
-		defer readFD.Close()
-	}
-	cmd.Dir = workspace
-	cmd.Env = append(os.Environ(), "SSJACK_DELIVERY_UID="+strconv.Itoa(uid))
-	if text != nil {
-		cmd.ExtraFiles = []*os.File{readFD}
-		cmd.Env = append(cmd.Env, "SSJACK_DELIVERY_TEXT_FD=3")
-		readFD = nil
-	}
-	cmd.Stdin = bytes.NewReader(payload)
-	deliveryStarted := time.Now()
-	out, err := cmd.Output()
-	if err != nil {
-		// Failure-only evidence: name, pid, exit status/signal, timing and a
-		// digest. The raw output is never rendered: it may carry secrets.
-		childdiag.ExecDiag(t, "delivery PTY helper", cmd, nil, err)
-		t.Logf("delivery helper evidence: started=%s elapsed=%s output-digest=%s",
-			deliveryStarted.Format(time.RFC3339), time.Since(deliveryStarted).Round(time.Millisecond), flakediag.Short(out))
-		clear(out)
-		var exit *exec.ExitError
-		if len(args) >= 2 && errors.As(err, &exit) {
-			return "", fmt.Errorf("delivery helper command=%s/%s exit=%d", args[0], args[1], exit.ExitCode())
-		}
-		return "", errors.New("delivery PTY infrastructure failure")
-	}
-	defer clear(out)
-	var result deliveryCLIResult
-	dec := json.NewDecoder(bytes.NewReader(out))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&result) != nil || result.ExitCode < 0 || result.PromptsAnswered < 0 || result.PromptsAnswered > len(answers) || len(result.Stdout) > 65536 {
-		return "", errors.New("invalid delivery PTY result")
-	}
-	if dec.Decode(new(any)) != io.EOF {
-		return "", errors.New("invalid delivery PTY result")
-	}
-	for _, secret := range []string{f.anchor.Master, f.anchor.Secret} {
-		if secret != "" && (strings.Contains(result.Stdout, secret) || strings.Contains(string(out), secret)) {
-			clear([]byte(result.Stdout))
-			return "", errors.New("CLI disclosed secret")
-		}
-	}
-	if encoded := base64.StdEncoding.EncodeToString(f.anchor.PrivateDER); encoded != "" && strings.Contains(result.Stdout, encoded) {
-		return "", errors.New("CLI disclosed private key")
-	}
-	allowed := map[string]string{"no active delivery grant": "no-active-grant", "no unique active delivery grant": "no-unique-active-grant", "application-store setup failed": "application-store-setup", "invalid declarative slice request": "invalid-slice-request", "declarative authority unavailable or invalid": "authority-unavailable"}
-	if result.Refusal != "" {
-		if _, ok := allowed[result.Refusal]; !ok || result.ExitCode == 0 || result.PromptsAnswered < 1 {
-			return "", errors.New("unclassified delivery CLI result")
-		}
-		return result.Stdout, &deliveryCLIRefusal{Class: "authority", Code: allowed[result.Refusal]}
-	}
-	if result.ExitCode != 0 {
-		return "", errors.New("delivery CLI child failed")
-	}
-	if result.PromptsAnswered != len(answers) {
-		return "", errors.New("delivery CLI did not answer all prompts")
-	}
-	return result.Stdout, nil
-}
 func (f *deliveryFixture) requireDeliveryRefusal(t *testing.T, err error, code string) {
 	t.Helper()
 	var refusal *deliveryCLIRefusal

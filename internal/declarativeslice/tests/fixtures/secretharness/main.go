@@ -41,6 +41,7 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+	registerApplyReceipt(server, mode)
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {
