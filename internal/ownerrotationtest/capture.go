@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerterminal"
 )
@@ -24,11 +23,13 @@ type scanner interface {
 }
 
 type rotationPTYCapture struct {
-	mu       sync.Mutex
-	data     []byte
-	changed  chan struct{}
-	done     chan struct{}
-	overflow bool
+	mu        sync.Mutex
+	data      []byte
+	changed   chan struct{}
+	done      chan struct{}
+	overflow  bool
+	total     int
+	discarded int
 }
 
 var rotationANSI = regexp.MustCompile("\\x1b\\[[0-?]*[ -/]*[@-~]")
@@ -43,10 +44,12 @@ func captureRotationPTY(output io.Reader) *rotationPTYCapture {
 		for {
 			n, err := output.Read(buffer)
 			c.mu.Lock()
+			c.total += n
 			if len(c.data)+n <= 128<<10 && !c.overflow {
 				c.data = append(c.data, buffer[:n]...)
 			} else {
 				c.overflow = true
+				c.discarded += n
 			}
 			c.mu.Unlock()
 			select {
@@ -59,6 +62,21 @@ func captureRotationPTY(output io.Reader) *rotationPTYCapture {
 		}
 	}()
 	return c
+}
+
+func (c *rotationPTYCapture) stats() rotationCaptureStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := rotationCaptureStats{
+		known: true, overflow: c.overflow,
+		retained: len(c.data), total: c.total, discarded: c.discarded,
+	}
+	select {
+	case <-c.done:
+		s.readDone = true
+	default:
+	}
+	return s
 }
 
 func (c *rotationPTYCapture) text() (string, bool) {
@@ -161,24 +179,4 @@ func writeRotationPTY(t *testing.T, terminal *ownerterminal.Terminal, input []by
 func sendRotationConsent(t *testing.T, terminal *ownerterminal.Terminal, phrase string) {
 	t.Helper()
 	writeRotationPTY(t, terminal, append([]byte(phrase), rotationLineEnding()))
-}
-
-func waitRotationPTY(t *testing.T, ctx context.Context, terminal *ownerterminal.Terminal) {
-	t.Helper()
-	if err := terminal.Wait(ctx); err != nil {
-		t.Fatal("actual rotate-key CLI process failed", err)
-	}
-}
-
-func waitRotationCapture(t *testing.T, ctx context.Context, capture *rotationPTYCapture, expected string) {
-	t.Helper()
-	if err := capture.Wait(ctx, expected); err != nil {
-		t.Fatal("actual rotate-key CLI output missing", expected)
-	}
-}
-
-func closeRotationTerminal(terminal *ownerterminal.Terminal) {
-	cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
-	defer stop()
-	_ = terminal.Close(cleanup)
 }

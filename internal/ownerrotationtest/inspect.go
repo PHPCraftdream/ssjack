@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,7 +20,17 @@ import (
 
 func (r *rig) load() *vault.Vault {
 	r.t.Helper()
+	start := time.Now()
 	loaded, err := vault.Load(r.path, r.password)
+	class := rotationOperationOutcome(err, "loaded", "load-error")
+	var evidence rotationEvidence
+	if err == nil {
+		evidence.diskPhase = "none"
+		if loaded.Rotation != nil {
+			evidence.diskPhase = safeRotationPhase(loaded.Rotation.Phase)
+		}
+	}
+	r.diag.observe("disk-vault-load", class, start, evidence)
 	if err != nil {
 		r.t.Fatal("synthetic encrypted rotation vault could not be reopened")
 	}
@@ -67,8 +76,11 @@ func (r *rig) expectJournal(phase string) {
 	r.t.Helper()
 	active := r.activeKey()
 	defer clear(active)
-	if !bytes.Equal(active, r.oldPEM) || r.diskPhase() != phase {
-		r.t.Fatal("durable active key or rotation journal phase differs from the expected state", phase)
+	if !bytes.Equal(active, r.oldPEM) {
+		r.failCondition("durable-journal", "active-key-mismatch", "durable active key differs from the old key")
+	}
+	if r.diskPhase() != phase {
+		r.failCondition("durable-journal", "wrong-phase", "durable rotation journal phase differs from the expected state")
 	}
 }
 
@@ -77,32 +89,85 @@ func (r *rig) expectJournal(phase string) {
 func (r *rig) retainCandidate() []byte {
 	r.t.Helper()
 	candidate := r.journalKey()
-	if len(candidate) == 0 || bytes.Equal(candidate, r.oldPEM) {
-		r.t.Fatal("encrypted journal omitted its distinct replacement identity")
+	if len(candidate) == 0 {
+		r.failCondition("journal-candidate", "missing-key", "encrypted journal omitted its replacement identity")
+	}
+	if bytes.Equal(candidate, r.oldPEM) {
+		r.failCondition("journal-candidate", "old-key-reused", "encrypted journal omitted its distinct replacement identity")
 	}
 	r.hide(candidate)
 	return candidate
 }
 
-func rotationSnapshotReady(snapshot ownerdb.Snapshot) error {
-	status := snapshot.Status.Database
-	if snapshot.Status.Err != nil || snapshot.Status.Pending || snapshot.Status.Busy || status.Err != nil || status.Pending || status.SavedRevision != status.Revision || snapshot.CipherDigest == ([32]byte{}) {
-		return errors.New("rotation requires an exact saved owner snapshot")
+func observedRotationPhase(rotation *vault.RotationInfo) rotationPhase {
+	if rotation == nil {
+		return "none"
 	}
-	return nil
+	return safeRotationPhase(rotation.Phase)
+}
+
+func snapshotStats(snapshot ownerdb.Snapshot) rotationSnapshotStats {
+	status := snapshot.Status.Database
+	return rotationSnapshotStats{
+		phase: observedRotationPhase(snapshot.Rotation), revision: status.Revision, savedRevision: status.SavedRevision,
+		ownerError: snapshot.Status.Err != nil, ownerPending: snapshot.Status.Pending, ownerBusy: snapshot.Status.Busy,
+		databaseError: status.Err != nil, databasePending: status.Pending, digest: snapshot.CipherDigest != ([32]byte{}),
+	}
+}
+
+func rotationSnapshotState(snapshot ownerdb.Snapshot, err error, ready, complete bool) string {
+	if err != nil {
+		return rotationOperationOutcome(err, "", "snapshot-error")
+	}
+	if ready {
+		status := snapshot.Status.Database
+		switch {
+		case snapshot.Status.Err != nil:
+			return "owner-status-error"
+		case snapshot.Status.Pending:
+			return "owner-pending"
+		case snapshot.Status.Busy:
+			return "owner-busy"
+		case status.Err != nil:
+			return "database-status-error"
+		case status.Pending:
+			return "database-pending"
+		case status.SavedRevision != status.Revision:
+			return "unsaved-revision"
+		case snapshot.CipherDigest == ([32]byte{}):
+			return "missing-cipher-digest"
+		}
+	}
+	if snapshot.Rotation == nil {
+		return "missing-receipt"
+	}
+	if complete && snapshot.Rotation.Phase != vault.RotationComplete {
+		return "wrong-phase"
+	}
+	return "matched"
+}
+
+func (r *rig) recordSnapshot(name, class string, start time.Time, snapshot ownerdb.Snapshot, err error) {
+	var evidence rotationEvidence
+	if err == nil {
+		evidence.snapshot = snapshotStats(snapshot)
+	}
+	r.diag.observe(name, class, start, evidence)
 }
 
 // attach authenticates a fresh owner helper to the running keeper; callers detach it.
 func (r *rig) attach() *ownercontrol.Control {
 	r.t.Helper()
+	start := time.Now()
 	control, err := ownercontrol.Open(r.ctx, r.path, r.password)
+	r.diag.observe("owner-attach", rotationOperationOutcome(err, "attached", "attach-error"), start, rotationEvidence{})
 	if err != nil {
 		r.t.Fatal("independent owner could not authenticate to the running keeper")
 	}
 	return control
 }
 
-// scoped binds keeper operations to one exact snapshot revision.
+// scoped selects the revision for operations that use the backend's revision binding.
 func scoped(control *ownercontrol.Control, revision uint64) ownertui.Backend {
 	return control.Backend().(interface {
 		AtRevision(uint64) ownertui.Backend
@@ -114,17 +179,31 @@ func (r *rig) retryDatabase() string {
 	r.t.Helper()
 	control := r.attach()
 	defer control.Detach()
+	start := time.Now()
 	before, err := control.RotationSnapshot(r.ctx)
+	r.recordSnapshot("retry-before-snapshot", rotationOperationOutcome(err, "read", "snapshot-error"), start, before, err)
 	if err != nil {
 		r.t.Fatal("owner snapshot was unavailable before explicit local-save retry")
 	}
 	retry := scoped(control, before.Status.Database.Revision)
-	if retry.RetryDatabase() != nil || retry.Flush(r.ctx) != nil {
-		r.t.Fatal("explicit local-save retry was refused or did not settle")
+	start = time.Now()
+	err = retry.RetryDatabase()
+	r.diag.observe("retry-database-request", rotationOperationOutcome(err, "accepted", "retry-error"), start, rotationEvidence{})
+	if err != nil {
+		r.t.Fatal("explicit local-save retry request failed")
 	}
+	start = time.Now()
+	err = retry.Flush(r.ctx)
+	r.diag.observe("retry-database-flush", rotationOperationOutcome(err, "returned-ok", "flush-error"), start, rotationEvidence{})
+	if err != nil {
+		r.t.Fatal("explicit local-save retry flush failed")
+	}
+	start = time.Now()
 	after, err := control.RotationSnapshot(r.ctx)
-	if err != nil || rotationSnapshotReady(after) != nil || after.Rotation == nil {
-		r.t.Fatal("explicit local-save retry did not produce a healthy saved snapshot")
+	class := rotationSnapshotState(after, err, true, false)
+	r.recordSnapshot("retry-after-snapshot", class, start, after, err)
+	if class != "matched" {
+		r.t.Fatal("explicit local-save retry did not produce a healthy saved snapshot:", class)
 	}
 	return after.Rotation.Phase
 }
@@ -133,18 +212,37 @@ func (r *rig) retryDatabase() string {
 func (r *rig) committed(control *ownercontrol.Control) ([]byte, ssh.PublicKey) {
 	r.t.Helper()
 	loaded := r.load()
-	complete := loaded.Rotation != nil && loaded.Rotation.Phase == vault.RotationComplete && loaded.Rotation.CommitDigest != ""
+	class := "matched"
+	switch {
+	case loaded.Rotation == nil:
+		class = "missing-receipt"
+	case loaded.Rotation.Phase != vault.RotationComplete:
+		class = "wrong-phase"
+	case loaded.Rotation.CommitDigest == "":
+		class = "missing-commit-digest"
+	}
 	loaded.Close()
 	active := r.activeKey()
 	signer, err := ssh.ParsePrivateKey(active)
-	if !complete || err != nil || bytes.Equal(active, r.oldPEM) {
-		clear(active)
-		r.t.Fatal("durable active key is not a distinct replacement of a completed rotation")
+	if class == "matched" {
+		switch {
+		case err != nil:
+			class = "active-key-parse-error"
+		case bytes.Equal(active, r.oldPEM):
+			class = "old-key-reused"
+		}
 	}
-	saved, err := control.RotationSnapshot(r.ctx)
-	if err != nil || rotationSnapshotReady(saved) != nil || saved.Rotation == nil || saved.Rotation.Phase != vault.RotationComplete {
+	if class != "matched" {
 		clear(active)
-		r.t.Fatal("keeper did not report an exact durable completed rotation receipt")
+		r.failCondition("committed-disk-state", class, "durable active key is not a distinct replacement of a completed rotation")
+	}
+	start := time.Now()
+	saved, err := control.RotationSnapshot(r.ctx)
+	class = rotationSnapshotState(saved, err, true, true)
+	r.recordSnapshot("committed-snapshot", class, start, saved, err)
+	if class != "matched" {
+		clear(active)
+		r.t.Fatal("keeper did not report an exact durable completed rotation receipt:", class)
 	}
 	r.hide(active)
 	return active, signer.PublicKey()
@@ -163,8 +261,11 @@ func (r *rig) expectInventory(allowed ...string) {
 		want[name] = true
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !want[entry.Name()] {
-			r.t.Fatalf("unexpected fixture artifact in synthetic vault directory: %s", entry.Name())
+		if entry.IsDir() {
+			r.t.Fatalf("unexpected fixture artifact: class=directory name-length=%d", len(entry.Name()))
+		}
+		if !want[entry.Name()] {
+			r.t.Fatalf("unexpected fixture artifact: class=unexpected-entry name-length=%d", len(entry.Name()))
 		}
 		delete(want, entry.Name())
 		r.expectEncrypted(filepath.Join(r.root, entry.Name()))
@@ -190,8 +291,10 @@ func (r *rig) expectEncrypted(path string) {
 }
 
 func (r *rig) fingerprintCount(fingerprint string) int {
+	r.fixture.mu.Lock()
+	defer r.fixture.mu.Unlock()
 	count := 0
-	for _, value := range r.fixture.fingerprints() {
+	for _, value := range r.fixture.auths {
 		if value == fingerprint {
 			count++
 		}
@@ -202,14 +305,37 @@ func (r *rig) fingerprintCount(fingerprint string) int {
 // waitFingerprints waits until the fixture saw count handshakes of a key.
 func (r *rig) waitFingerprints(fingerprint string, count int) {
 	r.t.Helper()
+	start := time.Now()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	for r.fingerprintCount(fingerprint) < count {
+	for {
+		observed := r.fingerprintCount(fingerprint)
+		if observed >= count {
+			r.recordHandshakes("fingerprint-wait", "matched", start, observed, count)
+			return
+		}
 		select {
 		case <-r.ctx.Done():
+			r.recordHandshakes("fingerprint-wait", rotationContextOutcome(r.ctx.Err()), start, observed, count)
 			r.t.Fatal("fresh ordinary MCP SSH job did not authenticate with the selected new key")
 		case <-ticker.C:
 		}
+	}
+}
+
+func (r *rig) recordHandshakes(name, class string, start time.Time, observed, expected int) {
+	r.diag.observe(name, class, start, rotationEvidence{handshakes: rotationCounts{known: true, observed: observed, expected: expected}})
+}
+
+func (r *rig) expectHandshake(name string, observed int, message string) {
+	r.t.Helper()
+	class := "matched"
+	if observed == 0 {
+		class = "missing-handshake"
+	}
+	r.recordHandshakes(name, class, time.Time{}, observed, 1)
+	if observed == 0 {
+		r.t.Fatal(message)
 	}
 }
 
@@ -248,11 +374,7 @@ func (f *rotationSSHFixture) mutationCount() int {
 	defer f.mu.Unlock()
 	return f.mutations
 }
-func (f *rotationSSHFixture) fingerprints() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.auths...)
-}
+
 func (f *rotationSSHFixture) waitHold(ctx context.Context) error {
 	select {
 	case <-f.holdStarted:

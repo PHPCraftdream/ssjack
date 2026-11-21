@@ -36,7 +36,7 @@ func Accept(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			r := newRig(t)
 			r.startKeeper()
-			if r.fixture.waitHold(r.ctx) != nil {
+			if r.waitHold("scenario-old-job-hold-ready") != nil {
 				t.Fatal("old-key MCP SSH job did not remain held")
 			}
 			scenario.run(r)
@@ -47,13 +47,11 @@ func Accept(t *testing.T) {
 func runSuccessfulAcceptance(t *testing.T) {
 	r := newRig(t)
 	r.startKeeper()
-	if r.fixture.waitHold(r.ctx) != nil {
+	if r.waitHold("composed-old-job-hold-ready") != nil {
 		t.Fatal("actual ordinary MCP job did not retain an old-key SSH connection")
 	}
 	oldFingerprint := ssh.FingerprintSHA256(r.oldSSH)
-	if r.fingerprintCount(oldFingerprint) == 0 {
-		t.Fatal("initial actual MCP job was not authenticated by the saved old key")
-	}
+	r.expectHandshake("initial-old-key-handshake", r.fingerprintCount(oldFingerprint), "initial actual MCP job was not authenticated by the saved old key")
 	control := r.attach()
 	defer control.Detach()
 	human, humanCapture := r.startHuman()
@@ -65,31 +63,34 @@ func runSuccessfulAcceptance(t *testing.T) {
 	r.approve(owner, capture, phrase, "Encrypted selected-account commit: durable at revision")
 	_, newPublic := r.committed(control)
 	newFingerprint := ssh.FingerprintSHA256(newPublic)
-	if text, overflow := capture.text(); overflow || !strings.Contains(text, newFingerprint) {
-		t.Fatal("displayed replacement fingerprint did not match the durably selected SSH key")
+	text, overflow := capture.text()
+	if overflow {
+		r.failCondition("displayed-replacement-fingerprint", "capture-overflow", "could not inspect the displayed replacement fingerprint")
+	}
+	if !strings.Contains(text, newFingerprint) {
+		r.failCondition("displayed-replacement-fingerprint", "mismatch", "displayed replacement fingerprint did not match the durably selected SSH key")
 	}
 	r.expectEncrypted(r.path)
-	if !r.fixture.hasKey(r.oldSSH) || !r.fixture.hasKey(newPublic) {
-		t.Fatal("fixture remote authorization did not retain old and add new key")
+	switch {
+	case !r.fixture.hasKey(r.oldSSH):
+		r.failCondition("composed-remote-keys", "old-key-missing", "fixture remote authorization did not retain the old key")
+	case !r.fixture.hasKey(newPublic):
+		r.failCondition("composed-remote-keys", "replacement-key-missing", "fixture remote authorization did not add the new key")
 	}
 	before := r.fingerprintCount(newFingerprint)
-	if before == 0 {
-		t.Fatal("rotation proof did not include a new-key SSH handshake")
-	}
+	r.expectHandshake("rotation-proof-handshake", before, "rotation proof did not include a new-key SSH handshake")
 	writeRotationPTY(t, human, []byte("still-old-human\n"))
-	if humanCapture.Wait(r.ctx, "HUMAN-ECHO:still-old-human") != nil {
+	if r.waitOutput(humanCapture, "HUMAN-ECHO:still-old-human") != nil {
 		t.Fatal("rotation terminated or replaced the actual running human CLI connection")
 	}
 	r.oldJobAlive()
 	r.command("n", "ACTUAL-ROTATION-MCP-NEW-JOB-DONE")
 	r.waitFingerprints(newFingerprint, before+1)
-	if r.fingerprintCount(oldFingerprint) == 0 {
-		t.Fatal("actual SSH handshakes did not prove both retained old and selected new key identities")
-	}
+	r.expectHandshake("retained-old-key-handshake", r.fingerprintCount(oldFingerprint), "actual SSH handshakes did not prove both retained old and selected new key identities")
 	r.command("o", "ACTUAL-ROTATION-MCP-OLD-JOB-DONE")
 	writeRotationPTY(t, human, []byte("exit\n"))
-	if err := human.Wait(r.ctx); err != nil {
-		t.Fatal("actual human CLI did not exit its pinned shell cleanly", err)
+	if r.waitChild(human, "human-pinned-shell-exit") != nil {
+		t.Fatal("actual human CLI did not exit its pinned shell cleanly")
 	}
 	r.stopKeeper()
 	r.scan(r.ctx, r.captures...)
@@ -106,36 +107,49 @@ func (r *rig) wrongApprovalAndCancel() {
 	r.details(capture)
 	r.retainCandidate()
 	writeRotationPTY(t, refused, append([]byte("ROTATE wrong synthetic approval"), rotationLineEnding()))
-	waitRotationPTY(t, r.ctx, refused)
+	if r.waitChild(refused, "wrong-approval-cli-exit") != nil {
+		t.Fatal("actual rotate-key CLI process failed")
+	}
 	r.scan(r.ctx, capture)
 	r.expectClean(r.keeperCapture)
-	if r.fixture.mutationCount() != mutations || !r.fixture.hasKeyFromPrivate(r.oldPrivate) {
-		t.Fatal("wrong approval caused remote key mutation")
-	}
+	r.expectUnchangedRemote("wrong-approval-effects", mutations)
 	r.expectJournal(vault.RotationPrepared)
 	cancel, cancelCapture := r.start("cli", false, "--recover", "--cancel-prepared")
 	r.approve(cancel, cancelCapture, r.consent(cancelCapture, "CANCEL-PREPARED"), "Prepared encrypted intent cancelled; no remote effect was attempted.")
 	r.scan(r.ctx, cancelCapture)
 	r.expectClean(r.keeperCapture)
-	if r.fixture.mutationCount() != mutations || !r.fixture.hasKeyFromPrivate(r.oldPrivate) {
-		t.Fatal("prepared-plan cancellation caused remote mutation")
-	}
+	r.expectUnchangedRemote("cancel-prepared-effects", mutations)
 	r.expectJournal(vault.RotationCancelled)
+}
+
+func (r *rig) expectUnchangedRemote(name string, mutations int) {
+	r.t.Helper()
+	switch {
+	case r.fixture.mutationCount() != mutations:
+		r.failCondition(name, "wrong-mutation-count", "remote mutation count changed")
+	case !r.fixture.hasKeyFromPrivate(r.oldPrivate):
+		r.failCondition(name, "old-key-missing", "remote authorization did not retain the old key")
+	}
 }
 
 const commitLine = "Encrypted selected-account commit: durable at revision"
 
 func (r *rig) expectEffects(mutations int, phase string) {
 	r.t.Helper()
-	if r.fixture.mutationCount() != mutations || r.diskPhase() != phase || !r.fixture.hasKeyFromPrivate(r.oldPrivate) {
-		r.t.Fatal("remote mutation count, durable phase or retained old key differs from the expected state", phase)
+	switch {
+	case r.fixture.mutationCount() != mutations:
+		r.failCondition("rotation-effects", "wrong-mutation-count", "remote mutation count differs from the expected state")
+	case r.diskPhase() != phase:
+		r.failCondition("rotation-effects", "wrong-phase", "durable phase differs from the expected state")
+	case !r.fixture.hasKeyFromPrivate(r.oldPrivate):
+		r.failCondition("rotation-effects", "old-key-missing", "remote authorization did not retain the old key")
 	}
 }
 
 // effectFailure drives an Add whose outcome fails after its remote effect, then
 // recovers with a restarted keeper and verify-only consent, never replaying Add.
 func (r *rig) effectFailure(kind string) {
-	t, lock := r.t, r.path+".lock"
+	lock := r.path + ".lock"
 	want := vault.RotationUnknown
 	switch kind {
 	case "lost-add-ack-restart":
@@ -157,8 +171,11 @@ func (r *rig) effectFailure(kind string) {
 	r.expectEffects(1, want)
 	r.expectJournal(want)
 	if kind == "post-add-persistence-restart" {
-		if os.Remove(lock) != nil || r.retryDatabase() != vault.RotationAdded {
-			t.Fatal("explicit local-save retry did not persist the acknowledged addition")
+		if os.Remove(lock) != nil {
+			r.failCondition("post-add-local-save-retry", "lock-remove-error", "could not remove the synthetic persistence lock")
+		}
+		if r.retryDatabase() != vault.RotationAdded {
+			r.failCondition("post-add-local-save-retry", "wrong-phase", "explicit local-save retry did not persist the acknowledged addition")
 		}
 	}
 	r.restartKeeper()
@@ -209,8 +226,11 @@ func (r *rig) preEffectRefusal() {
 	r.retainCandidate()
 	r.expectEffects(0, vault.RotationPrepared)
 	r.expectJournal(vault.RotationPrepared)
-	if os.Remove(lock) != nil || r.retryDatabase() != vault.RotationAttempting {
-		t.Fatal("explicit local-save retry did not preserve the no-effect attempting journal")
+	if os.Remove(lock) != nil {
+		r.failCondition("pre-effect-local-save-retry", "lock-remove-error", "could not remove the synthetic persistence lock")
+	}
+	if r.retryDatabase() != vault.RotationAttempting {
+		r.failCondition("pre-effect-local-save-retry", "wrong-phase", "explicit local-save retry did not preserve the no-effect attempting journal")
 	}
 	r.expectEffects(0, vault.RotationAttempting)
 	r.restartKeeper()
@@ -227,12 +247,33 @@ func (r *rig) preEffectRefusal() {
 func (r *rig) ownerCrashInFlight() {
 	t := r.t
 	barrier := r.fixture.armAddBarrier(t, r.ctx)
+	// This runs before the fixture's idempotent fallback cleanup.
+	t.Cleanup(func() {
+		select {
+		case <-barrier.release:
+			return
+		default:
+		}
+		barrier.free()
+		r.diag.outcome("add-barrier-cleanup", "release-signaled")
+	})
+	r.diag.outcome("add-barrier", "armed")
 	r.fixture.configure(func(f *rotationSSHFixture) { f.loseAck = true })
 	crashCtx, crash := context.WithCancel(r.ctx)
 	defer crash()
 	owner, capture := r.startIn(crashCtx, "owner", false)
 	sendRotationConsent(t, owner, r.consent(capture, "ROTATE"))
-	if barrier.wait(r.ctx) != nil {
+	start := time.Now()
+	err := barrier.wait(r.ctx)
+	r.diag.observe("add-barrier-wait", rotationOperationOutcome(err, "entry-observed", "wait-error"), start, rotationEvidence{})
+	if err != nil {
+		// The context branch can win even when entry is already observable.
+		select {
+		case <-barrier.entered:
+			r.diag.outcome("add-barrier-entry-after-wait", "observed")
+		default:
+			r.diag.outcome("add-barrier-entry-after-wait", "not-observed")
+		}
 		t.Fatal("synthetic Add did not reach its after-effect barrier")
 	}
 	r.expectEffects(1, vault.RotationAttempting)
@@ -240,25 +281,42 @@ func (r *rig) ownerCrashInFlight() {
 	candidate := r.retainCandidate()
 	// Stop only this owner child; its output is joined before the terminal closes.
 	crash()
-	if owner.Wait(r.ctx) == nil {
+	// Any non-nil Wait result satisfies the original crash assertion; the
+	// timeline distinguishes an unjoined wait from an exit/backend failure.
+	if r.waitChild(owner, "deliberate-owner-crash-wait") == nil {
 		t.Fatal("in-flight owner process did not report its deliberate crash")
 	}
 	r.scan(r.ctx, capture)
+	r.diag.outcome("add-barrier", "release-requested")
 	barrier.free()
+	r.diag.outcome("add-barrier", "release-signaled")
 	control := r.attach()
 	defer control.Detach()
+	start = time.Now()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+	evidence := rotationEvidence{lastRPCFailure: "none"}
 	for {
 		saved, err := control.RotationSnapshot(r.ctx)
+		evidence.attempts++
+		if err != nil {
+			evidence.lastRPCFailure = rotationOperationOutcome(err, "", "snapshot-error")
+		} else {
+			evidence.snapshot = snapshotStats(saved)
+		}
 		if err == nil && saved.Rotation != nil && saved.Rotation.Phase == vault.RotationUnknown {
-			if scoped(control, saved.Status.Database.Revision).Flush(r.ctx) != nil {
+			r.diag.observe("post-release-snapshot-settle", "unknown-observed", start, evidence)
+			flushStart := time.Now()
+			err := scoped(control, saved.Status.Database.Revision).Flush(r.ctx)
+			r.diag.observe("post-release-flush", rotationOperationOutcome(err, "returned-ok", "flush-error"), flushStart, rotationEvidence{})
+			if err != nil {
 				t.Fatal("keeper could not save the unknown outcome after the Add barrier release")
 			}
 			break
 		}
 		select {
 		case <-r.ctx.Done():
+			r.diag.observe("post-release-snapshot-settle", rotationContextOutcome(r.ctx.Err()), start, evidence)
 			t.Fatal("keeper did not settle the lost Add acknowledgement as unknown")
 		case <-ticker.C:
 		}
