@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/faultproxy"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	fixture "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/fixture"
 	"github.com/PHPCraftdream/ssjack/internal/transfercore"
 	"github.com/PHPCraftdream/ssjack/internal/transferengine"
@@ -358,6 +359,7 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 	finalLook := func(rig *downloadRig) bool { return rig.hook.doneBytes() == downloadPayload }
 
 	t.Run("one drop", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 73)
 		src := rig.source("blob.bin", payload)
@@ -394,6 +396,7 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 		require(t, res.Attempts == 1+ranges+2, "expected one stream attempt, one per range, and two assembly attempts")
 	})
 	t.Run("every drop then a new engine", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 74)
 		src := rig.source("blob.bin", payload)
@@ -454,6 +457,7 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 // head primitive can read.
 func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 	t.Run("after link_unstable", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 75)
 		src := rig.source("blob.bin", payload)
@@ -486,6 +490,7 @@ func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 		assertSourceUntouched(t, src, payload)
 	})
 	t.Run("parts off the grid", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 76)
 		src := rig.source("blob.bin", payload)
@@ -539,6 +544,7 @@ func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 // versions) and in the middle of a transfer (integrity, staging removed).
 func ScenarioChunkDownloadSourceChanged(t *testing.T) {
 	t.Run("between attempts", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		oldPayload := fixture.SeedPayload(downloadPayload, 77)
 		src := rig.source("blob.bin", oldPayload)
@@ -567,6 +573,7 @@ func ScenarioChunkDownloadSourceChanged(t *testing.T) {
 		}
 	})
 	t.Run("mid transfer", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 79)
 		src := rig.source("blob.bin", payload)
@@ -735,6 +742,7 @@ func (r *downloadRig) stallNextDown(n int64) {
 // the whole-stream attempt and for a range read alike.
 func ScenarioChunkDownloadStallDetectedAndResumed(t *testing.T) {
 	t.Run("stalled stream", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 81)
 		src := rig.source("blob.bin", payload)
@@ -774,6 +782,7 @@ func ScenarioChunkDownloadStallDetectedAndResumed(t *testing.T) {
 		require(t, proxyStats.Dropped == 0, "expected no proxy drops during the stream stall")
 	})
 	t.Run("stalled part", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newDownloadRig(t)
 		payload := fixture.SeedPayload(downloadPayload, 82)
 		src := rig.source("blob.bin", payload)

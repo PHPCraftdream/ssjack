@@ -199,15 +199,26 @@ func TestDiagnosticRingKeepsLatestRecordsInOrder(t *testing.T) {
 	}
 }
 
-func TestSafeGoroutineDumpStripsFrameArguments(t *testing.T) {
-	got := sanitizeGoroutineDump("goroutine 1 [running]:\nexample/frame(0x1234, 0x5678)\n\t/path/file.go:12 +0x1\ncreated by example/start(0xfeed)\n\t/path/start.go:3 +0x2\n")
-	for _, argument := range []string{"0x1234", "0x5678", "0xfeed"} {
-		if strings.Contains(got, argument) {
-			t.Error("safe goroutine dump retained a frame argument")
+// TestRenderDiagnosticsGoroutineDumpIsSanitized preserves the fixture-level
+// regression coverage of the old local sanitizer: the goroutines section of
+// rendered diagnostics must carry neither frame arguments nor source paths.
+// The argument/path stripping itself is covered by the shared
+// flakediag.SafeGoroutineDump unit tests.
+func TestRenderDiagnosticsGoroutineDumpIsSanitized(t *testing.T) {
+	s := &ExecServer{startedAt: time.Now()}
+	rendered := s.renderDiagnostics()
+	i := strings.Index(rendered, "goroutines:\n")
+	if i < 0 {
+		t.Fatal("rendered diagnostics omit the goroutines section")
+	}
+	dump := rendered[i+len("goroutines:\n"):]
+	for _, leak := range []string{"0x", "\t", "/"} {
+		if strings.Contains(dump, leak) {
+			t.Errorf("rendered goroutine dump retained %q", leak)
 		}
 	}
-	if !strings.Contains(got, "/path/file.go:12") {
-		t.Error("safe goroutine dump omitted the frame location")
+	if !strings.Contains(dump, "goroutine ") {
+		t.Error("rendered goroutine dump lost its goroutine headers")
 	}
 }
 

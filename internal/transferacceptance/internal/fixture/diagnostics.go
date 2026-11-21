@@ -306,35 +306,8 @@ func formatTimeline(records []execDiagnostic, events []fixtureEvent) string {
 	return b.String()
 }
 
-// SafeGoroutineDump returns bounded goroutine headers and frame locations without argument values.
-func SafeGoroutineDump() string {
-	return sanitizeGoroutineDump(flakediag.GoroutineDump(goroutineDumpLimit))
-}
-
-func sanitizeGoroutineDump(dump string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(dump, "\n") {
-		trimmed := strings.TrimSpace(line)
-		keep := strings.HasPrefix(line, "goroutine ") || strings.HasPrefix(line, "created by ") || strings.HasPrefix(line, "...truncated (full ") || strings.HasPrefix(trimmed, "/")
-		if !keep {
-			continue
-		}
-		if strings.HasPrefix(line, "created by ") {
-			if i := strings.IndexByte(line, '('); i >= 0 {
-				line = line[:i]
-			}
-		}
-		if b.Len()+len(line)+1 > goroutineDumpLimit {
-			b.WriteString("\n...[safe goroutine dump truncated]")
-			break
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
 // RegisterFailureDiagnostics registers a failure snapshot ahead of earlier cleanups.
+// Its rendered goroutine dump is argument- and path-free (flakediag.SafeGoroutineDump).
 func (s *ExecServer) RegisterFailureDiagnostics(t *testing.T) {
 	registeredAt := time.Now()
 	t.Cleanup(func() {
@@ -396,6 +369,6 @@ func (s *ExecServer) renderDiagnostics() string {
 	}
 	formatWait("WaitEntered", entered)
 	formatWait("WaitIdle", idle)
-	fmt.Fprintf(&b, "goroutines:\n%s", SafeGoroutineDump())
+	fmt.Fprintf(&b, "goroutines:\n%s", flakediag.SafeGoroutineDump(goroutineDumpLimit))
 	return b.String()
 }

@@ -43,6 +43,38 @@ func (trace *nativeTerminalTrace) addInteractiveCLIFailureMarkers() {
 		nativeInteractiveTerminalFailure, nativeInteractiveSaveFailure, nativeInteractiveUnlockFailure)
 }
 
+// Labels, stages, operations and diagnostic messages are static, printable
+// test descriptions. Never interpolate matchers, terminal data or raw errors.
+// newNativeTerminalTrace registers the flow diagnostics against `diagnostics`
+// so a later failure there still renders this trace's collected history.
+func newNativeTerminalTrace(diagnostics *testing.T, label string) *nativeTerminalTrace {
+	trace := &nativeTerminalTrace{started: time.Now()}
+	trace.flow = flakediag.StartFlow(diagnostics, label, func(full bool) string { return trace.failureEvidence(label, full) }, func() {
+		if trace.capture != nil {
+			trace.capture.Clear()
+		}
+	})
+	return trace
+}
+
+func (trace *nativeTerminalTrace) attach(t *testing.T, ctx context.Context, command ownerterminal.Command) {
+	t.Helper()
+	trace.recordCaptured("attach", "start", "")
+	terminal, err := ownerterminal.Start(ctx, command)
+	if err != nil {
+		class := "attach-error"
+		if ctx != nil && ctx.Err() != nil {
+			class = nativeResultClass(ctx.Err(), class)
+		}
+		trace.recordCaptured("attach", "failed", "class=%s ", class)
+		trace.flow.Fail()
+		t.Fatal("native terminal start failed")
+	}
+	trace.terminal = terminal
+	trace.capture = ownerterminal.CaptureOutput(terminal.Output)
+	trace.recordCaptured("attach", "complete", "")
+}
+
 func TestNativeKeeperProcessChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
 		t.Skip("actual native keeper child only")
@@ -61,12 +93,12 @@ func TestNativeKeeperProcessChild(t *testing.T) {
 	ownerInteractivePTYChild(t)
 }
 
-func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *sshfixture.LoopbackSSH) {
+func nativeKeeperProcessAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *sshfixture.LoopbackSSH, scope *flakediag.FlowDumpScope) {
 	t.Helper()
-	nativeKeeperCycles(t, ctx, path, password, server, name, shell, []string{"edit", "restart"})
+	nativeKeeperCycles(t, ctx, path, password, server, name, shell, []string{"edit", "restart"}, scope)
 }
 
-func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *sshfixture.LoopbackSSH, cycles []string) {
+func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password []byte, server, name string, shell *sshfixture.LoopbackSSH, cycles []string, scope *flakediag.FlowDumpScope) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -78,7 +110,11 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 	}
 	for _, cycle := range cycles {
 		if !t.Run(cycle, func(t *testing.T) {
+			if scope != nil {
+				scope.Bind(t)
+			}
 			flakediag.Begin(t)
+			cycleT := t
 			serviceBudget := nativeKeeperServiceBudget
 			if cycle == "restart" {
 				serviceBudget = 6 * time.Minute
@@ -112,13 +148,13 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			defer func() {
 				trace.cleanup(t, "keeper terminal did not close cleanly", "keeper terminal output did not join")
 				if trace.capture.Contains(password) {
-					t.Error("actual keeper disclosed the vault unlock")
+					trace.report(t).Error("actual keeper disclosed the vault unlock")
 				}
 				if trace.capture.Contains([]byte("synthetic native helper credential")) {
-					t.Error("actual keeper disclosed the historical add-account credential")
+					trace.report(t).Error("actual keeper disclosed the historical add-account credential")
 				}
 				if trace.capture.Contains([]byte(nativeGuardAddedCredential)) {
-					t.Error("actual keeper disclosed the keeper add-account credential")
+					trace.report(t).Error("actual keeper disclosed the keeper add-account credential")
 				}
 			}()
 			trace.expectText(t, startup, "keeper-unlock", "Vault secret:", "actual keeper did not request its vault unlock")
@@ -139,13 +175,13 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			nativeKeeperEndpointResult(trace, "keeper-startup-probe", "dial-result", probePhase, err)
 			stopProbe()
 			if err != nil {
-				t.Fatal("actual keeper did not hold the native database endpoint")
+				trace.report(t).Fatal("actual keeper did not hold the native database endpoint")
 			}
 			trace.recordCaptured("keeper-startup-probe", "close-attempt", "")
 			err = probe.Close()
 			nativeKeeperEndpointResult(trace, "keeper-startup-probe", "close-result", nil, err)
 			if err != nil {
-				t.Fatal("actual keeper startup probe did not close")
+				trace.report(t).Fatal("actual keeper startup probe did not close")
 			}
 			observerPhase, stopObserverPhase := nativeOperationPhase(t, service, 2*time.Minute)
 			trace.recordCaptured("keeper-observer", "attach-attempt", "")
@@ -164,35 +200,35 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				}
 				stopObserverPhase()
 				if err != nil {
-					t.Fatal("independent observer could not authenticate")
+					trace.report(t).Fatal("independent observer could not authenticate")
 				}
 				if serviceErr != nil {
-					t.Fatal("keeper service budget ended during observer attach")
+					trace.report(t).Fatal("keeper service budget ended during observer attach")
 				}
-				t.Fatal("independent observer attach exceeded its phase budget")
+				trace.report(t).Fatal("independent observer attach exceeded its phase budget")
 			}
 			stopObserverPhase()
 			defer detachObserver()
 			if cycle == "edit" {
 				commandPhase, stopCommand := nativeOperationPhase(t, service, 2*time.Minute)
-				nativeOwnerCommandAcceptance(t, commandPhase, path, password, server, "keeper-added", observer)
+				nativeOwnerCommandAcceptance(t, cycleT, commandPhase, path, password, server, "keeper-added", observer)
 				stopCommand()
 				interactivePhase, stopInteractive := nativeOperationPhase(t, service, 2*time.Minute)
 				t.Run("native-interactive-helper", func(t *testing.T) {
-					nativeInteractiveAcceptance(t, interactivePhase, path, password, server, observer)
+					nativeInteractiveAcceptance(t, cycleT, interactivePhase, path, password, server, observer)
 				})
 				stopInteractive()
 				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
 					flakediag.Begin(t)
-					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
+					nativeHumanSSHAcceptance(t, cycleT, humanPhase, path, password, server, observer, shell)
 				}) {
 					stopHuman()
 					return
 				}
 				stopHuman()
 				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
-				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, trace, func() {
+				nativeKeeperRestoreHumanScope(trace.report(t), scopePhase, path, server, observer, shell, trace, func() {
 					trace.write(t, "keeper-scope-refusal", []byte{'r', ending})
 					trace.expectText(t, scopePhase, "keeper-scope-refused", "ACTUAL-KEEPER-SSH-SCOPE-REFUSED", "actual keeper did not refuse the changed human SSH scope")
 				})
@@ -209,23 +245,23 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				}
 				trace.recordCaptured("keeper-restart-metadata", "check", "class=%s servers=%d helper-found=%t ", nativeResultClass(err, "metadata-error"), len(metadata.Servers), found)
 				if err != nil {
-					t.Fatal("restarted actual keeper could not read metadata")
+					trace.report(t).Fatal("restarted actual keeper could not read metadata")
 				}
 				if !found {
-					t.Fatal("restarted actual keeper lost the confirmed helper account")
+					trace.report(t).Fatal("restarted actual keeper lost the confirmed helper account")
 				}
 			} else {
 				humanPhase, stopHuman := nativeOperationPhase(t, service, 2*time.Minute)
 				if !t.Run("native-human-ssh", func(t *testing.T) {
 					flakediag.Begin(t)
-					nativeHumanSSHAcceptance(t, humanPhase, path, password, server, observer, shell)
+					nativeHumanSSHAcceptance(t, cycleT, humanPhase, path, password, server, observer, shell)
 				}) {
 					stopHuman()
 					return
 				}
 				stopHuman()
 				scopePhase, stopScope := nativeOperationPhase(t, service, time.Minute)
-				nativeKeeperRestoreHumanScope(t, scopePhase, path, server, observer, shell, trace, func() {
+				nativeKeeperRestoreHumanScope(trace.report(t), scopePhase, path, server, observer, shell, trace, func() {
 					trace.write(t, "keeper-scope-refusal", []byte{'r', ending})
 					trace.expectText(t, scopePhase, "keeper-scope-refused", "ACTUAL-KEEPER-SSH-SCOPE-REFUSED", "actual keeper did not refuse the changed human SSH scope")
 				})
@@ -237,7 +273,7 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			nativeKeeperEndpointResult(trace, "keeper-observer", "close-result", observerClose, err)
 			stopObserverClose()
 			if err != nil {
-				t.Fatal("independent observer did not close cleanly")
+				trace.report(t).Fatal("independent observer did not close cleanly")
 			}
 			guardPhase, stopGuard := nativeOperationPhase(t, service, 30*time.Second)
 			if !t.Run("native-mcp-guard", func(t *testing.T) {
@@ -255,13 +291,13 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 			nativeKeeperEndpointResult(trace, "keeper-detach-probe", "dial-result", probePhase, err)
 			stopProbe()
 			if err != nil {
-				t.Fatal("actual keeper endpoint was unavailable after helper and observer detach")
+				trace.report(t).Fatal("actual keeper endpoint was unavailable after helper and observer detach")
 			}
 			trace.recordCaptured("keeper-detach-probe", "close-attempt", "")
 			err = probe.Close()
 			nativeKeeperEndpointResult(trace, "keeper-detach-probe", "close-result", nil, err)
 			if err != nil {
-				t.Fatal("actual keeper post-detach probe did not close")
+				trace.report(t).Fatal("actual keeper post-detach probe did not close")
 			}
 			shutdown, stopShutdown := nativeOperationPhase(t, service, 30*time.Second)
 			trace.recordCaptured("keeper-shutdown", "attempt", "")
@@ -282,24 +318,24 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				err := probe.Close()
 				nativeKeeperEndpointResult(trace, "keeper-endpoint-absence", "close-result", nil, err)
 				if err != nil {
-					t.Fatal("standalone reopen probe did not close")
+					trace.report(t).Fatal("standalone reopen probe did not close")
 				}
-				t.Fatal("standalone reopen endpoint was still listening")
+				trace.report(t).Fatal("standalone reopen endpoint was still listening")
 			}
 			if !errors.Is(err, ownerlocal.ErrAbsent) {
 				if reopenCtx.Err() != nil {
-					t.Fatal("standalone reopen phase budget ended")
+					trace.report(t).Fatal("standalone reopen phase budget ended")
 				}
-				t.Fatal("standalone reopen probe did not confirm endpoint absence")
+				trace.report(t).Fatal("standalone reopen probe did not confirm endpoint absence")
 			}
 			trace.recordCaptured("keeper-reopen", "open-attempt", "")
 			reopened, err := ownercontrol.Open(reopenCtx, path, password)
 			nativeKeeperEndpointResult(trace, "keeper-reopen", "open-result", reopenCtx, err)
 			if err != nil {
 				if reopenCtx.Err() != nil {
-					t.Fatal("standalone reopen phase budget ended")
+					trace.report(t).Fatal("standalone reopen phase budget ended")
 				}
-				t.Fatal("joined keeper shutdown could not reacquire standalone control")
+				trace.report(t).Fatal("joined keeper shutdown could not reacquire standalone control")
 			}
 			defer func() {
 				cleanup, stop := nativePhaseCleanup(t)
@@ -308,27 +344,36 @@ func nativeKeeperCycles(t *testing.T, ctx context.Context, path string, password
 				err := reopened.Close(cleanup)
 				nativeKeeperEndpointResult(trace, "keeper-reopen-cleanup", "close-result", cleanup, err)
 				if err != nil {
-					t.Error("standalone control cleanup failed")
+					trace.report(t).Error("standalone control cleanup failed")
 				}
 			}()
 			metadata, err := reopened.Backend().Metadata()
 			status := reopened.Backend().Status()
 			digest, digestErr := credential.CredentialCipherDigest(path)
-			nativeKeeperCheckScope(t, trace, "fresh-reopen", metadata, err, status, server, shell.Address())
-			nativeKeeperCheckCipher(t, trace, "fresh-reopen", digest, digestErr)
+			nativeKeeperCheckScope(trace.report(t), trace, "fresh-reopen", metadata, err, status, server, shell.Address())
+			nativeKeeperCheckCipher(trace.report(t), trace, "fresh-reopen", digest, digestErr)
 			trace.recordCaptured("keeper-reclose", "close-attempt", "")
 			err = reopened.Close(reopenCtx)
 			nativeKeeperEndpointResult(trace, "keeper-reclose", "close-result", reopenCtx, err)
 			if err != nil {
 				if reopenCtx.Err() != nil {
-					t.Fatal("standalone reopen phase budget ended")
+					trace.report(t).Fatal("standalone reopen phase budget ended")
 				}
-				t.Fatal("standalone control close failed")
+				trace.report(t).Fatal("standalone control close failed")
 			}
+			trace.flow.Complete()
 		}) {
 			return
 		}
 	}
+}
+
+// nativeKeeperReporter is satisfied by both *testing.T and the trace flow
+// reporter, so keeper helper assertions fail through the bound keeper flow.
+type nativeKeeperReporter interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
 }
 
 func nativeKeeperEndpointResult(trace *nativeTerminalTrace, stage, operation string, ctx context.Context, err error) {
@@ -343,110 +388,113 @@ func nativeKeeperEndpointResult(trace *nativeTerminalTrace, stage, operation str
 	trace.recordCaptured(stage, operation, "class=%s phase=%s ", class, nativeResultClass(ctx.Err(), "context-error"))
 }
 
-func nativeKeeperCheckScope(t *testing.T, trace *nativeTerminalTrace, stage string, metadata vault.DirectoryMetadata, err error, status ownerdb.Status, server, address string) {
-	t.Helper()
+func nativeKeeperCheckScope(report nativeKeeperReporter, trace *nativeTerminalTrace, stage string, metadata vault.DirectoryMetadata, err error, status ownerdb.Status, server, address string) {
+	report.Helper()
 	trace.recordCaptured(stage, "scope-check", "metadata=%s servers=%d status=%s database=%s pending=%t revision=%d saved-revision=%d ",
 		nativeResultClass(err, "metadata-error"), len(metadata.Servers), nativeResultClass(status.Err, "status-error"),
 		nativeResultClass(status.Database.Err, "database-error"), status.Database.Pending, status.Database.Revision, status.Database.SavedRevision)
 	switch {
 	case err != nil:
-		t.Fatalf("%s: could not read fixture metadata", stage)
+		report.Fatalf("%s: could not read fixture metadata", stage)
 	case len(metadata.Servers) != 1:
-		t.Fatalf("%s: expected one fixture server", stage)
+		report.Fatalf("%s: expected one fixture server", stage)
 	case metadata.Servers[0].ID != server:
-		t.Fatalf("%s: fixture server ID changed", stage)
+		report.Fatalf("%s: fixture server ID changed", stage)
 	case metadata.Servers[0].Address != address:
-		t.Fatalf("%s: fixture endpoint did not match", stage)
+		report.Fatalf("%s: fixture endpoint did not match", stage)
 	case status.Err != nil:
-		t.Fatalf("%s: owner status reported an error", stage)
+		report.Fatalf("%s: owner status reported an error", stage)
 	case status.Database.Err != nil:
-		t.Fatalf("%s: database status reported an error", stage)
+		report.Fatalf("%s: database status reported an error", stage)
 	case status.Database.Pending:
-		t.Fatalf("%s: database still had pending changes", stage)
+		report.Fatalf("%s: database still had pending changes", stage)
 	case status.Database.Revision != status.Database.SavedRevision:
-		t.Fatalf("%s: database revision was not saved", stage)
+		report.Fatalf("%s: database revision was not saved", stage)
 	}
 }
 
-func nativeKeeperCheckCipher(t *testing.T, trace *nativeTerminalTrace, stage string, digest [32]byte, err error) {
-	t.Helper()
+func nativeKeeperCheckCipher(report nativeKeeperReporter, trace *nativeTerminalTrace, stage string, digest [32]byte, err error) {
+	report.Helper()
 	zero := digest == ([32]byte{})
 	trace.recordCaptured(stage, "cipher-check", "class=%s zero=%t ", nativeResultClass(err, "digest-error"), zero)
 	if err != nil {
-		t.Fatalf("%s: could not read credential cipher digest", stage)
+		report.Fatalf("%s: could not read credential cipher digest", stage)
 	}
 	if zero {
-		t.Fatalf("%s: credential cipher digest was zero", stage)
+		report.Fatalf("%s: credential cipher digest was zero", stage)
 	}
 }
 
-func nativeKeeperRestoreHumanScope(t *testing.T, ctx context.Context, path, server string, observer *ownercontrol.Control, shell *sshfixture.LoopbackSSH, trace *nativeTerminalTrace, refuse func()) {
-	t.Helper()
+func nativeKeeperRestoreHumanScope(report nativeKeeperReporter, ctx context.Context, path, server string, observer *ownercontrol.Control, shell *sshfixture.LoopbackSSH, trace *nativeTerminalTrace, refuse func()) {
+	report.Helper()
 	metadata, err := observer.Backend().Metadata()
 	status := observer.Backend().Status()
-	nativeKeeperCheckScope(t, trace, "changed-scope", metadata, err, status, server, "127.0.0.1:3")
+	nativeKeeperCheckScope(report, trace, "changed-scope", metadata, err, status, server, "127.0.0.1:3")
 	connections := shell.AcceptedConnections()
 	refuse()
 	afterRefusal := shell.AcceptedConnections()
 	trace.recordCaptured("keeper-scope-refused", "connection-check", "before=%d after=%d ", connections, afterRefusal)
 	if afterRefusal != connections {
-		t.Fatal("refused changed-scope MCP operation opened an SSH connection")
+		report.Fatal("refused changed-scope MCP operation opened an SSH connection")
 	}
 	trace.recordCaptured("keeper-refusal-probe", "dial-attempt", "")
 	probe, err := ownerlocal.Dial(ctx, path)
 	nativeKeeperEndpointResult(trace, "keeper-refusal-probe", "dial-result", ctx, err)
 	if err != nil {
-		t.Fatal("changed-scope refusal released the actual keeper role")
+		report.Fatal("changed-scope refusal released the actual keeper role")
 	}
 	trace.recordCaptured("keeper-refusal-probe", "close-attempt", "")
 	err = probe.Close()
 	nativeKeeperEndpointResult(trace, "keeper-refusal-probe", "close-result", nil, err)
 	if err != nil {
-		t.Fatal("actual keeper role probe did not close")
+		report.Fatal("actual keeper role probe did not close")
 	}
-	nativeServerAddress(t, ctx, observer, server, shell.Address())
+	nativeServerAddress(report, ctx, observer, server, shell.Address())
 	metadata, err = observer.Backend().Metadata()
 	status = observer.Backend().Status()
 	digest, digestErr := credential.CredentialCipherDigest(path)
-	nativeKeeperCheckScope(t, trace, "restored-scope", metadata, err, status, server, shell.Address())
-	nativeKeeperCheckCipher(t, trace, "restored-scope", digest, digestErr)
+	nativeKeeperCheckScope(report, trace, "restored-scope", metadata, err, status, server, shell.Address())
+	nativeKeeperCheckCipher(report, trace, "restored-scope", digest, digestErr)
 }
 
-func nativeServerAddress(t *testing.T, ctx context.Context, control *ownercontrol.Control, server, address string) {
-	t.Helper()
+func nativeServerAddress(report nativeKeeperReporter, ctx context.Context, control *ownercontrol.Control, server, address string) {
+	report.Helper()
 	status := control.Backend().Status()
 	if status.Err != nil {
-		t.Fatal("observer owner status failed before directory edit")
+		report.Fatal("observer owner status failed before directory edit")
 	}
 	if status.Database.Err != nil {
-		t.Fatal("observer database status failed before directory edit")
+		report.Fatal("observer database status failed before directory edit")
 	}
 	scoper, ok := control.Backend().(interface {
 		AtRevision(uint64) ownertui.Backend
 	})
 	if !ok {
-		t.Fatal("observer lost revision-scoped admission")
+		report.Fatal("observer lost revision-scoped admission")
 	}
 	backend, ok := scoper.AtRevision(status.Database.Revision).(interface {
 		ApplyDirectory(ownerpacket.DirectoryChange) error
 	})
 	if !ok {
-		t.Fatal("observer lost typed directory admission")
+		report.Fatal("observer lost typed directory admission")
 	}
 	if err := backend.ApplyDirectory(ownerpacket.DirectoryChange{Action: "edit-server", ServerID: server, Fields: [][]byte{[]byte(address), nil}}); err != nil {
-		t.Fatalf("observer directory edit failed (%s)", nativeResultClass(err, "edit-error"))
+		report.Fatalf("observer directory edit failed (%s)", nativeResultClass(err, "edit-error"))
 	}
 	if err := control.Backend().Flush(ctx); err != nil {
-		t.Fatalf("observer directory flush failed (%s)", nativeResultClass(err, "flush-error"))
+		report.Fatalf("observer directory flush failed (%s)", nativeResultClass(err, "flush-error"))
 	}
 }
 
-func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server string, observer *ownercontrol.Control, loopback *sshfixture.LoopbackSSH) {
+func nativeHumanSSHAcceptance(t *testing.T, diagnostics *testing.T, ctx context.Context, path string, password []byte, server string, observer *ownercontrol.Control, loopback *sshfixture.LoopbackSSH) {
 	t.Helper()
-	nativeServerAddress(t, ctx, observer, server, loopback.Address())
+	trace := newNativeTerminalTrace(diagnostics, "human SSH handoff")
+	// Fixed setup marker keeps the timeline meaningful before any terminal exists.
+	trace.recordCaptured("setup", "start", "")
+	nativeServerAddress(trace.report(t), ctx, observer, server, loopback.Address())
 	metadata, err := observer.Backend().Metadata()
 	if err != nil {
-		t.Fatalf("human SSH could not read fixture metadata (%s)", nativeResultClass(err, "metadata-error"))
+		trace.report(t).Fatalf("human SSH could not read fixture metadata (%s)", nativeResultClass(err, "metadata-error"))
 	}
 	name, human := "", 0
 	for _, entry := range metadata.Servers {
@@ -460,18 +508,18 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 		}
 	}
 	if name == "" {
-		t.Fatal("human SSH fixture server name is missing")
+		trace.report(t).Fatal("human SSH fixture server name is missing")
 	}
 	if human != 1 {
-		t.Fatalf("human SSH expected one human account (count=%d)", human)
+		trace.report(t).Fatalf("human SSH expected one human account (count=%d)", human)
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		t.Fatal("could not resolve the test executable")
+		trace.report(t).Fatal("could not resolve the test executable")
 	}
 	bridge, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
 	if err != nil {
-		t.Fatal("could not resolve the terminal bridge")
+		trace.report(t).Fatal("could not resolve the terminal bridge")
 	}
 	connections := loopback.AcceptedConnections()
 	authentications := len(loopback.Authentications())
@@ -484,14 +532,14 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 		}
 	}
 	environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1")
-	trace := startNativeTerminal(t, t, ctx, "human SSH handoff", ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
+	trace.attach(t, ctx, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
 		Args: []string{"-test.run=^TestNativeInteractiveProcessChild$", "--", "--vault", path, "--interactive"}})
 	trace.addInteractiveTerminalFailureMarkers()
 	trace.addInteractiveCLIFailureMarkers()
 	defer func() {
 		trace.cleanup(t, "", "human SSH terminal output did not join")
 		if trace.capture.Contains(password) {
-			t.Error("human SSH terminal exposed the vault unlock")
+			trace.report(t).Error("human SSH terminal exposed the vault unlock")
 		}
 	}()
 	trace.expectText(t, ctx, "human-ssh-unlock", "Vault secret:", "human SSH did not request its vault unlock")
@@ -508,20 +556,20 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 	beforeEnter := loopback.AcceptedConnections()
 	trace.recordCaptured("human-ssh-servers-screen", "connection-check", "before=%d after=%d ", connections, beforeEnter)
 	if beforeEnter != connections {
-		t.Fatal("picker connected before an explicit Enter decision")
+		trace.report(t).Fatal("picker connected before an explicit Enter decision")
 	}
 	trace.write(t, "human-ssh-connect", []byte("\x1b[D\r"))
 	trace.expectText(t, ctx, "human-ssh-shell-ready", "SYNTHETIC-SSH-READY user=second", "human SSH did not reach the selected shell")
 	if trace.capture.Contains([]byte(sshfixture.ConnectPassword)) {
-		t.Fatal("SSH authentication was disclosed before deliberate human output")
+		trace.report(t).Fatal("SSH authentication was disclosed before deliberate human output")
 	}
 	t.Run("legacy-writer-refusal", func(t *testing.T) {
 		flakediag.Begin(t)
-		nativeWriterRefusal(t, ctx, path, password, name, loopback)
+		nativeWriterRefusal(t, diagnostics, ctx, path, password, name, loopback)
 	})
 	// Later owner edits must not replace or terminate the captured live shell.
 	trace.recordCaptured("human-ssh-scope-edit", "edit-attempt", "")
-	nativeServerAddress(t, ctx, observer, server, "127.0.0.1:3")
+	nativeServerAddress(trace.report(t), ctx, observer, server, "127.0.0.1:3")
 	trace.recordCaptured("human-ssh-scope-edit", "edit-complete", "")
 	trace.write(t, "human-ssh-shell-input", append([]byte(sshfixture.ConnectPassword), '\r'))
 	expectNativeHumanSSHEcho(t, trace, ctx, sshfixture.ConnectPassword)
@@ -533,30 +581,31 @@ func nativeHumanSSHAcceptance(t *testing.T, ctx context.Context, path string, pa
 	statuses := loopback.ExitStatuses()
 	trace.recordCaptured("human-ssh-exit-status", "count-check", "before=%d after=%d ", exits, len(statuses))
 	if len(statuses) != exits+1 {
-		t.Fatal("loopback SSH did not send exactly one exit status")
+		trace.report(t).Fatal("loopback SSH did not send exactly one exit status")
 	}
 	status := statuses[len(statuses)-1]
 	trace.recordCaptured("human-ssh-exit-status", "status-check", "status=%d ", status)
 	if status != 0 {
-		t.Fatal("loopback SSH exit status was nonzero")
+		trace.report(t).Fatal("loopback SSH exit status was nonzero")
 	}
 	accepted := loopback.Authentications()
 	afterConnections := loopback.AcceptedConnections()
 	trace.recordCaptured("human-ssh-handoff", "count-check", "connections-before=%d connections-after=%d authentications-before=%d authentications-after=%d ",
 		connections, afterConnections, authentications, len(accepted))
 	if afterConnections != connections+1 {
-		t.Fatal("native handoff did not open exactly one SSH connection")
+		trace.report(t).Fatal("native handoff did not open exactly one SSH connection")
 	}
 	if len(accepted) != authentications+1 {
-		t.Fatal("native handoff did not authenticate exactly once")
+		trace.report(t).Fatal("native handoff did not authenticate exactly once")
 	}
 	account, method, _ := strings.Cut(accepted[len(accepted)-1], "|")
 	if account != "second" {
-		t.Error("native handoff used the wrong SSH account")
+		trace.report(t).Error("native handoff used the wrong SSH account")
 	}
 	if method != "password" {
-		t.Error("native handoff used the wrong SSH authentication method")
+		trace.report(t).Error("native handoff used the wrong SSH authentication method")
 	}
+	trace.flow.Complete()
 }
 
 // ownerInteractivePTYChild shares the CLI invocation and diagnostics between

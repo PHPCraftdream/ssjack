@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/faultproxy"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	fixture "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/fixture"
@@ -434,6 +435,7 @@ func ScenarioChunkUploadDropMidChunk(t *testing.T) {
 // reassembles into a new temporary name and publishes once.
 func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 	t.Run("one drop", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		payload := fixture.SeedPayload(uploadPayload, 53)
 		rig.seed("big/blob.bin", payload)
@@ -464,6 +466,7 @@ func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 		}
 	})
 	t.Run("every drop then a new engine", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		payload := fixture.SeedPayload(uploadPayload, 54)
 		rig.seed("big/blob.bin", payload)
@@ -549,6 +552,7 @@ func ScenarioChunkUploadResumeByNewEngine(t *testing.T) {
 // and in the middle of a transfer (integrity, staging removed).
 func ScenarioChunkUploadSourceChanged(t *testing.T) {
 	t.Run("between attempts", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		oldPayload := fixture.SeedPayload(uploadPayload, 56)
 		source := rig.seed("big/blob.bin", oldPayload)
@@ -578,6 +582,7 @@ func ScenarioChunkUploadSourceChanged(t *testing.T) {
 		}
 	})
 	t.Run("mid transfer", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		payload := fixture.SeedPayload(uploadPayload, 58)
 		source := rig.seed("big/blob.bin", payload)
@@ -742,6 +747,7 @@ func stalledConns(stats faultproxy.Stats) []faultproxy.ConnStats {
 // the whole-stream attempt and for a part session alike.
 func ScenarioChunkUploadStallDetectedAndResumed(t *testing.T) {
 	t.Run("stalled stream", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		payload := fixture.SeedPayload(uploadPayload, 61)
 		rig.seed("big/blob.bin", payload)
@@ -779,6 +785,7 @@ func ScenarioChunkUploadStallDetectedAndResumed(t *testing.T) {
 		require(t, stats.Dropped == 0, "expected no proxy drops during the stream stall")
 	})
 	t.Run("stalled part", func(t *testing.T) {
+		flakediag.Begin(t)
 		rig := newUploadRig(t)
 		payload := fixture.SeedPayload(uploadPayload, 62)
 		rig.seed("big/blob.bin", payload)

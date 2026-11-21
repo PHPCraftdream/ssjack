@@ -34,6 +34,8 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
 		t.Skip("production owner helper control is CI-only")
 	}
+	var dumpScope flakediag.FlowDumpScope
+	dumpScope.Bind(t)
 	ctx, cancel := nativeAcceptanceRoot(t, context.Background(), 10*time.Minute)
 	defer cancel()
 	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
@@ -154,9 +156,10 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 		t.Fatal("remote helper detach closed the local coordinator")
 	}
 	phases.Mark("native-command-helper-start")
+	diagnostics := t
 	if t.Run("native-command-helper", func(t *testing.T) {
 		flakediag.Begin(t)
-		nativeOwnerCommandAcceptance(t, ctx, path, password, serverID, "native-added", local)
+		nativeOwnerCommandAcceptance(t, diagnostics, ctx, path, password, serverID, "native-added", local)
 	}) {
 		phases.Mark("native-command-helper-ok")
 	} else {
@@ -208,7 +211,7 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	}
 	stopCloseReopened()
 	t.Run("actual-keeper-process", func(t *testing.T) {
-		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production", server)
+		nativeKeeperProcessAcceptance(t, ctx, path, password, serverID, "production", server, &dumpScope)
 	})
 	t.Run("ordinary-ssh-live", func(t *testing.T) { ordinarySSHLiveAcceptance(t, ctx) })
 }

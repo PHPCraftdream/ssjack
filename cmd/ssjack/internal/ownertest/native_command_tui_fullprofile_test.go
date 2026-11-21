@@ -95,6 +95,7 @@ type nativeTerminalTrace struct {
 	childState       string
 	cleaned          bool
 	failureMarkers   []nativeFailureMarker
+	flow             *flakediag.Flow
 }
 
 type nativeFailureMarker struct{ class, text string }
@@ -148,34 +149,17 @@ func (trace *nativeTerminalTrace) addFailureMarker(class, text string) {
 
 // Labels, stages, operations and diagnostic messages are static, printable
 // test descriptions. Never interpolate matchers, terminal data or raw errors.
+// newNativeTerminalTrace and attach live beside the other trace helpers in
+// native_keeper_shell_fullprofile_test.go to keep this file under its line cap.
 func startNativeTerminal(t, diagnostics *testing.T, ctx context.Context, label string, command ownerterminal.Command) *nativeTerminalTrace {
 	t.Helper()
-	trace := &nativeTerminalTrace{started: time.Now()}
-	// Cleanup is LIFO: keep the original bounded prefix through failure rendering.
-	diagnostics.Cleanup(func() {
-		if trace.capture != nil {
-			trace.capture.Clear()
-		}
-	})
-	flakediag.OnFailure(diagnostics, func() string { return trace.failureEvidence(label) })
-	trace.recordCaptured("attach", "start", "")
-	terminal, err := ownerterminal.Start(ctx, command)
-	if err != nil {
-		class := "attach-error"
-		if ctx != nil && ctx.Err() != nil {
-			class = nativeResultClass(ctx.Err(), class)
-		}
-		trace.recordCaptured("attach", "failed", "class=%s ", class)
-		t.Fatal("native terminal start failed")
-	}
-	trace.terminal = terminal
-	trace.capture = ownerterminal.CaptureOutput(terminal.Output)
-	trace.recordCaptured("attach", "complete", "")
+	trace := newNativeTerminalTrace(diagnostics, label)
+	trace.attach(t, ctx, command)
 	return trace
 }
 
-func (trace *nativeTerminalTrace) failureEvidence(label string) string {
-	var endpoint string
+func (trace *nativeTerminalTrace) failureEvidence(label string, full bool) string {
+	endpoint := "capture unavailable\n"
 	if trace.capture != nil {
 		trace.capture.Inspect(func(data []byte, total int, overflow bool) {
 			endpoint = fmt.Sprintf("capture retained=%d total=%d overflow=%t retained-digest=%s\n",
@@ -185,20 +169,21 @@ func (trace *nativeTerminalTrace) failureEvidence(label string) string {
 					endpoint += "capture-class=" + marker.class + "\n"
 				}
 			}
-			trace.replayScreenSnapshots(data)
+			if full {
+				trace.replayScreenSnapshots(data)
+			}
 		})
-	} else {
-		endpoint = "capture unavailable\n"
+	}
+	if !full {
+		return label + " completed events:\n" + flakediag.Tail(trace.events.String(), 4<<10) + endpoint
 	}
 	if trace.cleaned {
 		endpoint += "child-after-cleanup=" + trace.probeChildState() + "\n"
 	}
 	return label + " timeline:\n" + flakediag.Tail(trace.events.String(), 16<<10) + endpoint +
 		"credential field state timeline:\n" + trace.fieldTimeline.String() + trace.firstFieldChange +
-		"last snapshot screen:\n" + trace.screenNote + trace.screenRows +
-		"goroutine dump:\n" + flakediag.GoroutineDump(64<<10)
+		"last snapshot screen:\n" + trace.screenNote + trace.screenRows
 }
-
 func nativeResultClass(err error, other string) string {
 	switch {
 	case err == nil:
@@ -249,11 +234,12 @@ func (trace *nativeTerminalTrace) write(t *testing.T, stage string, data []byte)
 		class = "short-write"
 	}
 	trace.recordCaptured(stage, "write-result", "requested=%d written=%d class=%s ", len(data), n, class)
+	report := trace.report(t)
 	if err != nil {
-		t.Fatalf("%s: terminal write failed: class=%s requested=%d written=%d", stage, class, len(data), n)
+		report.Fatalf("%s: terminal write failed: class=%s requested=%d written=%d", stage, class, len(data), n)
 	}
 	if n != len(data) {
-		t.Fatalf("%s: terminal write was short: class=%s requested=%d written=%d", stage, class, len(data), n)
+		report.Fatalf("%s: terminal write was short: class=%s requested=%d written=%d", stage, class, len(data), n)
 	}
 }
 
@@ -291,6 +277,7 @@ func (trace *nativeTerminalTrace) expect(t nativeExpectationReporter, ctx contex
 		}
 		trace.record(endpoint, stage+" expect-failed", "class=%s matcher-last-offset=%d capture-bytes=%d overflow=%t",
 			reason, lastObserved, endpoint.bytes, endpoint.partial)
+		trace.flowFail()
 		t.Fatalf("%s: %s (%s)", stage, failure, reason)
 		return
 	}
@@ -309,11 +296,6 @@ func expectNativeHumanSSHEcho(t nativeExpectationReporter, trace *nativeTerminal
 	trace.expectText(t, ctx, "human-ssh-shell-echo", "ECHO:"+credential, "live human SSH shell did not echo deliberate input after the scope change")
 }
 
-func expectNativeHistoricalReceipt(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context, text string) {
-	t.Helper()
-	trace.expectText(t, ctx, "persistence-receipt", text, "native owner command lacked a persistence receipt")
-}
-
 func (trace *nativeTerminalTrace) wait(t *testing.T, ctx context.Context, failure string) {
 	t.Helper()
 	trace.recordCaptured("child-wait", "wait-attempt", "")
@@ -324,7 +306,7 @@ func (trace *nativeTerminalTrace) wait(t *testing.T, ctx context.Context, failur
 	}
 	trace.recordCaptured("child-wait", "wait-result", "class=%s ", class)
 	if err != nil {
-		t.Fatalf("%s (%s)", failure, class)
+		trace.report(t).Fatalf("%s (%s)", failure, class)
 	}
 }
 
@@ -373,12 +355,13 @@ func (trace *nativeTerminalTrace) cleanup(t *testing.T, closeFailure, joinFailur
 	}
 	ctx, stop := context.WithTimeout(context.Background(), time.Minute)
 	defer stop()
+	report := trace.report(t)
 	trace.recordCaptured("cleanup", "close-attempt", "child-before-close=%s ", state)
 	closeErr := trace.terminal.Close(ctx)
 	closeClass := nativeResultClass(closeErr, "close-or-wait-error")
 	trace.recordCaptured("cleanup", "close-result", "class=%s ", closeClass)
 	if closeErr != nil && closeFailure != "" {
-		t.Errorf("%s (%s)", closeFailure, closeClass)
+		report.Errorf("%s (%s)", closeFailure, closeClass)
 	}
 	trace.recordCaptured("cleanup", "drain-attempt", "")
 	joinErr := trace.capture.Join(ctx)
@@ -393,7 +376,7 @@ func (trace *nativeTerminalTrace) cleanup(t *testing.T, closeFailure, joinFailur
 	})
 	trace.cleaned = true
 	if joinErr != nil {
-		t.Errorf("%s (%s)", joinFailure, joinClass)
+		report.Errorf("%s (%s)", joinFailure, joinClass)
 	}
 }
 
@@ -648,7 +631,7 @@ func TestNativeExpectationFailureEvidenceDoesNotLeak(t *testing.T) {
 			expectNativeHumanSSHEcho(t, trace, ctx, secret)
 		}},
 		{"persistence-receipt", "receipt:" + secret, func(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context) {
-			expectNativeHistoricalReceipt(t, trace, ctx, "receipt:"+secret)
+			trace.expectText(t, ctx, "persistence-receipt", "receipt:"+secret, "native owner command lacked a persistence receipt")
 		}},
 	} {
 		t.Run(tc.stage, func(t *testing.T) {
@@ -670,8 +653,8 @@ func TestNativeExpectationFailureEvidenceDoesNotLeak(t *testing.T) {
 			trace.addOwnerCommandChildFailureMarkers()
 			reporter := &nativeExpectationRecorder{}
 			tc.expect(reporter, trace, ctx)
-			// Render exactly the evidence passed to flakediag.OnFailure in the fixture.
-			evidence := trace.failureEvidence("native expectation regression")
+			// Render the same evidence a failing native flow would report.
+			evidence := trace.failureEvidence("native expectation regression", true)
 			for _, forbidden := range []string{
 				tc.matcher, secret, raw, sentinel, string(unregistered), "[native-child-failure:",
 			} {
@@ -710,7 +693,7 @@ func nativeUnlockInput(password []byte) []byte {
 	return input
 }
 
-func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server, account string, control *ownercontrol.Control) {
+func nativeOwnerCommandAcceptance(t *testing.T, diagnostics *testing.T, ctx context.Context, path string, password []byte, server, account string, control *ownercontrol.Control) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -744,6 +727,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 	}
 	credential := []byte(credentialText)
 	defer clear(credential)
+	var trace *nativeTerminalTrace
 	for _, mode := range []string{"cancel", "apply"} {
 		func() {
 			lifetime, cancel := context.WithTimeout(ctx, time.Minute)
@@ -760,17 +744,17 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 				cancelled = "1"
 			}
 			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_CHILD=1", "SSJACK_OWNER_COMMAND_CHILD=1", "SSJACK_OWNER_COMMAND_CANCEL="+cancelled)
-			trace := startNativeTerminal(t, t, lifetime, "native owner command "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment,
+			trace = startNativeTerminal(t, diagnostics, lifetime, "native owner command "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment,
 				Args: []string{"-test.run=^TestOwnerNativeCommandChild$", "--", "--vault", path, "owner", "add-account", "--server", name, "--account", account, "--login", "native-user", "--auth", "password", "--usage", "agent"}})
 			trace.addOwnerCommandChildFailureMarkers()
 			defer func() {
 				trace.cleanup(t, "", "native owner terminal output did not join")
 				leaked := trace.hiddenInputMatches(password, credential)
 				if leaked[0] {
-					t.Error("native owner terminal disclosed the vault password")
+					trace.report(t).Error("native owner terminal disclosed the vault password")
 				}
 				if leaked[1] {
-					t.Error("native owner terminal disclosed the account credential")
+					trace.report(t).Error("native owner terminal disclosed the account credential")
 				}
 			}()
 			trace.expectText(t, lifetime, "vault-prompt", "Vault secret:", "native owner did not request its single vault unlock")
@@ -791,50 +775,55 @@ func nativeOwnerCommandAcceptance(t *testing.T, ctx context.Context, path string
 			}
 			trace.wait(t, lifetime, "native owner command did not finish its explicit decision")
 			if mode == "apply" {
-				expectNativeHistoricalReceipt(t, trace, lifetime, "Owner command completed; encrypted persistence confirmed.")
+				trace.expectText(t, lifetime, "persistence-receipt", "Owner command completed; encrypted persistence confirmed.", "native owner command lacked a persistence receipt")
 			}
 		}()
 		after, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("native helper %s ciphertext could not be read", mode)
+			trace.report(t).Fatalf("native helper %s ciphertext could not be read", mode)
 		}
 		if mode == "cancel" && !bytes.Equal(before, after) {
-			t.Fatalf("cancelled native helper changed encrypted database bytes: before-size=%d after-size=%d", len(before), len(after))
+			trace.report(t).Fatalf("cancelled native helper changed encrypted database bytes: before-size=%d after-size=%d", len(before), len(after))
 		}
 		if _, err := control.Backend().Metadata(); err != nil {
-			t.Fatal("native helper detach closed its parent coordinator")
+			trace.report(t).Fatal("native helper detach closed its parent coordinator")
+		}
+		if mode == "cancel" {
+			trace.flow.Complete()
 		}
 	}
+	report := trace.report(t)
 	status := control.Backend().Status()
 	if status.Database.Revision != revision+1 {
-		t.Fatalf("native helper parent RAM revision mismatch: got=%d want=%d", status.Database.Revision, revision+1)
+		report.Fatalf("native helper parent RAM revision mismatch: got=%d want=%d", status.Database.Revision, revision+1)
 	}
 	if status.Database.SavedRevision != status.Database.Revision {
-		t.Fatalf("native helper saved revision mismatch: saved=%d current=%d", status.Database.SavedRevision, status.Database.Revision)
+		report.Fatalf("native helper saved revision mismatch: saved=%d current=%d", status.Database.SavedRevision, status.Database.Revision)
 	}
 	if status.Database.Err != nil {
-		t.Fatal("native helper parent database reported an error")
+		report.Fatal("native helper parent database reported an error")
 	}
 	loaded, err := vault.Load(path, password)
 	if err != nil {
-		t.Fatal("native helper persisted vault could not be loaded")
+		report.Fatal("native helper persisted vault could not be loaded")
 	}
 	defer loaded.Close()
 	profile, err := loaded.AccountProfile(server, account)
 	if err != nil {
-		t.Fatal("native helper persisted account profile could not be resolved")
+		report.Fatal("native helper persisted account profile could not be resolved")
 	}
 	target := loaded.Targets[profile]
 	if target.User != "native-user" {
-		t.Fatal("native helper persisted the wrong account user")
+		report.Fatal("native helper persisted the wrong account user")
 	}
 	if !bytes.Equal(target.Password, credential) {
 		offset := 0
 		for offset < len(target.Password) && offset < len(credential) && target.Password[offset] == credential[offset] {
 			offset++
 		}
-		t.Fatalf("native helper persisted the wrong hidden credential: got-length=%d want-length=%d first-differing-offset=%d", len(target.Password), len(credential), offset)
+		report.Fatalf("native helper persisted the wrong hidden credential: got-length=%d want-length=%d first-differing-offset=%d", len(target.Password), len(credential), offset)
 	}
+	trace.flow.Complete()
 }
 
 func TestNativeInteractiveProcessChild(t *testing.T) {
@@ -855,7 +844,7 @@ func TestNativeInteractiveProcessChild(t *testing.T) {
 	ownerInteractivePTYChild(t)
 }
 
-func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string, password []byte, server string, observer *ownercontrol.Control) {
+func nativeInteractiveAcceptance(t *testing.T, diagnostics *testing.T, ctx context.Context, path string, password []byte, server string, observer *ownercontrol.Control) {
 	flakediag.Begin(t)
 	t.Helper()
 	metadata, err := observer.Backend().Metadata()
@@ -896,7 +885,7 @@ func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string,
 	}
 	revision := observer.Backend().Status().Database.Revision
 	const replacement = "127.0.0.1:2"
-	outerT := t
+	var applyTrace *nativeTerminalTrace
 	for _, mode := range []string{"cancel", "apply"} {
 		t.Run(mode, func(t *testing.T) {
 			lifetime, cancel := context.WithTimeout(ctx, time.Minute)
@@ -909,17 +898,20 @@ func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string,
 				}
 			}
 			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1")
-			trace := startNativeTerminal(t, outerT, lifetime, "interactive helper "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
+			trace := startNativeTerminal(t, diagnostics, lifetime, "interactive helper "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
 				Args: []string{"-test.run=^TestNativeInteractiveProcessChild$", "--", "--vault", path, "--interactive"}})
+			if mode == "apply" {
+				applyTrace = trace
+			}
 			trace.addInteractiveTerminalFailureMarkers()
 			trace.addInteractiveCLIFailureMarkers()
 			defer func() {
 				trace.cleanup(t, "", "interactive terminal output did not join")
 				if trace.hiddenInputMatches(password)[0] {
-					t.Error("interactive teardown: terminal disclosed the vault password")
+					trace.report(t).Error("interactive teardown: terminal disclosed the vault password")
 				}
 				if trace.capture.Contains([]byte("SSH connection failed")) {
-					t.Error("interactive teardown: unexpected SSH connection marker")
+					trace.report(t).Error("interactive teardown: unexpected SSH connection marker")
 				}
 			}()
 			trace.expectText(t, lifetime, "vault-prompt", "Vault secret:", "actual interactive navigation did not reach: Vault secret:")
@@ -943,33 +935,38 @@ func nativeInteractiveAcceptance(t *testing.T, ctx context.Context, path string,
 			if mode == "cancel" {
 				after, err := os.ReadFile(path)
 				if err != nil {
-					t.Fatal("interactive cancel-read: database ciphertext read failed")
+					trace.report(t).Fatal("interactive cancel-read: database ciphertext read failed")
 				}
 				if !bytes.Equal(before, after) {
-					t.Fatalf("interactive cancel-read: database ciphertext changed: before-size=%d after-size=%d", len(before), len(after))
+					trace.report(t).Fatalf("interactive cancel-read: database ciphertext changed: before-size=%d after-size=%d", len(before), len(after))
 				}
+				trace.flow.Complete()
 			}
 		})
 	}
+	report := applyTrace.report(t)
 	metadata, err = observer.Backend().Metadata()
 	if err != nil {
-		t.Fatal("interactive final-metadata: metadata read failed")
+		report.Fatal("interactive final-metadata: metadata read failed")
 	}
 	found := false
 	for _, entry := range metadata.Servers {
 		found = found || entry.ID == server && entry.Address == replacement
 	}
 	if !found {
-		t.Fatal("interactive final-metadata: updated address not found")
+		report.Fatal("interactive final-metadata: updated address not found")
 	}
 	status := observer.Backend().Status()
 	if status.Database.Revision != revision+1 {
-		t.Fatalf("interactive final-status: revision mismatch: got=%d want=%d", status.Database.Revision, revision+1)
+		report.Fatalf("interactive final-status: revision mismatch: got=%d want=%d", status.Database.Revision, revision+1)
 	}
 	if status.Database.SavedRevision != status.Database.Revision {
-		t.Fatalf("interactive final-status: saved revision mismatch: saved=%d current=%d", status.Database.SavedRevision, status.Database.Revision)
+		report.Fatalf("interactive final-status: saved revision mismatch: saved=%d current=%d", status.Database.SavedRevision, status.Database.Revision)
 	}
 	if status.Database.Err != nil {
-		t.Fatal("interactive final-status: parent database reported an error")
+		report.Fatal("interactive final-status: parent database reported an error")
+	}
+	if applyTrace != nil {
+		applyTrace.flow.Complete()
 	}
 }

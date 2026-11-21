@@ -188,7 +188,7 @@ func TestNativeWriterRefusalChild(t *testing.T) {
 	fmt.Fprintln(os.Stdout, "ACTUAL-LEGACY-WRITER-REFUSED")
 }
 
-func nativeWriterRefusal(t *testing.T, parent context.Context, path string, password []byte, name string, server *sshfixture.LoopbackSSH) {
+func nativeWriterRefusal(t, diagnostics *testing.T, parent context.Context, path string, password []byte, name string, server *sshfixture.LoopbackSSH) {
 	t.Helper()
 	ctx, cancel := nativeOperationPhase(t, parent, time.Minute)
 	defer cancel()
@@ -213,7 +213,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 		}
 	}
 	environment = append(environment, "SSJACK_OWNER_NATIVE_REFUSAL_CHILD=1")
-	trace := startNativeTerminal(t, t, ctx, "legacy writer refusal", ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
+	trace := startNativeTerminal(t, diagnostics, ctx, "legacy writer refusal", ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
 		Args: []string{"-test.run=^TestNativeWriterRefusalChild$", "--", "--vault", path, "--server", name, "--account", "key-only", "rotate"}})
 	trace.addChildFailureMarkers(refusalStdinTTY, refusalStdoutTTY, refusalRawMode, refusalCLICode, refusalCLIVerdict)
 	defer func() {
@@ -221,7 +221,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 		leaked := trace.capture.Contains(password)
 		trace.recordCaptured("hidden-input", "check", "matched=%t ", leaked)
 		if leaked {
-			t.Error("writer refusal exposed hidden input")
+			trace.report(t).Error("writer refusal exposed hidden input")
 		}
 	}()
 	trace.expectText(t, ctx, "vault-prompt", "Vault secret:", "actual legacy writer did not request its unlock")
@@ -233,18 +233,19 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 	readClass := nativeResultClass(err, "read-error")
 	trace.recordCaptured("ciphertext-read", "check-result", "class=%s after=%d ", readClass, len(after))
 	if err != nil {
-		t.Fatalf("refusal ciphertext read failed: class=%s before=%d after=%d", readClass, len(before), len(after))
+		trace.report(t).Fatalf("refusal ciphertext read failed: class=%s before=%d after=%d", readClass, len(before), len(after))
 	}
 	unchanged := bytes.Equal(before, after)
 	trace.recordCaptured("ciphertext-compare", "check-result", "before=%d after=%d equal=%t ", len(before), len(after), unchanged)
 	if !unchanged {
-		t.Fatalf("refused legacy writer changed ciphertext: before=%d after=%d", len(before), len(after))
+		trace.report(t).Fatalf("refused legacy writer changed ciphertext: before=%d after=%d", len(before), len(after))
 	}
 	accepted := server.AcceptedConnections()
 	trace.recordCaptured("ssh-connections", "check-result", "before=%d after=%d ", connections, accepted)
 	if accepted != connections {
-		t.Fatalf("refused legacy writer reached SSH server: before=%d after=%d", connections, accepted)
+		trace.report(t).Fatalf("refused legacy writer reached SSH server: before=%d after=%d", connections, accepted)
 	}
+	trace.flow.Complete()
 }
 
 const nativeGuardCommand = "ssjack-ci-known-literal-output"
@@ -382,7 +383,7 @@ func TestVaultOutputFilterFullProfile(t *testing.T) {
 	if err := vault.CreateWithRecords(ctx, path, v, password); err != nil {
 		t.Fatalf("bypass database creation failed: class=%s", nativeResultClass(err, "create-error"))
 	}
-	nativeKeeperCycles(t, ctx, path, password, serverID, "production", server, []string{"bypass"})
+	nativeKeeperCycles(t, ctx, path, password, serverID, "production", server, []string{"bypass"}, nil)
 	encoded, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("bypass ciphertext read failed: class=%s bytes=%d", nativeResultClass(err, "read-error"), len(encoded))
@@ -563,4 +564,44 @@ func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.
 	if out.Stderr != textWant {
 		nativeChildFatal(t, keeperStderrTextMismatch, "native guard MCP stderr text mismatch: got=%d want=%d", len(out.Stderr), len(textWant))
 	}
+}
+
+// nativeTerminalTrace flow failure marking and the shared flow reporter live
+// here to keep native_command_tui_fullprofile_test.go under its line cap.
+func (trace *nativeTerminalTrace) flowFail() {
+	if trace == nil || trace.flow == nil {
+		return
+	}
+	trace.flow.Fail()
+}
+
+type nativeFlowReporter struct {
+	t     *testing.T
+	trace *nativeTerminalTrace
+}
+
+func (trace *nativeTerminalTrace) report(t *testing.T) nativeFlowReporter {
+	return nativeFlowReporter{t, trace}
+}
+
+func (r nativeFlowReporter) Helper() { r.t.Helper() }
+func (r nativeFlowReporter) Fatal(args ...any) {
+	r.t.Helper()
+	r.trace.flowFail()
+	r.t.Fatal(args...)
+}
+func (r nativeFlowReporter) Fatalf(format string, args ...any) {
+	r.t.Helper()
+	r.trace.flowFail()
+	r.t.Fatalf(format, args...)
+}
+func (r nativeFlowReporter) Error(args ...any) {
+	r.t.Helper()
+	r.trace.flowFail()
+	r.t.Error(args...)
+}
+func (r nativeFlowReporter) Errorf(format string, args ...any) {
+	r.t.Helper()
+	r.trace.flowFail()
+	r.t.Errorf(format, args...)
 }

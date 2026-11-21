@@ -56,7 +56,7 @@ const nativeArchiveMCPBearerHeader = "synthetic native MCP bearer header credent
 const nativeArchiveMCPExcluded = "synthetic-native-excluded-mcp-credential"
 const nativeArchiveMCPExcludedHeader = "synthetic native excluded MCP header credential"
 
-func nativeArchiveMust(t *testing.T, err error) {
+func nativeArchiveMust(t nativeKeeperReporter, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal("native archive fixture operation failed")
@@ -66,7 +66,7 @@ func nativeArchiveMust(t *testing.T, err error) {
 // importBytes and importDigest are the original owneracceptance test helpers,
 // copied so the native archive suite can diff ciphertext without importing the
 // acceptance package.
-func importBytes(t *testing.T, path string) []byte {
+func importBytes(t nativeKeeperReporter, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -74,7 +74,9 @@ func importBytes(t *testing.T, path string) []byte {
 	}
 	return data
 }
-func importDigest(t *testing.T, path string) [32]byte { return sha256.Sum256(importBytes(t, path)) }
+func importDigest(t nativeKeeperReporter, path string) [32]byte {
+	return sha256.Sum256(importBytes(t, path))
+}
 
 // The test authority is volatile. It tests native clients, not durable service storage.
 func nativeArchiveAuthority(t *testing.T, header appstoreheader.Header, dev, ino uint64) appstorecrypto.Binding {
@@ -323,6 +325,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 			{"mcp-excluded-header", nativeArchiveMCPExcludedHeader},
 		} {
 			if trace.capture.Contains([]byte(private.value)) {
+				trace.flowFail()
 				t.Errorf("native archive terminal disclosed private data (class=%s)", private.class)
 			}
 		}
@@ -349,11 +352,10 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 }
 
 func nativeArchiveCheckpoint(t *testing.T, trace *nativeTerminalTrace, stage, failure string, err error) {
-	t.Helper()
 	class := nativeResultClass(err, "endpoint-error")
 	trace.recordCaptured(stage, "result", "class=%s ", class)
 	if err != nil {
-		t.Fatalf("%s (%s)", failure, class)
+		trace.report(t).Fatalf("%s (%s)", failure, class)
 	}
 }
 
@@ -373,23 +375,33 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	mcpServerID, mcpAccounts := nativeArchiveMCPSelection(t, control)
 	before := importBytes(t, database)
 	secretArgs := []string{"add-secret", "--scope", "server", "--server", "archive-source", "--name", "selected-value"}
-	nativeArchiveCommand(t, ctx, database, "native archive add server value cancel", true, secretArgs, nativeArchiveInput{"value-form", "Value:", []byte("\x1b")})
-	if !bytes.Equal(before, importBytes(t, database)) {
-		t.Fatal("cancelled native value form changed ciphertext")
+	cancelTrace := nativeArchiveCommand(t, ctx, database, "native archive add server value cancel", true, secretArgs, nativeArchiveInput{"value-form", "Value:", []byte("\x1b")})
+	cancelReporter := cancelTrace.report(t)
+	if !bytes.Equal(before, importBytes(cancelReporter, database)) {
+		cancelReporter.Fatal("cancelled native value form changed ciphertext")
 	}
-	nativeArchiveCommand(t, ctx, database, "native archive add server value apply", false, secretArgs, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveValue)})
-	nativeArchiveCommand(t, ctx, database, "native archive add global value apply", false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveExcluded)})
+	cancelTrace.flow.Complete()
+	serverApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add server value apply", false, secretArgs, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveValue)})
+	serverApplyTrace.flow.Complete()
+	globalApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add global value apply", false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveExcluded)})
+	globalApplyTrace.flow.Complete()
+	applyReporter := serverApplyTrace.report(t)
+	valueVerifyTrace := newNativeTerminalTrace(t, "shared native archive value verification")
+	valueVerifyReporter := valueVerifyTrace.report(t)
+	valueVerifyTrace.recordCaptured("source-database-status", "check", "")
 	status := control.Backend().Status()
 	if status.Database.Err != nil {
-		t.Fatal("native value helper left a parent database error")
+		valueVerifyReporter.Fatal("native value helper left a parent database error")
 	}
 	if status.Database.Revision != status.Database.SavedRevision {
-		t.Fatal("native value helper did not update the parent saved state")
+		valueVerifyReporter.Fatal("native value helper did not update the parent saved state")
 	}
+	valueVerifyTrace.recordCaptured("source-vault-load", "attempt", "")
 	loaded, err := vault.Load(database, []byte(nativeArchivePassword))
 	if err != nil {
-		t.Fatal("native archive source vault load failed")
+		valueVerifyReporter.Fatal("native archive source vault load failed")
 	}
+	valueVerifyTrace.flow.Complete()
 	alias, reference := "", ""
 	for key, binding := range loaded.Secrets {
 		if binding.ServerID == server {
@@ -398,11 +410,13 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	}
 	loaded.Close()
 	if alias == "" {
-		t.Fatal("native value helper did not persist its server scope")
+		applyReporter.Fatal("native value helper did not persist its server scope")
 	}
-	beforeExport := importBytes(t, database)
+	exportVerifyTrace := newNativeTerminalTrace(t, "shared native archive export verification")
+	exportReporter := exportVerifyTrace.report(t)
+	exportVerifyTrace.recordCaptured("source-ciphertext-baseline", "attempt", "")
+	beforeExport := importBytes(exportReporter, database)
 	archives := make(map[string]string)
-	var sourceTrace *nativeTerminalTrace
 	for _, format := range []string{"encrypted", "plaintext"} {
 		archive := filepath.Join(t.TempDir(), "selected.zip")
 		arguments := []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--mcp-accounts", strings.Join([]string{mcpAccounts["public"], mcpAccounts["basic"], mcpAccounts["bearer"]}, ","), "--destination", archive, "--format", format}
@@ -411,75 +425,87 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 		if format == "plaintext" {
 			label = "native archive export account plaintext apply"
 			confirmation = "EXPORT PLAINTEXT"
-			nativeArchiveCommand(t, ctx, database, "native archive export account plaintext cancel", true, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("\x1b")})
+			plaintextCancelTrace := nativeArchiveCommand(t, ctx, database, "native archive export account plaintext cancel", true, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("\x1b")})
+			plaintextCancelReporter := plaintextCancelTrace.report(t)
 			if _, err := os.Lstat(archive); err == nil {
-				t.Fatal("cancelled native plaintext disclosure created an artifact")
+				plaintextCancelReporter.Fatal("cancelled native plaintext disclosure created an artifact")
 			} else if !os.IsNotExist(err) {
-				t.Fatal("could not stat the cancelled native plaintext archive path")
+				plaintextCancelReporter.Fatal("could not stat the cancelled native plaintext archive path")
 			}
+			plaintextCancelTrace.flow.Complete()
 		}
-		sourceTrace = nativeArchiveCommand(t, ctx, database, label, false, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", nativeArchiveApply(confirmation)})
-		verifyNativeArchive(t, ctx, archive, format == "encrypted", server, alias, mcpServerID, mcpAccounts)
+		sourceTrace := nativeArchiveCommand(t, ctx, database, label, false, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", nativeArchiveApply(confirmation)})
+		sourceFormatReporter := sourceTrace.report(t)
+		verifyNativeArchive(sourceFormatReporter, ctx, archive, format == "encrypted", server, alias, mcpServerID, mcpAccounts)
 		archives[format] = archive
+		sourceTrace.flow.Complete()
 	}
-	if !bytes.Equal(beforeExport, importBytes(t, database)) {
-		t.Fatal("native selected export changed its source ciphertext")
+	exportVerifyTrace.recordCaptured("source-ciphertext-reread", "attempt", "")
+	if !bytes.Equal(beforeExport, importBytes(exportReporter, database)) {
+		exportReporter.Fatal("native selected export changed its source ciphertext")
 	}
-	archiveDigest := importDigest(t, archives["encrypted"])
-	sourceTrace.recordCaptured("source-endpoint-metadata", "attempt", "")
+	exportVerifyTrace.recordCaptured("encrypted-baseline-digest", "attempt", "")
+	archiveDigest := importDigest(exportReporter, archives["encrypted"])
+	exportVerifyTrace.recordCaptured("source-endpoint-metadata", "attempt", "")
 	_, err = control.Backend().Metadata()
-	nativeArchiveCheckpoint(t, sourceTrace, "source-endpoint-metadata", "native export helper detach closed its coordinator", err)
-	sourceTrace.recordCaptured("source-endpoint-close", "attempt", "")
-	nativeArchiveCheckpoint(t, sourceTrace, "source-endpoint-close", "native archive source coordinator did not close", control.Close(ctx))
+	nativeArchiveCheckpoint(t, exportVerifyTrace, "source-endpoint-metadata", "native export helper detach closed its coordinator", err)
+	exportVerifyTrace.recordCaptured("source-endpoint-close", "attempt", "")
+	nativeArchiveCheckpoint(t, exportVerifyTrace, "source-endpoint-close", "native archive source coordinator did not close", control.Close(ctx))
+	exportVerifyTrace.flow.Complete()
 	destination, target, _ := nativeArchiveDatabase(t, ctx, store, id, false)
-	nativeArchiveCommand(t, ctx, target, "native archive import encrypted apply", false, []string{"import", "--file", archives["encrypted"]},
+	importTrace := nativeArchiveCommand(t, ctx, target, "native archive import encrypted apply", false, []string{"import", "--file", archives["encrypted"]},
 		nativeArchiveInput{"archive-unlock", "Archive password:", nativeArchiveApply(nativeArchivePassword)},
 		nativeArchiveInput{"import-preview-server", "MCP server \"archive-mcp\"", nil},
 		nativeArchiveInput{"import-preview-account", "MCP account \"basic\"", nil},
 		nativeArchiveInput{"import-confirm-action", "[Confirm import", []byte("\r")},
 		nativeArchiveInput{"import-confirm-text", "Type IMPORT", nativeArchiveApply("IMPORT")})
+	importReporter := importTrace.report(t)
 	imported, err := vault.Load(target, []byte(nativeArchivePassword))
 	if err != nil {
-		t.Fatal("native archive destination vault load failed")
+		importReporter.Fatal("native archive destination vault load failed")
 	}
 	defer imported.Close()
 	if len(imported.Targets) != 1 {
-		t.Fatal("native import target count changed")
+		importReporter.Fatal("native import target count changed")
 	}
 	if len(imported.Secrets) != 1 {
-		t.Fatal("native import secret count changed")
+		importReporter.Fatal("native import secret count changed")
 	}
 	if imported.Secrets[alias].ServerID != server {
-		t.Fatal("native import secret lost its server scope")
+		importReporter.Fatal("native import secret lost its server scope")
 	}
 	if imported.Secrets[alias].Ref == reference {
-		t.Fatal("native import reused the source publication")
+		importReporter.Fatal("native import reused the source publication")
 	}
 	if imported.OwnerStore == nil {
-		t.Fatal("native import lost its owner store link")
+		importReporter.Fatal("native import lost its owner store link")
 	}
 	if imported.OwnerStore.StoreID != id {
-		t.Fatal("native import changed the owner store identity")
+		importReporter.Fatal("native import changed the owner store identity")
 	}
-	verifyNativeMCP(t, imported, mcpServerID, mcpAccounts, true, true)
+	verifyNativeMCP(importReporter, imported, mcpServerID, mcpAccounts, true, true)
 	profile, err := imported.AccountProfile(server, "selected")
-	nativeArchiveMust(t, err)
+	nativeArchiveMust(importReporter, err)
 	if !bytes.Equal(imported.Targets[profile].Password, []byte(nativeArchiveCredential)) {
-		t.Fatal("native import lost the selected private credential")
+		importReporter.Fatal("native import lost the selected private credential")
 	}
+	importTrace.flow.Complete()
 	readback := filepath.Join(t.TempDir(), "readback.zip")
 	freshMCPServerID, freshMCPAccounts := nativeArchiveMCPSelection(t, destination)
-	nativeArchiveCommand(t, ctx, target, "native archive export account plaintext readback", false, []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--destination", readback, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("EXPORT PLAINTEXT\t\t\r")})
-	verifyNativeArchive(t, ctx, readback, false, server, alias, "", nil)
+	readbackTrace := nativeArchiveCommand(t, ctx, target, "native archive export account plaintext readback", false, []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--destination", readback, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("EXPORT PLAINTEXT\t\t\r")})
+	readbackReporter := readbackTrace.report(t)
+	verifyNativeArchive(readbackReporter, ctx, readback, false, server, alias, "", nil)
+	readbackTrace.flow.Complete()
 	beforeMCPOnly := importBytes(t, target)
 	mcpOnly := filepath.Join(t.TempDir(), "mcp-only.zip")
 	destinationTrace := nativeArchiveCommand(t, ctx, target, "native archive export MCP-only plaintext apply", false, []string{"export", "--scope", "mcp", "--mcp-accounts", strings.Join([]string{freshMCPAccounts["public"], freshMCPAccounts["basic"], freshMCPAccounts["bearer"]}, ","), "--destination", mcpOnly, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", nativeArchiveApply("EXPORT PLAINTEXT")})
-	verifyNativeMCPOnlyArchive(t, ctx, mcpOnly, freshMCPServerID, freshMCPAccounts)
+	destinationReporter := destinationTrace.report(t)
+	verifyNativeMCPOnlyArchive(destinationReporter, ctx, mcpOnly, freshMCPServerID, freshMCPAccounts)
 	if !bytes.Equal(beforeMCPOnly, importBytes(t, target)) {
-		t.Fatal("native MCP-only export changed its source ciphertext")
+		destinationReporter.Fatal("native MCP-only export changed its source ciphertext")
 	}
-	if archiveDigest != importDigest(t, archives["encrypted"]) {
-		t.Fatal("native import changed its source archive")
+	if archiveDigest != importDigest(importReporter, archives["encrypted"]) {
+		importReporter.Fatal("native import changed its source archive")
 	}
 	destinationTrace.recordCaptured("destination-endpoint-close", "attempt", "")
 	nativeArchiveCheckpoint(t, destinationTrace, "destination-endpoint-close", "native archive destination coordinator did not close", destination.Close(ctx))
@@ -488,9 +514,10 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	nativeArchiveCheckpoint(t, destinationTrace, "destination-endpoint-reacquire", "native archive destination endpoint was not reacquired", err)
 	destinationTrace.recordCaptured("reacquired-endpoint-close", "attempt", "")
 	nativeArchiveCheckpoint(t, destinationTrace, "reacquired-endpoint-close", "native archive reacquired endpoint did not close", role.Close())
+	destinationTrace.flow.Complete()
 }
 
-func verifyNativeArchive(t *testing.T, ctx context.Context, path string, encrypted bool, server, alias, mcpServerID string, mcpAccounts map[string]string) {
+func verifyNativeArchive(t nativeKeeperReporter, ctx context.Context, path string, encrypted bool, server, alias, mcpServerID string, mcpAccounts map[string]string) {
 	t.Helper()
 	var password []byte
 	if encrypted {
@@ -582,7 +609,7 @@ func nativeArchiveMCPSelection(t *testing.T, control *ownercontrol.Control) (str
 	return servers["archive-mcp"], accounts
 }
 
-func verifyNativeMCPOnlyArchive(t *testing.T, ctx context.Context, path, sourceServerID string, sourceIDs map[string]string) {
+func verifyNativeMCPOnlyArchive(t nativeKeeperReporter, ctx context.Context, path, sourceServerID string, sourceIDs map[string]string) {
 	t.Helper()
 	archive, err := ownerarchive.ReadFile(ctx, path, nil)
 	if err != nil {
@@ -617,7 +644,7 @@ func verifyNativeMCPOnlyArchive(t *testing.T, ctx context.Context, path, sourceS
 	verifyNativeMCP(t, &selected, sourceServerID, sourceIDs, false, false)
 }
 
-func verifyNativeMCP(t *testing.T, selected *vault.Vault, sourceServerID string, sourceIDs map[string]string, freshIDs, expectLast bool) {
+func verifyNativeMCP(t nativeKeeperReporter, selected *vault.Vault, sourceServerID string, sourceIDs map[string]string, freshIDs, expectLast bool) {
 	t.Helper()
 	if selected.RemoteMCP == nil {
 		t.Fatal("native archive omitted the MCP directory")
