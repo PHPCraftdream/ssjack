@@ -34,7 +34,6 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreentry"
 	"github.com/PHPCraftdream/ssjack/internal/appstorefile"
 	"github.com/PHPCraftdream/ssjack/internal/appstoreheader"
-	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
@@ -59,7 +58,7 @@ const nativeArchiveMCPExcludedHeader = "synthetic native excluded MCP header cre
 func nativeArchiveMust(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("native archive fixture operation failed")
 	}
 }
 
@@ -70,7 +69,7 @@ func importBytes(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("native archive fixture operation failed")
 	}
 	return data
 }
@@ -144,7 +143,7 @@ func nativeArchiveAuthority(t *testing.T, header appstoreheader.Header, dev, ino
 	privateDER, err := x509.MarshalPKCS8PrivateKey(clientCert.PrivateKey)
 	if err != nil {
 		server.Close()
-		t.Fatal(err)
+		t.Fatal("native archive fixture operation failed")
 	}
 	t.Cleanup(func() { server.Close(); clear(privateDER); clear(signer) })
 	return appstorecrypto.Binding{Endpoint: server.URL + "/anchor", RootsDER: [][]byte{caDER}, CertificateDER: clientCert.Certificate, PrivateDER: privateDER, ServiceKey: signer.Public().(ed25519.PublicKey), Header: header, DirectoryDev: dev, DirectoryIno: ino}
@@ -274,14 +273,20 @@ func nativeArchiveMCPDirectory(t *testing.T, v *vault.Vault, profile string) {
 }
 
 type nativeArchiveInput struct {
+	stage  string
 	marker string
 	value  []byte
 }
 
-func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, cancelled bool, arguments []string, steps ...nativeArchiveInput) {
+func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label string, cancelled bool, arguments []string, steps ...nativeArchiveInput) *nativeTerminalTrace {
 	t.Helper()
 	lifetime, cancel := context.WithTimeout(ctx, 170*time.Second)
 	defer cancel()
+	defer func() {
+		for _, step := range steps {
+			clear(step.value)
+		}
+	}()
 	executable, err := os.Executable()
 	nativeArchiveMust(t, err)
 	bridge, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "scripts", "ci", "owner", "owner_pty_bridge.py"))
@@ -299,51 +304,55 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database string, ca
 	}
 	environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_CHILD=1", "SSJACK_OWNER_COMMAND_CHILD=1", "SSJACK_OWNER_COMMAND_CANCEL="+decision)
 	args := append([]string{"-test.run=^TestOwnerNativeCommandChild$", "--", "--vault", database, "owner"}, arguments...)
-	terminal, err := ownerterminal.Start(lifetime, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment, Args: args})
-	nativeArchiveMust(t, err)
-	started := time.Now()
-	tail := newOwnerChildTail()
-	terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
-	ownerChildTerminal(t, "native archive terminal", executable, terminal, tail, started)
-	capture := ownerterminal.CaptureOutput(terminal.Output)
+	trace := startNativeTerminal(t, t, lifetime, label, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Environment: environment, Args: args})
+	trace.addOwnerCommandChildFailureMarkers()
 	defer func() {
-		cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
-		defer stop()
-		_ = terminal.Close(cleanup)
-		if capture.Join(cleanup) != nil {
-			t.Error("native archive terminal output did not join")
-		}
-		for _, private := range []string{nativeArchivePassword, nativeArchiveMaster, nativeArchiveValue, nativeArchiveExcluded, nativeArchiveCredential, nativeArchiveMCPBasic, nativeArchiveMCPBearer, nativeArchiveMCPHeader, nativeArchiveMCPBearerHeader, nativeArchiveMCPExcluded, nativeArchiveMCPExcludedHeader} {
-			if capture.Contains([]byte(private)) {
-				t.Error("native archive terminal disclosed private data")
+		trace.cleanup(t, "", "native archive terminal output did not join")
+		for _, private := range []struct{ class, value string }{
+			{"vault-password", nativeArchivePassword},
+			{"installation-password", nativeArchiveMaster},
+			{"selected-value", nativeArchiveValue},
+			{"excluded-value", nativeArchiveExcluded},
+			{"ssh-credential", nativeArchiveCredential},
+			{"mcp-basic", nativeArchiveMCPBasic},
+			{"mcp-bearer", nativeArchiveMCPBearer},
+			{"mcp-basic-header", nativeArchiveMCPHeader},
+			{"mcp-bearer-header", nativeArchiveMCPBearerHeader},
+			{"mcp-excluded-credential", nativeArchiveMCPExcluded},
+			{"mcp-excluded-header", nativeArchiveMCPExcludedHeader},
+		} {
+			if trace.capture.Contains([]byte(private.value)) {
+				t.Errorf("native archive terminal disclosed private data (class=%s)", private.class)
 			}
 		}
-		capture.Clear()
 	}()
 	ending := byte('\n')
 	if runtime.GOOS == "windows" {
 		ending = '\r'
 	}
-	unlock := append([]byte(nativeArchivePassword), ending)
-	defer clear(unlock)
-	steps = append([]nativeArchiveInput{{"Vault secret:", unlock}}, steps...)
+	trace.expectText(t, lifetime, "vault-unlock", "Vault secret:", "native archive command missed terminal barrier")
+	trace.write(t, "vault-unlock", append([]byte(nativeArchivePassword), ending))
 	for _, step := range steps {
-		captureWaitDiag(t, lifetime, capture, step.marker, "native archive command missed terminal barrier \""+step.marker+"\"")
+		trace.expectText(t, lifetime, step.stage, step.marker, "native archive command missed terminal barrier")
 		if len(step.value) != 0 {
-			_, err := terminal.Input.Write(step.value)
-			nativeArchiveMust(t, err)
+			trace.write(t, step.stage, step.value)
 		}
 	}
-	if err := terminal.Wait(lifetime); err != nil {
-		// Tell a timeout from a child that exited with an error; both used to read the same.
-		class := "child ended with error: " + flakediag.Tail(err.Error(), 200)
-		if lifetime.Err() != nil {
-			class = "lifetime expired: " + lifetime.Err().Error()
-		}
-		t.Fatal("native archive command did not complete its explicit decision (" + class + ")")
+	if cancelled {
+		trace.wait(t, lifetime, "native archive command did not complete cancellation")
+	} else {
+		trace.wait(t, lifetime, "native archive command did not complete confirmation")
+		trace.expectText(t, lifetime, "persistence-receipt", "Owner command completed; encrypted persistence confirmed.", "native archive command omitted its persistence receipt")
 	}
-	if !cancelled {
-		captureWaitDiag(t, lifetime, capture, "Owner command completed; encrypted persistence confirmed.", "native archive command omitted its persistence receipt")
+	return trace
+}
+
+func nativeArchiveCheckpoint(t *testing.T, trace *nativeTerminalTrace, stage, failure string, err error) {
+	t.Helper()
+	class := nativeResultClass(err, "endpoint-error")
+	trace.recordCaptured(stage, "result", "class=%s ", class)
+	if err != nil {
+		t.Fatalf("%s (%s)", failure, class)
 	}
 }
 
@@ -362,18 +371,23 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	mcpServerID, mcpAccounts := nativeArchiveMCPSelection(t, control)
 	before := importBytes(t, database)
 	secretArgs := []string{"add-secret", "--scope", "server", "--server", "archive-source", "--name", "selected-value"}
-	nativeArchiveCommand(t, ctx, database, true, secretArgs, nativeArchiveInput{"Value:", []byte("\x1b")})
+	nativeArchiveCommand(t, ctx, database, "native archive add server value cancel", true, secretArgs, nativeArchiveInput{"value-form", "Value:", []byte("\x1b")})
 	if !bytes.Equal(before, importBytes(t, database)) {
 		t.Fatal("cancelled native value form changed ciphertext")
 	}
-	nativeArchiveCommand(t, ctx, database, false, secretArgs, nativeArchiveInput{"Value:", nativeArchiveApply(nativeArchiveValue)})
-	nativeArchiveCommand(t, ctx, database, false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"Value:", nativeArchiveApply(nativeArchiveExcluded)})
+	nativeArchiveCommand(t, ctx, database, "native archive add server value apply", false, secretArgs, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveValue)})
+	nativeArchiveCommand(t, ctx, database, "native archive add global value apply", false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveExcluded)})
 	status := control.Backend().Status()
-	if status.Database.Err != nil || status.Database.Revision != status.Database.SavedRevision {
+	if status.Database.Err != nil {
+		t.Fatal("native value helper left a parent database error")
+	}
+	if status.Database.Revision != status.Database.SavedRevision {
 		t.Fatal("native value helper did not update the parent saved state")
 	}
 	loaded, err := vault.Load(database, []byte(nativeArchivePassword))
-	nativeArchiveMust(t, err)
+	if err != nil {
+		t.Fatal("native archive source vault load failed")
+	}
 	alias, reference := "", ""
 	for key, binding := range loaded.Secrets {
 		if binding.ServerID == server {
@@ -386,18 +400,23 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	}
 	beforeExport := importBytes(t, database)
 	archives := make(map[string]string)
+	var sourceTrace *nativeTerminalTrace
 	for _, format := range []string{"encrypted", "plaintext"} {
 		archive := filepath.Join(t.TempDir(), "selected.zip")
 		arguments := []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--mcp-accounts", strings.Join([]string{mcpAccounts["public"], mcpAccounts["basic"], mcpAccounts["bearer"]}, ","), "--destination", archive, "--format", format}
 		confirmation := ""
+		label := "native archive export account encrypted apply"
 		if format == "plaintext" {
+			label = "native archive export account plaintext apply"
 			confirmation = "EXPORT PLAINTEXT"
-			nativeArchiveCommand(t, ctx, database, true, arguments, nativeArchiveInput{"Confirmation:", []byte("\x1b")})
-			if _, err := os.Lstat(archive); !os.IsNotExist(err) {
+			nativeArchiveCommand(t, ctx, database, "native archive export account plaintext cancel", true, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("\x1b")})
+			if _, err := os.Lstat(archive); err == nil {
 				t.Fatal("cancelled native plaintext disclosure created an artifact")
+			} else if !os.IsNotExist(err) {
+				t.Fatal("could not stat the cancelled native plaintext archive path")
 			}
 		}
-		nativeArchiveCommand(t, ctx, database, false, arguments, nativeArchiveInput{"Confirmation:", nativeArchiveApply(confirmation)})
+		sourceTrace = nativeArchiveCommand(t, ctx, database, label, false, arguments, nativeArchiveInput{"export-confirmation", "Confirmation:", nativeArchiveApply(confirmation)})
 		verifyNativeArchive(t, ctx, archive, format == "encrypted", server, alias, mcpServerID, mcpAccounts)
 		archives[format] = archive
 	}
@@ -405,22 +424,40 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 		t.Fatal("native selected export changed its source ciphertext")
 	}
 	archiveDigest := importDigest(t, archives["encrypted"])
-	if _, err := control.Backend().Metadata(); err != nil {
-		t.Fatal("native export helper detach closed its coordinator")
-	}
-	nativeArchiveMust(t, control.Close(ctx))
+	sourceTrace.recordCaptured("source-endpoint-metadata", "attempt", "")
+	_, err = control.Backend().Metadata()
+	nativeArchiveCheckpoint(t, sourceTrace, "source-endpoint-metadata", "native export helper detach closed its coordinator", err)
+	sourceTrace.recordCaptured("source-endpoint-close", "attempt", "")
+	nativeArchiveCheckpoint(t, sourceTrace, "source-endpoint-close", "native archive source coordinator did not close", control.Close(ctx))
 	destination, target, _ := nativeArchiveDatabase(t, ctx, store, id, false)
-	nativeArchiveCommand(t, ctx, target, false, []string{"import", "--file", archives["encrypted"]},
-		nativeArchiveInput{"Archive password:", nativeArchiveApply(nativeArchivePassword)},
-		nativeArchiveInput{"MCP server \"archive-mcp\"", nil},
-		nativeArchiveInput{"MCP account \"basic\"", nil},
-		nativeArchiveInput{"[Confirm import", []byte("\r")},
-		nativeArchiveInput{"Type IMPORT", nativeArchiveApply("IMPORT")})
+	nativeArchiveCommand(t, ctx, target, "native archive import encrypted apply", false, []string{"import", "--file", archives["encrypted"]},
+		nativeArchiveInput{"archive-unlock", "Archive password:", nativeArchiveApply(nativeArchivePassword)},
+		nativeArchiveInput{"import-preview-server", "MCP server \"archive-mcp\"", nil},
+		nativeArchiveInput{"import-preview-account", "MCP account \"basic\"", nil},
+		nativeArchiveInput{"import-confirm-action", "[Confirm import", []byte("\r")},
+		nativeArchiveInput{"import-confirm-text", "Type IMPORT", nativeArchiveApply("IMPORT")})
 	imported, err := vault.Load(target, []byte(nativeArchivePassword))
-	nativeArchiveMust(t, err)
+	if err != nil {
+		t.Fatal("native archive destination vault load failed")
+	}
 	defer imported.Close()
-	if len(imported.Targets) != 1 || len(imported.Secrets) != 1 || imported.Secrets[alias].ServerID != server || imported.Secrets[alias].Ref == reference || imported.OwnerStore == nil || imported.OwnerStore.StoreID != id {
-		t.Fatal("native import lost selection, link scope or fresh publication")
+	if len(imported.Targets) != 1 {
+		t.Fatal("native import target count changed")
+	}
+	if len(imported.Secrets) != 1 {
+		t.Fatal("native import secret count changed")
+	}
+	if imported.Secrets[alias].ServerID != server {
+		t.Fatal("native import secret lost its server scope")
+	}
+	if imported.Secrets[alias].Ref == reference {
+		t.Fatal("native import reused the source publication")
+	}
+	if imported.OwnerStore == nil {
+		t.Fatal("native import lost its owner store link")
+	}
+	if imported.OwnerStore.StoreID != id {
+		t.Fatal("native import changed the owner store identity")
 	}
 	verifyNativeMCP(t, imported, mcpServerID, mcpAccounts, true, true)
 	profile, err := imported.AccountProfile(server, "selected")
@@ -430,11 +467,11 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	}
 	readback := filepath.Join(t.TempDir(), "readback.zip")
 	freshMCPServerID, freshMCPAccounts := nativeArchiveMCPSelection(t, destination)
-	nativeArchiveCommand(t, ctx, target, false, []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--destination", readback, "--format", "plaintext"}, nativeArchiveInput{"Confirmation:", []byte("EXPORT PLAINTEXT\t\t\r")})
+	nativeArchiveCommand(t, ctx, target, "native archive export account plaintext readback", false, []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--destination", readback, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("EXPORT PLAINTEXT\t\t\r")})
 	verifyNativeArchive(t, ctx, readback, false, server, alias, "", nil)
 	beforeMCPOnly := importBytes(t, target)
 	mcpOnly := filepath.Join(t.TempDir(), "mcp-only.zip")
-	nativeArchiveCommand(t, ctx, target, false, []string{"export", "--scope", "mcp", "--mcp-accounts", strings.Join([]string{freshMCPAccounts["public"], freshMCPAccounts["basic"], freshMCPAccounts["bearer"]}, ","), "--destination", mcpOnly, "--format", "plaintext"}, nativeArchiveInput{"Confirmation:", nativeArchiveApply("EXPORT PLAINTEXT")})
+	destinationTrace := nativeArchiveCommand(t, ctx, target, "native archive export MCP-only plaintext apply", false, []string{"export", "--scope", "mcp", "--mcp-accounts", strings.Join([]string{freshMCPAccounts["public"], freshMCPAccounts["basic"], freshMCPAccounts["bearer"]}, ","), "--destination", mcpOnly, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", nativeArchiveApply("EXPORT PLAINTEXT")})
 	verifyNativeMCPOnlyArchive(t, ctx, mcpOnly, freshMCPServerID, freshMCPAccounts)
 	if !bytes.Equal(beforeMCPOnly, importBytes(t, target)) {
 		t.Fatal("native MCP-only export changed its source ciphertext")
@@ -442,10 +479,13 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	if archiveDigest != importDigest(t, archives["encrypted"]) {
 		t.Fatal("native import changed its source archive")
 	}
-	nativeArchiveMust(t, destination.Close(ctx))
+	destinationTrace.recordCaptured("destination-endpoint-close", "attempt", "")
+	nativeArchiveCheckpoint(t, destinationTrace, "destination-endpoint-close", "native archive destination coordinator did not close", destination.Close(ctx))
+	destinationTrace.recordCaptured("destination-endpoint-reacquire", "attempt", "")
 	role, err := ownerlocal.Listen(target)
-	nativeArchiveMust(t, err)
-	nativeArchiveMust(t, role.Close())
+	nativeArchiveCheckpoint(t, destinationTrace, "destination-endpoint-reacquire", "native archive destination endpoint was not reacquired", err)
+	destinationTrace.recordCaptured("reacquired-endpoint-close", "attempt", "")
+	nativeArchiveCheckpoint(t, destinationTrace, "reacquired-endpoint-close", "native archive reacquired endpoint did not close", role.Close())
 }
 
 func verifyNativeArchive(t *testing.T, ctx context.Context, path string, encrypted bool, server, alias, mcpServerID string, mcpAccounts map[string]string) {
@@ -456,23 +496,52 @@ func verifyNativeArchive(t *testing.T, ctx context.Context, path string, encrypt
 		defer clear(password)
 	}
 	archive, err := ownerarchive.ReadFile(ctx, path, password)
-	nativeArchiveMust(t, err)
+	if err != nil {
+		t.Fatal("native selected archive read failed")
+	}
 	defer archive.Close()
-	if archive.Encrypted() != encrypted || len(archive.SecretIDs()) != 1 || archive.SecretIDs()[0] != alias {
-		t.Fatal("native archive included unselected values or changed encryption mode")
+	if archive.Encrypted() != encrypted {
+		t.Fatal("native archive changed encryption mode")
+	}
+	secretIDs := archive.SecretIDs()
+	if len(secretIDs) != 1 {
+		t.Fatal("native archive secret count changed")
+	}
+	if secretIDs[0] != alias {
+		t.Fatal("native archive selected the wrong secret")
 	}
 	value, ok := archive.Value(alias)
-	if !ok || !bytes.Equal(value, []byte(nativeArchiveValue)) {
+	defer clear(value)
+	if !ok {
+		t.Fatal("native archive omitted the selected private value")
+	}
+	if !bytes.Equal(value, []byte(nativeArchiveValue)) {
 		t.Fatal("native archive lost the exact private value")
 	}
-	defer clear(value)
 	data := archive.Database()
 	defer clear(data)
 	var selected vault.Vault
-	nativeArchiveMust(t, pure.LoadsInto(string(data), &selected))
+	if err := pure.LoadsInto(string(data), &selected); err != nil {
+		t.Fatal("native archive database parse failed")
+	}
 	defer selected.Close()
-	if selected.OwnerStore != nil || len(selected.Servers) != 1 || len(selected.Targets) != 1 || len(selected.Secrets) != 1 || len(selected.Servers[server].Accounts) != 1 || selected.Secrets[alias].ServerID != server {
-		t.Fatal("native archive included unselected credentials, scopes or master link")
+	if selected.OwnerStore != nil {
+		t.Fatal("native archive included the master link")
+	}
+	if len(selected.Servers) != 1 {
+		t.Fatal("native archive server count changed")
+	}
+	if len(selected.Targets) != 1 {
+		t.Fatal("native archive target count changed")
+	}
+	if len(selected.Secrets) != 1 {
+		t.Fatal("native archive database secret count changed")
+	}
+	if len(selected.Servers[server].Accounts) != 1 {
+		t.Fatal("native archive selected server account count changed")
+	}
+	if selected.Secrets[alias].ServerID != server {
+		t.Fatal("native archive secret scope changed")
 	}
 	profile, err := selected.AccountProfile(server, "selected")
 	nativeArchiveMust(t, err)
@@ -502,8 +571,11 @@ func nativeArchiveMCPSelection(t *testing.T, control *ownercontrol.Control) (str
 			accounts[account.Name] = account.ID
 		}
 	}
-	if servers["archive-mcp"] == "" || len(accounts) < 3 {
-		t.Fatal("native MCP archive fixture metadata is incomplete")
+	if servers["archive-mcp"] == "" {
+		t.Fatal("native MCP archive fixture server is missing")
+	}
+	if len(accounts) < 3 {
+		t.Fatal("native MCP archive fixture has too few accounts")
 	}
 	return servers["archive-mcp"], accounts
 }
@@ -511,32 +583,63 @@ func nativeArchiveMCPSelection(t *testing.T, control *ownercontrol.Control) (str
 func verifyNativeMCPOnlyArchive(t *testing.T, ctx context.Context, path, sourceServerID string, sourceIDs map[string]string) {
 	t.Helper()
 	archive, err := ownerarchive.ReadFile(ctx, path, nil)
-	nativeArchiveMust(t, err)
+	if err != nil {
+		t.Fatal("native MCP-only archive read failed")
+	}
 	defer archive.Close()
-	if archive.Encrypted() || len(archive.SecretIDs()) != 0 {
-		t.Fatal("native MCP-only archive added SSH/application values or changed format")
+	if archive.Encrypted() {
+		t.Fatal("native MCP-only archive changed encryption mode")
+	}
+	if len(archive.SecretIDs()) != 0 {
+		t.Fatal("native MCP-only archive included private values")
 	}
 	data := archive.Database()
 	defer clear(data)
 	var selected vault.Vault
-	nativeArchiveMust(t, pure.LoadsInto(string(data), &selected))
+	if err := pure.LoadsInto(string(data), &selected); err != nil {
+		t.Fatal("native archive database parse failed")
+	}
 	defer selected.Close()
-	if selected.OwnerStore != nil || len(selected.Servers) != 0 || len(selected.Targets) != 0 || len(selected.Secrets) != 0 {
-		t.Fatal("native MCP-only archive attached SSH identities or values")
+	if selected.OwnerStore != nil {
+		t.Fatal("native MCP-only archive included the master link")
+	}
+	if len(selected.Servers) != 0 {
+		t.Fatal("native MCP-only archive included SSH servers")
+	}
+	if len(selected.Targets) != 0 {
+		t.Fatal("native MCP-only archive included SSH targets")
+	}
+	if len(selected.Secrets) != 0 {
+		t.Fatal("native MCP-only archive included application secret bindings")
 	}
 	verifyNativeMCP(t, &selected, sourceServerID, sourceIDs, false, false)
 }
 
 func verifyNativeMCP(t *testing.T, selected *vault.Vault, sourceServerID string, sourceIDs map[string]string, freshIDs, expectLast bool) {
 	t.Helper()
-	if selected.RemoteMCP == nil || len(selected.RemoteMCP.Servers) != 1 || len(selected.RemoteMCP.Accounts) != 3 {
-		t.Fatal("native archive did not preserve exactly the selected MCP accounts")
+	if selected.RemoteMCP == nil {
+		t.Fatal("native archive omitted the MCP directory")
+	}
+	if len(selected.RemoteMCP.Servers) != 1 {
+		t.Fatal("native archive MCP server count changed")
+	}
+	if len(selected.RemoteMCP.Accounts) != 3 {
+		t.Fatal("native archive MCP account count changed")
 	}
 	var serverID string
 	for id, server := range selected.RemoteMCP.Servers {
 		serverID = id
-		if server.Name != "archive-mcp" || server.URL != "https://archive.invalid/mcp" || server.Revision != 1 || (id == sourceServerID) != !freshIDs {
-			t.Fatal("native MCP server identity or metadata changed")
+		if server.Name != "archive-mcp" {
+			t.Fatal("native MCP server name changed")
+		}
+		if server.URL != "https://archive.invalid/mcp" {
+			t.Fatal("native MCP server URL changed")
+		}
+		if server.Revision != 1 {
+			t.Fatal("native MCP server revision changed")
+		}
+		if (id == sourceServerID) != !freshIDs {
+			t.Fatal("native MCP server ID did not follow the publication mode")
 		}
 	}
 	if serverID == "" {
@@ -544,31 +647,76 @@ func verifyNativeMCP(t *testing.T, selected *vault.Vault, sourceServerID string,
 	}
 	seen := make(map[string]bool)
 	for id, account := range selected.RemoteMCP.Accounts {
-		if account.ServerID != serverID || account.Revision != 1 || (id == sourceIDs[account.Name]) != !freshIDs {
-			t.Fatal("native MCP account identity or revision changed")
+		if account.ServerID != serverID {
+			t.Fatal("native MCP account server binding changed")
+		}
+		if account.Revision != 1 {
+			t.Fatal("native MCP account revision changed")
+		}
+		if (id == sourceIDs[account.Name]) != !freshIDs {
+			t.Fatal("native MCP account ID did not follow the publication mode")
 		}
 		seen[account.Name] = true
 		switch account.Name {
 		case "public":
-			if account.Auth.Kind != "none" || len(account.Auth.Secret) != 0 || len(account.Headers) != 0 {
-				t.Fatal("native public MCP account changed")
+			if account.Auth.Kind != "none" {
+				t.Fatal("native public MCP authentication kind changed")
+			}
+			if len(account.Auth.Secret) != 0 {
+				t.Fatal("native public MCP account acquired a credential")
+			}
+			if len(account.Headers) != 0 {
+				t.Fatal("native public MCP account acquired headers")
 			}
 		case "basic":
-			if account.Auth.Kind != "basic" || account.Auth.Username != "synthetic-mcp-user" || !bytes.Equal(account.Auth.Secret, []byte(nativeArchiveMCPBasic)) || len(account.Headers) != 1 || account.Headers[0].Name != "X-Archive-Key" || !bytes.Equal(account.Headers[0].Value, []byte(nativeArchiveMCPHeader)) {
-				t.Fatal("native basic MCP credentials or header changed")
+			if account.Auth.Kind != "basic" {
+				t.Fatal("native basic MCP authentication kind changed")
+			}
+			if account.Auth.Username != "synthetic-mcp-user" {
+				t.Fatal("native basic MCP username changed")
+			}
+			if !bytes.Equal(account.Auth.Secret, []byte(nativeArchiveMCPBasic)) {
+				t.Fatal("native basic MCP credential changed")
+			}
+			if len(account.Headers) != 1 {
+				t.Fatal("native basic MCP header count changed")
+			}
+			if account.Headers[0].Name != "X-Archive-Key" {
+				t.Fatal("native basic MCP header name changed")
+			}
+			if !bytes.Equal(account.Headers[0].Value, []byte(nativeArchiveMCPHeader)) {
+				t.Fatal("native basic MCP header value changed")
 			}
 		case "not-selected":
 			t.Fatal("native archive included an unselected MCP account")
 		case "bearer":
-			if account.Auth.Kind != "bearer" || !bytes.Equal(account.Auth.Secret, []byte(nativeArchiveMCPBearer)) || len(account.Headers) != 1 || account.Headers[0].Name != "X-Bearer-Key" || !bytes.Equal(account.Headers[0].Value, []byte(nativeArchiveMCPBearerHeader)) {
-				t.Fatal("native bearer MCP credentials or header changed")
+			if account.Auth.Kind != "bearer" {
+				t.Fatal("native bearer MCP authentication kind changed")
+			}
+			if !bytes.Equal(account.Auth.Secret, []byte(nativeArchiveMCPBearer)) {
+				t.Fatal("native bearer MCP credential changed")
+			}
+			if len(account.Headers) != 1 {
+				t.Fatal("native bearer MCP header count changed")
+			}
+			if account.Headers[0].Name != "X-Bearer-Key" {
+				t.Fatal("native bearer MCP header name changed")
+			}
+			if !bytes.Equal(account.Headers[0].Value, []byte(nativeArchiveMCPBearerHeader)) {
+				t.Fatal("native bearer MCP header value changed")
 			}
 		default:
 			t.Fatal("native archive included an unselected MCP account")
 		}
 	}
-	if !seen["public"] || !seen["basic"] || !seen["bearer"] {
-		t.Fatal("native MCP authentication kind was omitted")
+	if !seen["public"] {
+		t.Fatal("native MCP public account was omitted")
+	}
+	if !seen["basic"] {
+		t.Fatal("native MCP basic account was omitted")
+	}
+	if !seen["bearer"] {
+		t.Fatal("native MCP bearer account was omitted")
 	}
 	if expectLast {
 		if len(selected.RemoteMCP.Last) != 1 {
@@ -580,8 +728,17 @@ func verifyNativeMCP(t *testing.T, selected *vault.Vault, sourceServerID string,
 			}
 			for _, binding := range bindings {
 				account, ok := selected.RemoteMCP.Accounts[binding.AccountID]
-				if !ok || account.ServerID != binding.ServerID || selected.RemoteMCP.Servers[binding.ServerID].Revision != binding.ServerRevision || account.Revision != binding.AccountRevision {
-					t.Fatal("native MCP Last contains an unbound identity")
+				if !ok {
+					t.Fatal("native MCP Last refers to a missing account")
+				}
+				if account.ServerID != binding.ServerID {
+					t.Fatal("native MCP Last account server binding changed")
+				}
+				if selected.RemoteMCP.Servers[binding.ServerID].Revision != binding.ServerRevision {
+					t.Fatal("native MCP Last server revision changed")
+				}
+				if account.Revision != binding.AccountRevision {
+					t.Fatal("native MCP Last account revision changed")
 				}
 			}
 		}

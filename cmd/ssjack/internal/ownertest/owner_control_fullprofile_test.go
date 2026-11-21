@@ -8,10 +8,8 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,11 +17,11 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/agent"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/startup"
+	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/childdiag"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/sshfixture"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
-	"github.com/PHPCraftdream/ssjack/internal/ownerterminal"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
@@ -69,9 +67,25 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if err := vault.CreateWithRecords(ctx, path, v, password); err != nil {
 		t.Fatal(err)
 	}
+	phases := childdiag.NewPhases()
+	flakediag.OnFailure(t, phases.Render)
+	markResult := func(phase string, err error) {
+		class := "ok"
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			class = "deadline"
+		case errors.Is(err, context.Canceled):
+			class = "canceled"
+		case err != nil:
+			class = "error"
+		}
+		phases.Mark(phase + "-" + class)
+	}
+	phases.Mark("control-open-start")
 	local, err := ownercontrol.Open(ctx, path, password)
+	markResult("control-open", err)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("standalone control did not open")
 	}
 	defer func() {
 		cleanup, stop := nativePhaseCleanup(t)
@@ -80,14 +94,19 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 			t.Error("standalone control did not close")
 		}
 	}()
+	phases.Mark("helper-attach-start")
 	helper, err := ownercontrol.Open(ctx, path, password)
+	markResult("helper-attach", err)
 	if err != nil {
 		t.Fatal("helper did not attach to the existing coordinator")
 	}
 	defer helper.Detach()
 	metadata, err := helper.Backend().Metadata()
-	if err != nil || len(metadata.Servers) != 1 {
-		t.Fatal("remote helper lost directory metadata")
+	if err != nil {
+		t.Fatalf("remote helper metadata read failed: class=%s", nativeResultClass(err, "metadata-error"))
+	}
+	if got := len(metadata.Servers); got != 1 {
+		t.Fatalf("remote helper metadata server count: got %d, want 1", got)
 	}
 	status := helper.Backend().Status()
 	selected := ownertui.Connection{ServerID: serverID, Account: "main", Revision: status.Database.Revision}
@@ -117,31 +136,55 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	if _, err := runner(ctx, "captured", "true", io.Discard, io.Discard); err == nil {
 		t.Fatal("shell-only SSH fixture accepted exec")
 	}
-	if got := server.Authentications(); len(got) != 1 || got[0] != "second|password" {
-		t.Fatal("captured helper config changed after saved edits or byte cleanup")
+	authentications := server.Authentications()
+	if got := len(authentications); got != 1 {
+		t.Fatalf("captured helper authentication count: got %d, want 1", got)
 	}
-	if err := helper.Close(ctx); err != nil {
-		t.Fatal(err)
+	if authentications[0] != "second|password" {
+		t.Fatal("captured helper authentication did not match the saved login")
+	}
+	phases.Mark("helper-detach-start")
+	err = helper.Close(ctx)
+	markResult("helper-detach", err)
+	if err != nil {
+		t.Fatal("helper did not detach from the existing coordinator")
 	}
 	if _, err := local.Backend().Metadata(); err != nil {
 		t.Fatal("remote helper detach closed the local coordinator")
 	}
-	t.Run("native-command-helper", func(t *testing.T) {
+	phases.Mark("native-command-helper-start")
+	if t.Run("native-command-helper", func(t *testing.T) {
 		nativeOwnerCommandAcceptance(t, ctx, path, password, serverID, "native-added", local)
-	})
-	if err := local.Close(ctx); err != nil {
-		t.Fatal(err)
+	}) {
+		phases.Mark("native-command-helper-ok")
+	} else {
+		phases.Mark("native-command-helper-failed")
 	}
+	phases.Mark("control-close-start")
+	err = local.Close(ctx)
+	markResult("control-close", err)
+	if err != nil {
+		t.Fatal("standalone control did not close before reopen")
+	}
+	phases.Mark("control-reopen-start")
 	reopened, err := ownercontrol.Open(ctx, path, password)
-	if err != nil || ctx.Err() != nil {
-		if reopened != nil {
-			cleanup, stop := nativePhaseCleanup(t)
-			if closeErr := reopened.Close(cleanup); closeErr != nil {
-				t.Error("over-budget reopened control did not close")
-			}
-			stop()
+	budgetErr := ctx.Err()
+	markResult("control-reopen", err)
+	markResult("control-reopen-budget", budgetErr)
+	if reopened != nil && (err != nil || budgetErr != nil) {
+		cleanup, stop := nativePhaseCleanup(t)
+		closeErr := reopened.Close(cleanup)
+		markResult("control-reopen-cleanup", closeErr)
+		if closeErr != nil {
+			t.Error("rejected reopened control did not close")
 		}
-		t.Fatal("closed standalone control retained writer role or reopen exceeded its lifetime")
+		stop()
+	}
+	if err != nil {
+		t.Fatal("standalone control reopen failed")
+	}
+	if budgetErr != nil {
+		t.Fatal("standalone control reopened after its context ended")
 	}
 	defer func() {
 		cleanup, stop := nativePhaseCleanup(t)
@@ -153,10 +196,13 @@ func TestVaultOwnerControlFullProfile(t *testing.T) {
 	reopenCheck, stopReopenCheck := nativeOperationPhase(t, ctx, 30*time.Second)
 	nativeServerAddress(t, reopenCheck, reopened, serverID, server.Address())
 	stopReopenCheck()
+	phases.Mark("control-reclose-start")
 	closeReopened, stopCloseReopened := nativePhaseCleanup(t)
-	if err := reopened.Close(closeReopened); err != nil {
+	err = reopened.Close(closeReopened)
+	markResult("control-reclose", err)
+	if err != nil {
 		stopCloseReopened()
-		t.Fatal(err)
+		t.Fatal("reopened control did not close after verification")
 	}
 	stopCloseReopened()
 	t.Run("actual-keeper-process", func(t *testing.T) {
@@ -308,148 +354,4 @@ func liveHumanShell(t *testing.T, ctx context.Context, helper *ownercontrol.Cont
 		t.Fatal("human shell did not become observable")
 	}
 	return client, session, reader, stdin
-}
-
-// ownerChildTail keeps the last bytes of a child's captured output for
-// failure-only diagnostics. It is independent of ownerterminal captures, so
-// evidence survives capture.Clear in teardown.
-const ownerChildTailKeep = 64 << 10
-
-type ownerChildTail struct {
-	mu   sync.Mutex
-	data []byte
-}
-
-func newOwnerChildTail() *ownerChildTail { return &ownerChildTail{} }
-
-func (t *ownerChildTail) Write(p []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.data = append(t.data, p...)
-	if len(t.data) > ownerChildTailKeep {
-		t.data = append([]byte(nil), t.data[len(t.data)-ownerChildTailKeep:]...)
-	}
-	return len(p), nil
-}
-
-func (t *ownerChildTail) snapshot() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return string(t.data)
-}
-
-// ownerChildTee passes through a terminal output reader while recording it.
-type ownerChildTee struct {
-	io.Reader
-	closer io.Closer
-	tail   *ownerChildTail
-}
-
-// teeOwnerChildOutput wraps terminal.Output; the capture sees the same bytes.
-func teeOwnerChildOutput(output io.ReadCloser, tail *ownerChildTail) io.ReadCloser {
-	return &ownerChildTee{Reader: output, closer: output, tail: tail}
-}
-
-func (t *ownerChildTee) Read(p []byte) (int, error) {
-	n, err := t.Reader.Read(p)
-	if n > 0 {
-		_, _ = t.tail.Write(p[:n])
-	}
-	return n, err
-}
-
-func (t *ownerChildTee) Close() error {
-	if t.closer == nil {
-		return nil
-	}
-	return t.closer.Close()
-}
-
-// ownerChildExecFail prints failure-only evidence for a finished exec-based
-// driver child: command name (never arguments), pid, exit status, output size,
-// a digest and a 16 KiB tail of the already-captured combined output.
-func ownerChildExecFail(t *testing.T, what string, command *exec.Cmd, output []byte, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-	name := ""
-	if len(command.Args) > 0 {
-		name = filepath.Base(command.Args[0])
-	}
-	pid := 0
-	if command.Process != nil {
-		pid = command.Process.Pid
-	}
-	t.Logf("owner child evidence: what=%s name=%s pid=%d exit=%v output-bytes=%d digest=%s\noutput tail:%s",
-		what, name, pid, err, len(output), flakediag.Short(output), flakediag.Tail(string(output), 16*1024))
-}
-
-// ownerChildTerminal registers failure-only evidence for a PTY terminal child:
-// command name, start time, elapsed time, exit status and a goroutine dump.
-// A non-nil tail also enables exit error details and a 16 KiB output tail.
-func ownerChildTerminal(t *testing.T, what, executableName string, terminal *ownerterminal.Terminal, tail *ownerChildTail, started time.Time) {
-	t.Helper()
-	flakediag.OnFailure(t, func() string {
-		state := "still running or unjoined"
-		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
-		switch err := terminal.Wait(ctx); {
-		case err == nil:
-			state = "exited cleanly"
-		case ctx.Err() == nil:
-			// The child ended on its own: the error is its exit status.
-			state = "exited with error"
-			if tail != nil {
-				state += ": " + flakediag.Tail(err.Error(), 200)
-			}
-		}
-		stop()
-		evidence := "owner terminal child: what=" + what +
-			" name=" + filepath.Base(executableName) +
-			" started=" + started.Format(time.RFC3339) +
-			" elapsed=" + time.Since(started).Round(time.Millisecond).String() +
-			" exit=" + state
-		if tail != nil {
-			evidence += "\noutput tail:" + flakediag.Tail(tail.snapshot(), 16*1024)
-		}
-		return evidence + "\ngoroutine dump:\n" + flakediag.GoroutineDump(64*1024)
-	})
-}
-
-// captureWaitDiag waits for expected terminal output through flakediag
-// polling, preserving the caller's fatal message and timeout semantics, and
-// registers failure-only evidence (what was waited for, elapsed, last state,
-// goroutine dump) via WaitForDesc's OnFailure hook.
-func captureWaitDiag(t *testing.T, ctx context.Context, capture *ownerterminal.Capture, expected, failMessage string) {
-	t.Helper()
-	remaining := time.Until(deadlineOf(ctx))
-	if remaining <= 0 {
-		remaining = time.Millisecond
-	}
-	done, _, lastErr := flakediag.WaitForDesc(t, "terminal output "+expected, remaining, func() (string, bool, error) {
-		if capture.Contains([]byte(expected)) {
-			return "", true, nil
-		}
-		stop, cancel := context.WithCancel(context.Background())
-		cancel()
-		if capture.Join(stop) == nil {
-			return "process ended before the expected output", false, errors.New("process ended")
-		}
-		if err := ctx.Err(); err != nil {
-			return "wait context ended", false, err
-		}
-		return "output not seen yet", false, nil
-	})
-	_ = lastErr
-	if !done {
-		t.Fatal(failMessage)
-	}
-}
-
-func deadlineOf(ctx context.Context) (deadline time.Time) {
-	if ctx == nil {
-		return time.Now().Add(-time.Second)
-	}
-	deadline, _ = ctx.Deadline()
-	return deadline
 }

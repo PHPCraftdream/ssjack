@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -147,16 +146,27 @@ func TestNativeAcceptancePhaseCancellationTopology(t *testing.T) {
 	}
 }
 
+const (
+	refusalStdinTTY   nativeChildFailure = "refusal-stdin-tty"
+	refusalStdoutTTY  nativeChildFailure = "refusal-stdout-tty"
+	refusalRawMode    nativeChildFailure = "refusal-raw-mode"
+	refusalCLICode    nativeChildFailure = "refusal-cli-code"
+	refusalCLIVerdict nativeChildFailure = "refusal-cli-verdict"
+)
+
 func TestNativeWriterRefusalChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_NATIVE_REFUSAL_CHILD") != "1" {
 		t.Skip("actual native writer refusal child only")
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		t.Fatal("writer refusal child lacks a real terminal")
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		nativeChildFatal(t, refusalStdinTTY, "writer refusal child stdin is not a terminal")
+	}
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		nativeChildFatal(t, refusalStdoutTTY, "writer refusal child stdout is not a terminal")
 	}
 	state, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
-		t.Fatal(err)
+		nativeChildFatal(t, refusalRawMode, "writer refusal child could not set raw terminal mode")
 	}
 	defer term.Restore(int(os.Stdin.Fd()), state)
 	var args []string
@@ -168,8 +178,12 @@ func TestNativeWriterRefusalChild(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if code, err := cli.Run(ctx, args); code != 1 || !errors.Is(err, vault.ErrWriterRole) {
-		t.Fatal("actual legacy writer did not refuse at native role admission")
+	code, err := cli.Run(ctx, args)
+	if code != 1 {
+		nativeChildFatal(t, refusalCLICode, "legacy writer CLI code mismatch: got=%d want=1", code)
+	}
+	if !errors.Is(err, vault.ErrWriterRole) {
+		nativeChildFatal(t, refusalCLIVerdict, "legacy writer verdict mismatch: class=%s", nativeResultClass(err, "other-error"))
 	}
 	fmt.Fprintln(os.Stdout, "ACTUAL-LEGACY-WRITER-REFUSED")
 }
@@ -188,7 +202,7 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("refusal baseline ciphertext read failed: class=%s bytes=%d", nativeResultClass(err, "read-error"), len(before))
 	}
 	connections := server.AcceptedConnections()
 	environment := make([]string, 0)
@@ -199,50 +213,91 @@ func nativeWriterRefusal(t *testing.T, parent context.Context, path string, pass
 		}
 	}
 	environment = append(environment, "SSJACK_OWNER_NATIVE_REFUSAL_CHILD=1")
-	terminal, err := ownerterminal.Start(ctx, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
+	trace := startNativeTerminal(t, t, ctx, "legacy writer refusal", ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
 		Args: []string{"-test.run=^TestNativeWriterRefusalChild$", "--", "--vault", path, "--server", name, "--account", "key-only", "rotate"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := time.Now()
-	tail := newOwnerChildTail()
-	terminal.Output = teeOwnerChildOutput(terminal.Output, tail)
-	ownerChildTerminal(t, "legacy writer refusal", executable, terminal, tail, started)
-	capture := ownerterminal.CaptureOutput(terminal.Output)
+	trace.addChildFailureMarkers(refusalStdinTTY, refusalStdoutTTY, refusalRawMode, refusalCLICode, refusalCLIVerdict)
 	defer func() {
-		cleanup, cancel := nativePhaseCleanup(t)
-		defer cancel()
-		if err := terminal.Close(cleanup); err != nil {
-			t.Error("writer refusal child did not close cleanly")
+		trace.cleanup(t, "writer refusal child did not close cleanly", "writer refusal child did not drain cleanly")
+		leaked := trace.capture.Contains(password)
+		trace.recordCaptured("hidden-input", "check", "matched=%t ", leaked)
+		if leaked {
+			t.Error("writer refusal exposed hidden input")
 		}
-		if capture.Join(cleanup) != nil || capture.Contains(password) {
-			t.Error("writer refusal did not join safely or exposed hidden input")
-		}
-		capture.Clear()
 	}()
-	captureWaitDiag(t, ctx, capture, "Vault secret:", "actual legacy writer did not request its unlock")
-	ending := byte('\n')
-	if runtime.GOOS == "windows" {
-		ending = '\r'
-	}
-	input := append(append([]byte(nil), password...), ending)
-	_, err = terminal.Input.Write(input)
-	clear(input)
-	if err != nil {
-		t.Fatal("actual legacy writer unlock input failed")
-	}
-	if err := terminal.Wait(ctx); err != nil {
-		t.Fatal("actual legacy writer did not complete its process")
-	}
-	captureWaitDiag(t, ctx, capture, "ACTUAL-LEGACY-WRITER-REFUSED", "actual legacy writer did not report its refusal")
+	trace.expectText(t, ctx, "vault-prompt", "Vault secret:", "actual legacy writer did not request its unlock")
+	trace.write(t, "vault-unlock", nativeUnlockInput(password))
+	trace.wait(t, ctx, "actual legacy writer did not complete its process")
+	trace.expectText(t, ctx, "writer-refusal", "ACTUAL-LEGACY-WRITER-REFUSED", "actual legacy writer did not report its refusal")
+	trace.recordCaptured("ciphertext-read", "check-start", "before=%d ", len(before))
 	after, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(before, after) || server.AcceptedConnections() != connections {
-		t.Fatal("refused legacy writer changed ciphertext or reached the SSH server")
+	readClass := nativeResultClass(err, "read-error")
+	trace.recordCaptured("ciphertext-read", "check-result", "class=%s after=%d ", readClass, len(after))
+	if err != nil {
+		t.Fatalf("refusal ciphertext read failed: class=%s before=%d after=%d", readClass, len(before), len(after))
+	}
+	unchanged := bytes.Equal(before, after)
+	trace.recordCaptured("ciphertext-compare", "check-result", "before=%d after=%d equal=%t ", len(before), len(after), unchanged)
+	if !unchanged {
+		t.Fatalf("refused legacy writer changed ciphertext: before=%d after=%d", len(before), len(after))
+	}
+	accepted := server.AcceptedConnections()
+	trace.recordCaptured("ssh-connections", "check-result", "before=%d after=%d ", connections, accepted)
+	if accepted != connections {
+		t.Fatalf("refused legacy writer reached SSH server: before=%d after=%d", connections, accepted)
 	}
 }
 
 const nativeGuardCommand = "ssjack-ci-known-literal-output"
 const nativeGuardAddedCredential = "synthetic keeper MCP credential"
+
+const (
+	keeperForwardedOption      nativeChildFailure = "keeper-forwarded-option"
+	keeperCommandEOF           nativeChildFailure = "keeper-command-eof"
+	keeperCommandRead          nativeChildFailure = "keeper-command-read"
+	keeperCommandUnknown       nativeChildFailure = "keeper-command-unknown"
+	keeperBrokerConnect        nativeChildFailure = "keeper-broker-connect"
+	keeperMCPServerConnect     nativeChildFailure = "keeper-mcp-server-connect"
+	keeperMCPClientConnect     nativeChildFailure = "keeper-mcp-client-connect"
+	keeperMCPCall              nativeChildFailure = "keeper-mcp-call"
+	keeperMCPResultMissing     nativeChildFailure = "keeper-mcp-result-missing"
+	keeperMCPToolError         nativeChildFailure = "keeper-mcp-tool-error"
+	keeperMCPMarshal           nativeChildFailure = "keeper-mcp-marshal"
+	keeperMCPConnectionLiteral nativeChildFailure = "keeper-mcp-connection-literal"
+	keeperMCPAddedLiteral      nativeChildFailure = "keeper-mcp-added-literal"
+	keeperMCPTextExtract       nativeChildFailure = "keeper-mcp-text-extract"
+	keeperMCPTextParse         nativeChildFailure = "keeper-mcp-text-parse"
+	keeperScopeRefusalCount    nativeChildFailure = "keeper-scope-refusal-count"
+	keeperScopeRefusalCall     nativeChildFailure = "keeper-scope-refusal-call"
+	keeperScopeRefusalMissing  nativeChildFailure = "keeper-scope-refusal-missing"
+	keeperScopeRefusalSuccess  nativeChildFailure = "keeper-scope-refusal-success"
+	keeperScopeAdmissionMarker nativeChildFailure = "keeper-scope-admission-marker"
+	keeperGuardScopeCount      nativeChildFailure = "keeper-guard-scope-count"
+	keeperMCPPoll              nativeChildFailure = "keeper-mcp-poll"
+	keeperStdoutBase64         nativeChildFailure = "keeper-stdout-base64"
+	keeperStderrBase64         nativeChildFailure = "keeper-stderr-base64"
+	keeperStdoutBytes          nativeChildFailure = "keeper-stdout-bytes"
+	keeperStderrBytes          nativeChildFailure = "keeper-stderr-bytes"
+	keeperExitCode             nativeChildFailure = "keeper-exit-code"
+	keeperJobError             nativeChildFailure = "keeper-job-error"
+	keeperStdoutOffset         nativeChildFailure = "keeper-stdout-offset"
+	keeperStderrOffset         nativeChildFailure = "keeper-stderr-offset"
+	keeperStdoutTextEmpty      nativeChildFailure = "keeper-stdout-text-empty"
+	keeperStderrTextMismatch   nativeChildFailure = "keeper-stderr-text-mismatch"
+)
+
+func (trace *nativeTerminalTrace) addKeeperHarnessFailureMarkers() {
+	trace.addChildFailureMarkers(
+		keeperForwardedOption, keeperCommandEOF, keeperCommandRead, keeperCommandUnknown,
+		keeperBrokerConnect, keeperMCPServerConnect, keeperMCPClientConnect,
+		keeperMCPCall, keeperMCPResultMissing, keeperMCPToolError, keeperMCPMarshal,
+		keeperMCPConnectionLiteral, keeperMCPAddedLiteral, keeperMCPTextExtract, keeperMCPTextParse,
+		keeperScopeRefusalCount, keeperScopeRefusalCall, keeperScopeRefusalMissing,
+		keeperScopeRefusalSuccess, keeperScopeAdmissionMarker, keeperGuardScopeCount,
+		keeperMCPPoll, keeperStdoutBase64, keeperStderrBase64, keeperStdoutBytes, keeperStderrBytes,
+		keeperExitCode, keeperJobError, keeperStdoutOffset, keeperStderrOffset,
+		keeperStdoutTextEmpty, keeperStderrTextMismatch,
+	)
+}
 
 func TestNativeKeeperHarnessChild(t *testing.T) {
 	if os.Getenv("SSJACK_OWNER_KEEPER_CHILD") != "1" {
@@ -250,7 +305,7 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 	}
 	for _, argument := range os.Args[1:] {
 		if argument == "--no-output-filter" {
-			t.Fatal("root output-filter option was forwarded to the harness")
+			nativeChildFatal(t, keeperForwardedOption, "root output-filter option was forwarded to the harness")
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -262,7 +317,11 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 	for {
 		var command [1]byte
 		if _, err := io.ReadFull(os.Stdin, command[:]); err != nil {
-			t.Fatal("keeper harness did not receive its graceful exit request")
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				nativeChildFatal(t, keeperCommandEOF, "keeper harness did not receive its graceful exit request")
+			} else {
+				nativeChildFatal(t, keeperCommandRead, "keeper harness could not read its fixture command")
+			}
 		}
 		switch command[0] {
 		case 'q':
@@ -276,7 +335,7 @@ func TestNativeKeeperHarnessChild(t *testing.T) {
 			fmt.Fprintln(os.Stdout, "ACTUAL-KEEPER-SSH-SCOPE-REFUSED")
 		case '\r', '\n':
 		default:
-			t.Fatal("keeper harness received an unexpected fixture command")
+			nativeChildFatal(t, keeperCommandUnknown, "keeper harness received an unexpected fixture command")
 		}
 	}
 }
@@ -291,7 +350,7 @@ func TestVaultOutputFilterFullProfile(t *testing.T) {
 	defer clear(private)
 	public, err := ssh.NewPublicKey(private.Public())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("bypass fixture public key setup failed")
 	}
 	server := sshfixture.StartLoopbackSSH(t, public, sshfixture.ConnectPassword, "owner-control")
 	v := vault.NewDirectory()
@@ -299,34 +358,43 @@ func TestVaultOutputFilterFullProfile(t *testing.T) {
 	target := vault.Target{Address: server.Address(), User: "second", Password: []byte(sshfixture.ConnectPassword), HostKeys: []string{string(ssh.MarshalAuthorizedKey(server.HostKey))}, Usage: "both"}
 	serverID, err := v.AddServer("production", "main", target)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("bypass fixture server setup failed")
 	}
 	block, err := ssh.MarshalPrivateKey(private, "synthetic bypass writer refusal")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("bypass fixture private key setup failed")
 	}
 	defer clear(block.Bytes)
 	key := target
 	key.User, key.Password, key.PrivateKey, key.Usage = "first", nil, pem.EncodeToMemory(block), "agent"
 	defer clear(key.PrivateKey)
 	if err := v.SetAccount(serverID, "key-only", key); err != nil {
-		t.Fatal(err)
+		t.Fatal("bypass fixture key account setup failed")
 	}
 	added := target
 	added.User, added.Password, added.Usage = "native-user", []byte(nativeGuardAddedCredential), "agent"
 	if err := v.SetAccount(serverID, "keeper-added", added); err != nil {
-		t.Fatal(err)
+		t.Fatal("bypass fixture added account setup failed")
 	}
 	password := []byte("synthetic native bypass database password")
 	defer clear(password)
 	path := filepath.Join(t.TempDir(), "bypass.ktav")
 	if err := vault.CreateWithRecords(ctx, path, v, password); err != nil {
-		t.Fatal(err)
+		t.Fatalf("bypass database creation failed: class=%s", nativeResultClass(err, "create-error"))
 	}
 	nativeKeeperCycles(t, ctx, path, password, serverID, "production", server, []string{"bypass"})
 	encoded, err := os.ReadFile(path)
-	if err != nil || bytes.Contains(encoded, password) || bytes.Contains(encoded, []byte(sshfixture.ConnectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)) {
-		t.Fatal("output-filter bypass changed encrypted persistence boundaries")
+	if err != nil {
+		t.Fatalf("bypass ciphertext read failed: class=%s bytes=%d", nativeResultClass(err, "read-error"), len(encoded))
+	}
+	if bytes.Contains(encoded, password) {
+		t.Fatalf("bypass ciphertext contains unlock literal: bytes=%d", len(encoded))
+	}
+	if bytes.Contains(encoded, []byte(sshfixture.ConnectPassword)) {
+		t.Fatalf("bypass ciphertext contains connection literal: bytes=%d", len(encoded))
+	}
+	if bytes.Contains(encoded, []byte(nativeGuardAddedCredential)) {
+		t.Fatalf("bypass ciphertext contains added-account literal: bytes=%d", len(encoded))
 	}
 	loaded, err := vault.Load(path, password)
 	if err != nil {
@@ -338,16 +406,33 @@ func TestVaultOutputFilterFullProfile(t *testing.T) {
 func nativeGuardMCPCall(t *testing.T, ctx context.Context, session *mcp.ClientSession, name string, arguments, output any) {
 	t.Helper()
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
-	if err != nil || result == nil || result.IsError {
-		t.Fatal("actual native guard MCP call failed")
+	if err != nil {
+		nativeChildFatal(t, keeperMCPCall, "native guard MCP call failed: tool=%s class=%s", name, nativeResultClass(err, "call-error"))
+	}
+	if result == nil {
+		nativeChildFatal(t, keeperMCPResultMissing, "native guard MCP result missing: tool=%s", name)
+	}
+	if result.IsError {
+		nativeChildFatal(t, keeperMCPToolError, "native guard MCP tool error: tool=%s content=%d", name, len(result.Content))
 	}
 	encoded, err := json.Marshal(result)
-	if err != nil || (os.Getenv("SSJACK_OWNER_GUARD_BYPASS_CHILD") != "1" && (bytes.Contains(encoded, []byte(sshfixture.ConnectPassword)) || bytes.Contains(encoded, []byte(nativeGuardAddedCredential)))) {
-		t.Fatal("actual native MCP result exposed a known credential")
+	if err != nil {
+		nativeChildFatal(t, keeperMCPMarshal, "native guard MCP marshal failed: tool=%s", name)
+	}
+	if os.Getenv("SSJACK_OWNER_GUARD_BYPASS_CHILD") != "1" {
+		if bytes.Contains(encoded, []byte(sshfixture.ConnectPassword)) {
+			nativeChildFatal(t, keeperMCPConnectionLiteral, "native guard MCP result contains connection literal: tool=%s bytes=%d", name, len(encoded))
+		}
+		if bytes.Contains(encoded, []byte(nativeGuardAddedCredential)) {
+			nativeChildFatal(t, keeperMCPAddedLiteral, "native guard MCP result contains added-account literal: tool=%s bytes=%d", name, len(encoded))
+		}
 	}
 	text, err := bridge.ResultText(result)
-	if err != nil || bridge.ParseResult(text, output) != nil {
-		t.Fatal("actual native MCP result is not the plain-text contract")
+	if err != nil {
+		nativeChildFatal(t, keeperMCPTextExtract, "native guard MCP text extraction failed: tool=%s content=%d", name, len(result.Content))
+	}
+	if err := bridge.ParseResult(text, output); err != nil {
+		nativeChildFatal(t, keeperMCPTextParse, "native guard MCP text parse failed: tool=%s bytes=%d", name, len(text))
 	}
 }
 
@@ -355,19 +440,19 @@ func nativeGuardHarnessSession(t *testing.T, ctx context.Context) *mcp.ClientSes
 	t.Helper()
 	connection, err := broker.ConnectBootstrap(ctx, broker.Bootstrap{Session: os.Getenv(broker.EnvSession), Endpoint: os.Getenv(broker.EnvEndpoint), Pin: os.Getenv(broker.EnvPin), Token: os.Getenv(broker.EnvToken)})
 	if err != nil {
-		t.Fatal("actual harness could not authenticate to the keeper broker")
+		nativeChildFatal(t, keeperBrokerConnect, "actual harness could not authenticate to the keeper broker")
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	server, err := bridge.NewServer(connection).Connect(ctx, serverTransport, nil)
 	if err != nil {
-		t.Fatal("actual harness MCP server could not connect")
+		nativeChildFatal(t, keeperMCPServerConnect, "actual harness MCP server could not connect")
 	}
 	t.Cleanup(func() { _ = server.Close() })
 	client := mcp.NewClient(&mcp.Implementation{Name: "native-guard-fixture", Version: "dev"}, nil)
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
-		t.Fatal("actual harness MCP client could not connect")
+		nativeChildFatal(t, keeperMCPClientConnect, "actual harness MCP client could not connect")
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	return session
@@ -380,11 +465,17 @@ func nativeGuardHarnessRefusesChangedScope(t *testing.T, parent context.Context,
 	var targets remote.TargetsOutput
 	nativeGuardMCPCall(t, ctx, session, "remote_targets", map[string]any{}, &targets)
 	if len(targets.Targets) != 1 {
-		t.Fatal("actual harness did not retain its exact SSH scope")
+		nativeChildFatal(t, keeperScopeRefusalCount, "native guard SSH scope count mismatch: got=%d want=1", len(targets.Targets))
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_exec", Arguments: map[string]any{"target": targets.Targets[0], "command": nativeGuardCommand}})
-	if err != nil || result == nil || !result.IsError {
-		t.Fatal("actual harness did not return a scoped admission refusal")
+	if err != nil {
+		nativeChildFatal(t, keeperScopeRefusalCall, "native guard scope refusal call failed: class=%s", nativeResultClass(err, "call-error"))
+	}
+	if result == nil {
+		nativeChildFatal(t, keeperScopeRefusalMissing, "native guard scope refusal result missing")
+	}
+	if !result.IsError {
+		nativeChildFatal(t, keeperScopeRefusalSuccess, "native guard scope refusal unexpectedly succeeded: content=%d", len(result.Content))
 	}
 	foundAdmissionError := false
 	for _, content := range result.Content {
@@ -395,7 +486,7 @@ func nativeGuardHarnessRefusesChangedScope(t *testing.T, parent context.Context,
 		}
 	}
 	if !foundAdmissionError {
-		t.Fatal("actual harness refusal was not the fixed capability admission error")
+		nativeChildFatal(t, keeperScopeAdmissionMarker, "native guard scope refusal admission marker missing: content=%d", len(result.Content))
 	}
 }
 
@@ -406,7 +497,7 @@ func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.
 	var targets remote.TargetsOutput
 	nativeGuardMCPCall(t, ctx, session, "remote_targets", map[string]any{}, &targets)
 	if len(targets.Targets) != 1 {
-		t.Fatal("actual harness did not retain its exact SSH scope")
+		nativeChildFatal(t, keeperGuardScopeCount, "native guard SSH scope count mismatch: got=%d want=1", len(targets.Targets))
 	}
 	command := nativeGuardCommand
 	want := "[REDACTED]|\xff"
@@ -427,23 +518,49 @@ func nativeGuardHarnessCheck(t *testing.T, parent context.Context, session *mcp.
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	var out bridge.ReadOutput
+	polls := 0
 	for {
+		polls++
 		nativeGuardMCPCall(t, ctx, session, "remote_read", map[string]any{"job_id": started.JobID}, &out)
 		if out.Done {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("actual native guarded SSH job did not finish")
+			nativeChildFatal(t, keeperMCPPoll, "native guard MCP poll unfinished: polls=%d class=%s", polls, nativeResultClass(ctx.Err(), "context-error"))
 		case <-ticker.C:
 		}
 	}
-	stdout, first := base64.StdEncoding.DecodeString(out.StdoutBase64)
-	stderr, second := base64.StdEncoding.DecodeString(out.StderrBase64)
-	if first != nil || second != nil || !bytes.Equal(stdout, []byte(want)) || !bytes.Equal(stderr, []byte(stderrWant)) || out.ExitCode != 23 || out.Error != "" || out.StdoutOffset != int64(len(stdout)) || out.StderrOffset != int64(len(stderr)) {
-		t.Fatal("actual native MCP text/base64 capture lost guard coverage or control fields")
+	stdout, err := base64.StdEncoding.DecodeString(out.StdoutBase64)
+	if err != nil {
+		nativeChildFatal(t, keeperStdoutBase64, "native guard MCP stdout base64 invalid: encoded=%d decoded=%d", len(out.StdoutBase64), len(stdout))
 	}
-	if out.Stdout == "" || out.Stderr != textWant {
-		t.Fatal("actual native MCP text representation was not guarded")
+	stderr, err := base64.StdEncoding.DecodeString(out.StderrBase64)
+	if err != nil {
+		nativeChildFatal(t, keeperStderrBase64, "native guard MCP stderr base64 invalid: encoded=%d decoded=%d", len(out.StderrBase64), len(stderr))
+	}
+	if !bytes.Equal(stdout, []byte(want)) {
+		nativeChildFatal(t, keeperStdoutBytes, "native guard MCP stdout bytes mismatch: got=%d want=%d", len(stdout), len(want))
+	}
+	if !bytes.Equal(stderr, []byte(stderrWant)) {
+		nativeChildFatal(t, keeperStderrBytes, "native guard MCP stderr bytes mismatch: got=%d want=%d", len(stderr), len(stderrWant))
+	}
+	if out.ExitCode != 23 {
+		nativeChildFatal(t, keeperExitCode, "native guard MCP exit code mismatch: got=%d want=23", out.ExitCode)
+	}
+	if out.Error != "" {
+		nativeChildFatal(t, keeperJobError, "native guard MCP job reported an error")
+	}
+	if out.StdoutOffset != int64(len(stdout)) {
+		nativeChildFatal(t, keeperStdoutOffset, "native guard MCP stdout offset mismatch: got=%d want=%d", out.StdoutOffset, len(stdout))
+	}
+	if out.StderrOffset != int64(len(stderr)) {
+		nativeChildFatal(t, keeperStderrOffset, "native guard MCP stderr offset mismatch: got=%d want=%d", out.StderrOffset, len(stderr))
+	}
+	if out.Stdout == "" {
+		nativeChildFatal(t, keeperStdoutTextEmpty, "native guard MCP stdout text empty")
+	}
+	if out.Stderr != textWant {
+		nativeChildFatal(t, keeperStderrTextMismatch, "native guard MCP stderr text mismatch: got=%d want=%d", len(out.Stderr), len(textWant))
 	}
 }
