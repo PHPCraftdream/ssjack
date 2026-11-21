@@ -23,3 +23,6 @@
 # Isolated task worktrees and local rush control files.
 /worktrees/
 /.rush/
+
+__pycache__/
+*.pyc
