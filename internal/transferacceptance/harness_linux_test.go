@@ -65,16 +65,22 @@ func scenarioRoundTripDirectoryBasic(t *testing.T) {
 	up := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
 		"target": targetName, "local": "tree", "remote": remote,
 	}))
-	if up.State != "done" || up.Kind != "directory" || up.Files != 2 || up.Dirs != 2 || up.ManifestSHA256 == "" {
-		t.Fatalf("directory upload status = %+v", up)
+	checkStatusState(t, "directory upload", up, "done")
+	checkStatusKind(t, "directory upload", up, "directory")
+	checkStatusCount(t, "directory upload", "files", up.Files, 2)
+	checkStatusCount(t, "directory upload", "dirs", up.Dirs, 2)
+	if up.ManifestSHA256 == "" {
+		t.Fatal("directory upload status manifest_sha256: got absent, want present")
 	}
 	CompareTrees(t, filepath.Join(s.rootDir, "tree"), remote)
 	down := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
 		"target": targetName, "remote": remote, "local": "returned",
 	}))
-	if down.State != "done" || down.Kind != "directory" || down.Files != up.Files || down.Dirs != up.Dirs || down.ManifestSHA256 != up.ManifestSHA256 {
-		t.Fatalf("directory download status = %+v", down)
-	}
+	checkStatusState(t, "directory download", down, "done")
+	checkStatusKind(t, "directory download", down, "directory")
+	checkStatusCount(t, "directory download", "files", down.Files, up.Files)
+	checkStatusCount(t, "directory download", "dirs", down.Dirs, up.Dirs)
+	checkStatusDigest(t, "directory download", "manifest_sha256", down.ManifestSHA256, up.ManifestSHA256)
 	CompareTrees(t, filepath.Join(s.rootDir, "tree"), filepath.Join(s.rootDir, "returned"))
 	AssertNoStaging(t, s.rootDir)
 	AssertNoStaging(t, s.sandbox)

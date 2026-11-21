@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	fixture "github.com/PHPCraftdream/ssjack/internal/transferacceptance/internal/fixture"
@@ -60,8 +61,9 @@ func mkdirAll(t *testing.T, path string) {
 func assertSHA(t *testing.T, payload []byte, got string) {
 	t.Helper()
 	sum := sha256.Sum256(payload)
-	if got != hex.EncodeToString(sum[:]) {
-		t.Fatalf("status sha256 %q does not match the transferred bytes", got)
+	want := hex.EncodeToString(sum[:])
+	if got != want {
+		t.Fatalf("status sha256 does not match transferred bytes: got len=%d short=%s, want len=%d short=%s", len(got), flakediag.Short([]byte(got)), len(want), flakediag.Short([]byte(want)))
 	}
 }
 
@@ -184,8 +186,10 @@ func describe(t *testing.T, path string) string {
 
 func assertMarker(t *testing.T, dir, key string) {
 	t.Helper()
-	if got := string(readFile(t, filepath.Join(dir, "marker"))); got != chunkMarker(key) {
-		t.Fatalf("marker = %q, want %q", got, chunkMarker(key))
+	got := string(readFile(t, filepath.Join(dir, "marker")))
+	want := chunkMarker(key)
+	if got != want {
+		t.Fatalf("marker mismatch: got len=%d short=%s, want len=%d short=%s", len(got), flakediag.Short([]byte(got)), len(want), flakediag.Short([]byte(want)))
 	}
 }
 
@@ -352,7 +356,7 @@ func ScenarioChunkStagingLifecycle(t *testing.T) {
 			t.Fatalf("%s: RemoveChunkStaging = %v, want a foreign-staging exit", tc.name, err)
 		}
 		if after := describe(t, parent); after != before {
-			t.Fatalf("%s: a foreign object was modified:\nbefore:\n%s\nafter:\n%s", tc.name, before, after)
+			t.Fatalf("%s: a foreign object changed", tc.name)
 		}
 	}
 
@@ -746,7 +750,7 @@ func ScenarioChunkGarbageCollection(t *testing.T) {
 	}
 	for _, d := range kept {
 		if got := describe(t, filepath.Join(parent, d)); got != before[d] {
-			t.Fatalf("%q was modified or removed:\nbefore: %s\nafter: %s", d, before[d], got)
+			t.Fatal("kept staging changed")
 		}
 	}
 	if n, err := g.remote.CollectStaging(ctx, parent, excludedKey); err != nil || n != 0 {

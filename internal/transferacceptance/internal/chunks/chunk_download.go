@@ -47,6 +47,7 @@ const (
 type dlHookRemote struct {
 	transferremote.ChunkRemote
 
+	diag     *fixture.RigDiagnostics
 	mu       sync.Mutex
 	streams  int
 	stats    int
@@ -68,10 +69,13 @@ func (h *dlHookRemote) ReadFile(ctx context.Context, path string, dst io.Writer)
 	h.streams++
 	n, hook := h.streams, h.onStream
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigRead, Attempt: n})
 	if hook != nil {
 		hook(n)
 	}
-	return h.ChunkRemote.ReadFile(ctx, path, dst)
+	got, err := h.ChunkRemote.ReadFile(ctx, path, dst)
+	h.diag.Complete(call, got, false, err)
+	return got, err
 }
 
 func (h *dlHookRemote) StatSource(ctx context.Context, path string) (transferremote.SourceStat, error) {
@@ -79,10 +83,13 @@ func (h *dlHookRemote) StatSource(ctx context.Context, path string) (transferrem
 	h.stats++
 	n, hook := h.stats, h.onStat
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigStat, Attempt: n})
 	if hook != nil {
 		hook(n)
 	}
-	return h.ChunkRemote.StatSource(ctx, path)
+	got, err := h.ChunkRemote.StatSource(ctx, path)
+	h.diag.Complete(call, got.Size, false, err)
+	return got, err
 }
 
 func (h *dlHookRemote) ReadRange(ctx context.Context, path string, part transferlink.Range, grid, fileSize int64, dst io.Writer) (int64, error) {
@@ -90,6 +97,7 @@ func (h *dlHookRemote) ReadRange(ctx context.Context, path string, part transfer
 	h.calls = append(h.calls, dlCall{part: part, grid: grid, fileSize: fileSize})
 	n, hook := len(h.calls), h.onRange
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigRange, Attempt: n, Offset: part.Off, Length: part.Len, Grid: grid, Size: fileSize})
 	if hook != nil {
 		hook(n, part)
 	}
@@ -99,6 +107,7 @@ func (h *dlHookRemote) ReadRange(ctx context.Context, path string, part transfer
 		h.done += part.Len
 		h.mu.Unlock()
 	}
+	h.diag.Complete(call, got, false, err)
 	return got, err
 }
 
@@ -146,7 +155,7 @@ type downloadRig struct {
 func newDownloadRig(t *testing.T) *downloadRig {
 	t.Helper()
 	up := newUploadRig(t)
-	return &downloadRig{uploadRig: up, hook: &dlHookRemote{ChunkRemote: up.remote}}
+	return &downloadRig{uploadRig: up, hook: &dlHookRemote{ChunkRemote: up.remote, diag: up.remote.diag}}
 }
 
 // engine returns an engine with an empty link profile: a new keeper process.
@@ -178,29 +187,22 @@ func (r *downloadRig) localDir(name string) string {
 func (r *downloadRig) download(engine *transferengine.Engine, remotePath, local string) (transferengine.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uploadDeadline)
 	defer cancel()
+	r.hook.diag.Start(fixture.RigDownload)
 	res, err := engine.Download(ctx, r.root, remotePath, local, false, nil)
-	// A remote command of a cut connection may still be finishing; wait for it
-	// before anyone looks at the sandbox.
-	r.server.WaitIdle(r.t)
+	r.hook.diag.Drain(r.t, r.server, res, err)
 	return res, err
 }
 
 // cutNextDown cuts the next connection after exactly n server-to-client bytes.
 func (r *downloadRig) cutNextDown(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.Conns(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.DropAfterBytes(faultproxy.ServerToClient, n)},
-	})
+	r.hook.diag.ArmProxy(r.t, faultproxy.ServerToClient, n, false, false)
 }
 
 // cutFromDown cuts every connection from the next one on after n
 // server-to-client bytes; control sessions carry less than that and pass,
 // payload sessions do not.
 func (r *downloadRig) cutFromDown(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.FromConn(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.DropAfterBytes(faultproxy.ServerToClient, n)},
-	})
+	r.hook.diag.ArmProxy(r.t, faultproxy.ServerToClient, n, true, false)
 }
 
 // assertDownloaded requires the destination to hold exactly payload and the
@@ -238,27 +240,26 @@ func (r *downloadRig) strandDownload(remotePath, local string) string {
 	r.hook.reset()
 	r.clearFaults()
 	var failure *transfercore.Error
-	if !errors.As(err, &failure) || failure.Class != transfercore.ClassLinkUnstable || failure.Message != transfercore.MsgLinkUnstable {
-		r.t.Fatalf("stranded download = %+v, %v; want link_unstable", res, err)
-	}
-	if res.Mode != transferengine.ModeChunked || res.ChunksDone < 1 || res.Attempts < 1+1+transferlink.MaxNoProgress {
-		r.t.Fatalf("stranded result = %+v", res)
-	}
+	require(r.t, errors.As(err, &failure), "expected a typed error for the stranded download")
+	require(r.t, failure.Class == transfercore.ClassLinkUnstable, "stranded download must report link_unstable")
+	require(r.t, failure.Message == transfercore.MsgLinkUnstable, "stranded download must return the standard link_unstable message")
+	require(r.t, res.Mode == transferengine.ModeChunked, "stranded download must be in chunked mode")
+	require(r.t, res.ChunksDone >= 1, "stranded download must complete at least one chunk")
+	require(r.t, res.Attempts >= 1+1+transferlink.MaxNoProgress, "expected stream, successful range, and a full no-progress retry budget")
 	dest := filepath.Join(r.rootDir, filepath.FromSlash(local))
 	if exists(dest) {
 		r.t.Fatal("a stranded download published the destination")
 	}
 	staging := findStaging(r.t, filepath.Dir(dest))
-	if info, err := os.Stat(staging); err != nil || info.Mode().Perm() != 0o700 {
-		r.t.Fatalf("stranded staging is not a private directory: %v %v", info, err)
-	}
+	info, statErr := os.Stat(staging)
+	require(r.t, statErr == nil, "could not stat stranded staging")
+	require(r.t, info.Mode().Perm() == 0o700, "stranded staging permissions must be 0700")
 	if got := string(readFile(r.t, filepath.Join(staging, "marker"))); !strings.HasPrefix(got, "SSJACK-STAGING 1 ") {
-		r.t.Fatalf("stranded staging has no marker: %q", got)
+		r.t.Fatal("stranded staging marker lacks the expected prefix")
 	}
 	parts := stagedParts(r.t, staging)
-	if len(parts) < 1 || int64(res.ChunksDone) != int64(len(parts)) {
-		r.t.Fatalf("stranded staging holds %v, result says %d parts", parts, res.ChunksDone)
-	}
+	require(r.t, len(parts) >= 1, "stranded staging must retain at least one part")
+	require(r.t, int64(res.ChunksDone) == int64(len(parts)), "completed chunk count must match retained part count")
 	return staging
 }
 
@@ -279,31 +280,30 @@ func ScenarioChunkDownloadStreamDrop(t *testing.T) {
 
 	res, err := rig.download(rig.engine(), src, "got/blob.bin")
 	if err != nil {
-		t.Fatalf("download after a dropped stream: %v", err)
+		t.Fatal("download failed after the stream drop")
 	}
 	assertDownloaded(t, res, dest, payload)
-	if res.Mode != transferengine.ModeChunked || res.ChunksDone < 2 || res.ChunksTotal != res.ChunksDone || res.Attempts < 1+res.ChunksDone+1 {
-		t.Fatalf("chunked telemetry = %+v", res)
-	}
-	if res.BytesPerSecond <= 0 || res.ChunkBytes <= 0 {
-		t.Fatalf("telemetry has no speed or chunk size: %+v", res)
-	}
+	require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the stream drop")
+	require(t, res.ChunksDone >= 2, "expected at least two completed chunks")
+	require(t, res.ChunksTotal == res.ChunksDone, "total chunk count must equal completed chunks")
+	require(t, res.Attempts >= 1+res.ChunksDone+1, "attempt count must cover stream, completed chunks, and assembly")
+	require(t, res.BytesPerSecond > 0, "expected positive throughput")
+	require(t, res.ChunkBytes > 0, "expected a positive chunk size")
 	assertOnlyEntries(t, parent, "blob.bin")
 	rig.assertNoStaging(parent)
 	assertSourceUntouched(t, src, payload)
 	streams, stats, ranges := rig.hook.counts()
-	if streams != 1 || ranges != res.ChunksDone || stats != ranges+2 {
-		t.Fatalf("sessions: %d streams, %d source looks, %d range reads; result %+v", streams, stats, ranges, res)
-	}
+	require(t, streams == 1, "expected exactly one stream session")
+	require(t, ranges == res.ChunksDone, "range read count must match completed chunks")
+	require(t, stats == ranges+2, "source stat count must cover every range, preflight, and the final look")
 	// The first part starts at offset 0 with a whole block: dd.
 	calls := rig.hook.rangeCalls()
-	if calls[0].part.Off != 0 || !calls[0].usesDD() {
-		t.Fatalf("first range read = %+v, want a whole block at offset 0", calls[0])
-	}
+	require(t, len(calls) > 0, "expected at least one range read after the stream drop")
+	require(t, calls[0].part.Off == 0, "first range must start at offset zero")
+	require(t, calls[0].usesDD(), "first range must use the dd grid primitive")
 	cuts := cutConns(rig.proxy.Stats())
-	if len(cuts) != 1 || cuts[0].ServerToClient != streamCutDown {
-		t.Fatalf("cut connections = %+v, want exactly one cut at %d bytes server to client", cuts, streamCutDown)
-	}
+	require(t, len(cuts) == 1, "expected exactly one proxy byte cut")
+	require(t, cuts[0].ServerToClient == streamCutDown, "cut must match the server-to-client stream threshold")
 }
 
 // ScenarioChunkDownloadDropMidChunk cuts the connection of the second range
@@ -328,23 +328,23 @@ func ScenarioChunkDownloadDropMidChunk(t *testing.T) {
 
 	res, err := rig.download(rig.engine(), src, "got/blob.bin")
 	if err != nil {
-		t.Fatalf("download with a part cut in the middle: %v", err)
+		t.Fatal("download failed after the range drop")
 	}
 	assertDownloaded(t, res, dest, payload)
 	assertOnlyEntries(t, parent, "blob.bin")
 	rig.assertNoStaging(parent)
 	assertSourceUntouched(t, src, payload)
 	calls := rig.hook.rangeCalls()
-	if len(calls) < 3 || calls[1].part.Off != calls[0].part.End() || calls[2].part.Off != calls[1].part.Off {
-		t.Fatalf("range reads = %v, want the cut part read again from its own offset", calls)
-	}
+	require(t, len(calls) >= 3, "expected at least three range reads")
+	require(t, calls[1].part.Off == calls[0].part.End(), "second range must begin at the end of the first")
+	require(t, calls[2].part.Off == calls[1].part.Off, "third range must retry the second range's offset")
 	if res.ChunksDone != len(calls)-1 {
 		t.Fatalf("%d parts done after %d range reads, want exactly one lost", res.ChunksDone, len(calls))
 	}
 	cuts := cutConns(rig.proxy.Stats())
-	if len(cuts) != 2 || cuts[0].ServerToClient != streamCutDown || cuts[1].ServerToClient != partCutDown {
-		t.Fatalf("cut connections = %+v, want the stream at %d and a part at %d", cuts, streamCutDown, partCutDown)
-	}
+	require(t, len(cuts) == 2, "expected exactly two proxy byte cuts")
+	require(t, cuts[0].ServerToClient == streamCutDown, "first cut must match the server-to-client stream threshold")
+	require(t, cuts[1].ServerToClient == partCutDown, "second cut must match the server-to-client part threshold")
 }
 
 // ScenarioChunkDownloadDropDuringAssembly cuts the transport of the last look
@@ -378,7 +378,7 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 
 		res, err := rig.download(rig.engine(), src, "got/blob.bin")
 		if err != nil {
-			t.Fatalf("download with one assembly drop: %v", err)
+			t.Fatal("download failed after one assembly drop")
 		}
 		assertDownloaded(t, res, dest, payload)
 		assertOnlyEntries(t, parent, "blob.bin")
@@ -390,9 +390,8 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 		if stats != ranges+3 {
 			t.Fatalf("%d source looks for %d range reads, want the preflight, one per part, the dropped look and its retry", stats, ranges)
 		}
-		if res.Mode != transferengine.ModeChunked || res.Attempts != 1+ranges+2 {
-			t.Fatalf("result = %+v, want the stream, %d parts and two assembly attempts", res, ranges)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "assembly retry must report chunked mode")
+		require(t, res.Attempts == 1+ranges+2, "expected one stream attempt, one per range, and two assembly attempts")
 	})
 	t.Run("every drop then a new engine", func(t *testing.T) {
 		rig := newDownloadRig(t)
@@ -418,28 +417,27 @@ func ScenarioChunkDownloadDropDuringAssembly(t *testing.T) {
 		if stats != ranges+1+transferlink.MaxNoProgress {
 			t.Fatalf("%d source looks for %d range reads, want the preflight, one per part and %d dropped looks", stats, ranges, transferlink.MaxNoProgress)
 		}
-		if res.Mode != transferengine.ModeChunked || res.Bytes != int64(len(payload)) {
-			t.Fatalf("stranded result = %+v, want every byte verified in parts", res)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "stranded assembly must report chunked mode")
+		require(t, res.Bytes == int64(len(payload)), "stranded assembly must retain every verified payload byte")
 		if exists(dest) {
 			t.Fatal("a failed assembly published the destination")
 		}
 		staging := findStaging(t, parent)
 		parts := stagedParts(t, staging)
 		if err := transferlink.ValidateTiling(int64(len(payload)), parts); err != nil {
-			t.Fatalf("the parts did not stay intact: %v", err)
+			t.Fatal("retained parts no longer tile the payload")
 		}
 
 		rig.hook.reset()
 		res, err = rig.download(rig.engine(), src, "got/blob.bin")
 		if err != nil {
-			t.Fatalf("second call after the assembly drops: %v", err)
+			t.Fatal("second download failed after the assembly drops")
 		}
 		assertDownloaded(t, res, dest, payload)
 		streams, stats, sent := rig.hook.counts()
-		if streams != 0 || sent != 0 || stats != 2 {
-			t.Fatalf("second call ran %d streams, %d range reads, %d source looks; want only the preflight and the final look", streams, sent, stats)
-		}
+		require(t, streams == 0, "assembly retry must not open a stream")
+		require(t, sent == 0, "assembly retry must not reread ranges")
+		require(t, stats == 2, "assembly retry must stat the source exactly twice")
 		if exists(staging) {
 			t.Fatal("the second call left the staging behind")
 		}
@@ -466,23 +464,20 @@ func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 
 		res, err := rig.download(rig.engine(), src, "got/blob.bin")
 		if err != nil {
-			t.Fatalf("resume by a new engine: %v", err)
+			t.Fatal("download resume by a new engine failed")
 		}
 		assertDownloaded(t, res, dest, payload)
 		streams, _, ranges := rig.hook.counts()
-		if streams != 0 || ranges == 0 {
-			t.Fatalf("resume ran %d streams, %d range reads", streams, ranges)
-		}
+		require(t, streams == 0, "resume must not open a stream")
+		require(t, ranges != 0, "resume must read at least one range")
 		gaps, err := transferlink.Gaps(int64(len(payload)), before)
-		if err != nil || len(gaps) == 0 {
-			t.Fatalf("gaps of the stranded parts: %v, %v", gaps, err)
-		}
+		require(t, err == nil, "could not compute gaps in stranded parts")
+		require(t, len(gaps) != 0, "stranded parts must have at least one gap")
 		if first := rig.hook.rangeCalls()[0]; first.part.Off != gaps[0].Off {
 			t.Fatalf("resume started at %d, want the first gap at %d", first.part.Off, gaps[0].Off)
 		}
-		if res.Mode != transferengine.ModeChunked || res.ChunksDone < len(before) {
-			t.Fatalf("resumed result = %+v", res)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "resumed download must report chunked mode")
+		require(t, res.ChunksDone >= len(before), "completed chunk count must cover retained parts")
 		if exists(staging) {
 			t.Fatal("the resumed download left its staging behind")
 		}
@@ -506,9 +501,8 @@ func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 		key := transferremote.StagingKey(targetName, src, "got/blob.bin",
 			strconv.FormatInt(int64(len(payload)), 10), strconv.FormatInt(info.ModTime().Unix(), 10))
 		staging, state, err := rig.root.OpenChunkStaging("got/blob.bin", key, sha256.Sum256(payload), false, true)
-		if err != nil || state != transferlocal.ChunkCreated {
-			t.Fatalf("OpenChunkStaging = %v, %v", state, err)
-		}
+		require(t, err == nil, "opening chunk staging failed")
+		require(t, state == transferlocal.ChunkCreated, "expected newly created chunk staging")
 		for _, p := range []transferlink.Range{{Off: 0, Len: 256 << 10}, {Off: 256 << 10, Len: 100 << 10}} {
 			w, err := staging.CreatePart(p)
 			if err != nil {
@@ -524,17 +518,16 @@ func ScenarioChunkDownloadResumeByNewEngine(t *testing.T) {
 
 		res, err := rig.download(rig.engine(), src, "got/blob.bin")
 		if err != nil {
-			t.Fatalf("resume from parts off the grid: %v", err)
+			t.Fatal("download resume from off-grid parts failed")
 		}
 		assertDownloaded(t, res, dest, payload)
 		streams, _, _ := rig.hook.counts()
 		calls := rig.hook.rangeCalls()
-		if streams != 0 || len(calls) == 0 {
-			t.Fatalf("resume ran %d streams and %d range reads", streams, len(calls))
-		}
-		if first := calls[0]; first.part.Off != 356<<10 || first.usesDD() {
-			t.Fatalf("first range read = %+v, want one off the grid, read with tail and head", first)
-		}
+		require(t, streams == 0, "off-grid resume must not open a stream")
+		require(t, len(calls) != 0, "off-grid resume must read at least one range")
+		first := calls[0]
+		require(t, first.part.Off == 356<<10, "first off-grid range must start at 356 KiB")
+		require(t, !first.usesDD(), "first off-grid range must not use dd")
 		assertOnlyEntries(t, parent, "blob.bin")
 		rig.assertNoStaging(parent)
 		assertSourceUntouched(t, src, payload)
@@ -630,9 +623,8 @@ func ScenarioChunkDownloadStaleStagingCollected(t *testing.T) {
 		t.Helper()
 		key := transferremote.StagingKey("download-gc", label)
 		staging, state, err := rig.root.OpenChunkStaging("gc parent/small.bin", key, sum, false, true)
-		if err != nil || state != transferlocal.ChunkCreated {
-			t.Fatalf("OpenChunkStaging(%s) = %v, %v", label, state, err)
-		}
+		require(t, err == nil, "opening stale-staging test directory failed")
+		require(t, state == transferlocal.ChunkCreated, "expected newly created stale-staging test directory")
 		_ = staging
 		dir := filepath.Join(parent, ".ssjack-transfer-"+key)
 		marker := filepath.Join(dir, "marker")
@@ -703,15 +695,15 @@ func ScenarioChunkDownloadStaleStagingCollected(t *testing.T) {
 	}
 	for _, d := range kept {
 		if got := describe(t, d); got != before[d] {
-			t.Fatalf("%q was modified or removed:\nbefore: %s\nafter: %s", filepath.Base(d), before[d], got)
+			t.Fatal("kept staging changed")
 		}
 	}
 	if want := len(kept) + 1; len(entryNames(t, parent)) != want {
 		t.Fatalf("parent holds %q, want the download and %d kept directories", entryNames(t, parent), len(kept))
 	}
-	if streams, _, ranges := rig.hook.counts(); streams != 1 || ranges != 0 {
-		t.Fatalf("a small download ran %d streams and %d range reads, want one whole stream", streams, ranges)
-	}
+	streams, _, ranges := rig.hook.counts()
+	require(t, streams == 1, "small download must open exactly one stream")
+	require(t, ranges == 0, "small download must not read any ranges")
 }
 
 // The stall scenario of the chunked download is the mirror of the upload one
@@ -733,10 +725,7 @@ func (r *downloadRig) stallEngine(limit time.Duration) *transferengine.Engine {
 // stallNextDown freezes the next connection after exactly n server-to-client
 // bytes: the socket stays open and nothing more crosses it.
 func (r *downloadRig) stallNextDown(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.Conns(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.StallAfterBytes(faultproxy.ServerToClient, n)},
-	})
+	r.hook.diag.ArmProxy(r.t, faultproxy.ServerToClient, n, false, true)
 }
 
 // ScenarioChunkDownloadStallDetectedAndResumed freezes a connection mid-payload
@@ -761,27 +750,28 @@ func ScenarioChunkDownloadStallDetectedAndResumed(t *testing.T) {
 		res, err := rig.download(rig.stallEngine(stallScenarioLimit), src, "got/blob.bin")
 		elapsed := time.Since(start)
 		if err != nil {
-			t.Fatalf("download after a stalled stream: %v", err)
+			t.Fatal("download failed after the stream stall")
 		}
 		assertDownloaded(t, res, dest, payload)
 		if elapsed < stallScenarioLimit {
 			t.Fatalf("download finished in %s, before the %s inactivity limit could have fired", elapsed, stallScenarioLimit)
 		}
-		if res.Mode != transferengine.ModeChunked || res.ChunksDone < 2 || res.ChunksTotal != res.ChunksDone || res.Attempts < 1+res.ChunksDone+1 {
-			t.Fatalf("chunked telemetry = %+v", res)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the stream stall")
+		require(t, res.ChunksDone >= 2, "expected at least two completed chunks")
+		require(t, res.ChunksTotal == res.ChunksDone, "total chunk count must equal completed chunks")
+		require(t, res.Attempts >= 1+res.ChunksDone+1, "attempt count must cover stream, completed chunks, and assembly")
 		assertOnlyEntries(t, parent, "blob.bin")
 		rig.assertNoStaging(parent)
 		assertSourceUntouched(t, src, payload)
 		streams, stats, ranges := rig.hook.counts()
-		if streams != 1 || ranges != res.ChunksDone || stats != ranges+2 {
-			t.Fatalf("sessions: %d streams, %d source looks, %d range reads; result %+v", streams, stats, ranges, res)
-		}
+		require(t, streams == 1, "expected exactly one stream session")
+		require(t, ranges == res.ChunksDone, "range read count must match completed chunks")
+		require(t, stats == ranges+2, "source stat count must cover every range, preflight, and the final look")
 		proxyStats := rig.proxy.Stats()
 		stalled := stalledConns(proxyStats)
-		if len(stalled) != 1 || stalled[0].ServerToClient != streamCutDown || proxyStats.Dropped != 0 {
-			t.Fatalf("proxy stats = %+v, want exactly one connection frozen at %d bytes and none cut", proxyStats, streamCutDown)
-		}
+		require(t, len(stalled) == 1, "expected exactly one stalled proxy connection")
+		require(t, stalled[0].ServerToClient == streamCutDown, "stall must match the server-to-client stream threshold")
+		require(t, proxyStats.Dropped == 0, "expected no proxy drops during the stream stall")
 	})
 	t.Run("stalled part", func(t *testing.T) {
 		rig := newDownloadRig(t)
@@ -804,7 +794,7 @@ func ScenarioChunkDownloadStallDetectedAndResumed(t *testing.T) {
 		res, err := rig.download(rig.stallEngine(stallScenarioLimit), src, "got/blob.bin")
 		elapsed := time.Since(start)
 		if err != nil {
-			t.Fatalf("download with a stalled part: %v", err)
+			t.Fatal("download failed after the range stall")
 		}
 		assertDownloaded(t, res, dest, payload)
 		if elapsed < stallScenarioLimit {
@@ -814,20 +804,17 @@ func ScenarioChunkDownloadStallDetectedAndResumed(t *testing.T) {
 		rig.assertNoStaging(parent)
 		assertSourceUntouched(t, src, payload)
 		calls := rig.hook.rangeCalls()
-		if len(calls) < 3 || calls[1].part.Off != calls[0].part.End() || calls[2].part.Off != calls[1].part.Off {
-			t.Fatalf("range reads = %v, want the stalled part read again from its own offset", calls)
-		}
-		if res.Mode != transferengine.ModeChunked || res.ChunksDone != len(calls)-1 {
-			t.Fatalf("%d parts done after %d range reads, want exactly the stalled one lost (%+v)", res.ChunksDone, len(calls), res)
-		}
+		require(t, len(calls) >= 3, "expected at least three range reads")
+		require(t, calls[1].part.Off == calls[0].part.End(), "second range must begin at the end of the first")
+		require(t, calls[2].part.Off == calls[1].part.Off, "third range must retry the second range's offset")
+		require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the range stall")
+		require(t, res.ChunksDone == len(calls)-1, "completed chunks must exclude exactly one stalled range read")
 		proxyStats := rig.proxy.Stats()
 		stalled := stalledConns(proxyStats)
-		if len(stalled) != 1 || stalled[0].ServerToClient != partCutDown {
-			t.Fatalf("proxy stats = %+v, want exactly one part connection frozen at %d bytes", proxyStats, partCutDown)
-		}
+		require(t, len(stalled) == 1, "expected exactly one stalled proxy connection")
+		require(t, stalled[0].ServerToClient == partCutDown, "stall must match the server-to-client part threshold")
 		cuts := cutConns(proxyStats)
-		if len(cuts) != 1 || cuts[0].ServerToClient != streamCutDown {
-			t.Fatalf("cut connections = %+v, want only the stream, cut at %d bytes", cuts, streamCutDown)
-		}
+		require(t, len(cuts) == 1, "expected exactly one proxy byte cut")
+		require(t, cuts[0].ServerToClient == streamCutDown, "cut must match the server-to-client stream threshold")
 	})
 }

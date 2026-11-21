@@ -30,18 +30,25 @@ type ExecServer struct {
 	client   ssh.Signer
 	wg       sync.WaitGroup
 
-	mu           sync.Mutex
-	conns        map[net.Conn]struct{}
-	stopped      bool
-	holds        map[string]chan struct{}
-	entered      []string
-	seen         chan string
-	kill         injection
-	corrupt      injection
-	password     string
-	diagnostics  []*execDiagnostic
-	droppedExecs int
-	connsChanged chan struct{} // closed and replaced whenever a connection ends
+	mu              sync.Mutex
+	conns           map[net.Conn]struct{}
+	stopped         bool
+	holds           map[string]chan struct{}
+	entered         []string // Full commands are retained only for WaitEntered substring matching.
+	seen            chan struct{}
+	kill            injection
+	corrupt         injection
+	password        string
+	startedAt       time.Time
+	reportOnce      sync.Once
+	diagnostics     [execDiagnosticLimit]*execDiagnostic
+	totalExecs      uint64
+	activeExecs     int
+	events          [fixtureEventLimit]fixtureEvent
+	totalEvents     uint64
+	lastEnteredWait waitDiagnostic
+	lastIdleWait    waitDiagnostic
+	connsChanged    chan struct{} // closed and replaced whenever a connection ends
 }
 
 // injection describes one fault and the command substring that arms it.
@@ -88,7 +95,8 @@ func StartExecServer(t *testing.T, sandbox string, env []string) *ExecServer {
 		hostKey: host.PublicKey(), client: client,
 		conns:        make(map[net.Conn]struct{}),
 		holds:        make(map[string]chan struct{}),
-		seen:         make(chan string, 64),
+		seen:         make(chan struct{}),
+		startedAt:    time.Now(),
 		connsChanged: make(chan struct{}),
 	}
 	server.wg.Add(1)
@@ -102,13 +110,8 @@ func StartExecServer(t *testing.T, sandbox string, env []string) *ExecServer {
 		return nil, errors.New("synthetic password refused")
 	}
 	go server.accept(config)
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		server.logDiagnostics(t)
-	})
 	t.Cleanup(server.Stop)
+	server.RegisterFailureDiagnostics(t)
 	return server
 }
 
@@ -128,6 +131,7 @@ func (s *ExecServer) ArmHold(match string) chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.holds[match] = gate
+	s.eventLocked(fixtureEvent{kind: "hold-arm", op: commandOperation(match), direction: "none"})
 	return gate
 }
 
@@ -135,6 +139,7 @@ func (s *ExecServer) ArmHold(match string) chan struct{} {
 func (s *ExecServer) Release() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.eventLocked(fixtureEvent{kind: "release", op: "other", direction: "none", seen: int64(len(s.holds))})
 	for match, gate := range s.holds {
 		close(gate)
 		delete(s.holds, match)
@@ -147,6 +152,7 @@ func (s *ExecServer) ArmKill(match string, amount int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.kill = injection{armed: true, match: match, amount: amount}
+	s.eventLocked(fixtureEvent{kind: "kill-arm", op: commandOperation(match), direction: "stdin-or-stdout", threshold: amount})
 }
 
 // ArmCorrupt flips one bit at offset amount of the stdin stream of every
@@ -155,88 +161,55 @@ func (s *ExecServer) ArmCorrupt(match string, amount int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.corrupt = injection{armed: true, match: match, amount: amount}
+	s.eventLocked(fixtureEvent{kind: "corrupt-arm", op: commandOperation(match), direction: "stdin", threshold: amount})
 }
+
+// WaitBudget is the fixture's budget for event-driven waits.
+const WaitBudget = 45 * time.Second
 
 // WaitEntered waits until an exec whose command contains match was accepted.
 func (s *ExecServer) WaitEntered(t *testing.T, match string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		s.mu.Lock()
-		found := false
+	op := commandOperation(match)
+	count, ok := s.waitCondition(&s.lastEnteredWait, op, func() (int, bool, <-chan struct{}) {
 		for _, command := range s.entered {
 			if strings.Contains(command, match) {
-				found = true
-				break
+				return len(s.entered), true, s.seen
 			}
 		}
+		return len(s.entered), false, s.seen
+	})
+	if !ok {
+		t.Fatalf("exec server did not accept matching exec: op=%s accepted=%d budget=%s", op, count, WaitBudget)
+	}
+}
+
+func (s *ExecServer) waitCondition(last *waitDiagnostic, op string, check func() (int, bool, <-chan struct{})) (int, bool) {
+	start := time.Since(s.startedAt)
+	deadline := time.Now().Add(WaitBudget)
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	timedOut := false
+	for {
+		s.mu.Lock()
+		count, ready, changed := check()
+		timedOut = timedOut || !time.Now().Before(deadline)
+		state := "waiting"
+		if ready {
+			state = "satisfied"
+		} else if timedOut {
+			state = "timeout"
+		}
+		*last = waitDiagnostic{start: start, last: time.Since(s.startedAt), op: op, state: state, count: count}
 		s.mu.Unlock()
-		if found {
-			return
+		if ready || timedOut {
+			return count, ready
 		}
 		select {
-		case <-s.seen:
-		case <-time.After(time.Until(deadline)):
-			t.Fatalf("exec server never accepted a command containing %q", match)
+		case <-changed:
+		case <-timer.C:
+			timedOut = true
 		}
-	}
-}
-
-func (s *ExecServer) logDiagnostics(t *testing.T) {
-	t.Helper()
-	s.mu.Lock()
-	records := make([]execDiagnosticSnapshot, 0, len(s.diagnostics))
-	for _, record := range s.diagnostics {
-		records = append(records, execDiagnosticSnapshot{
-			script: append([]byte(nil), record.script...),
-			stdout: record.stdout.snapshot(),
-			stderr: record.stderr.snapshot(),
-			exit:   record.exit,
-		})
-	}
-	dropped := s.droppedExecs
-	s.mu.Unlock()
-	for i, record := range records {
-		t.Log(formatExecDiagnostic(i+1, record))
-	}
-	if dropped > 0 {
-		t.Logf("remote exec diagnostics dropped %d records (limit %d)", dropped, execDiagnosticLimit)
-	}
-}
-
-func (s *ExecServer) recordExec(command string) *execDiagnostic {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.diagnostics) >= execDiagnosticLimit {
-		s.droppedExecs++
-		return nil
-	}
-	record := &execDiagnostic{
-		script: append([]byte(nil), command[:min(len(command), execDiagnosticScriptLimit)]...),
-		stdout: newDiagnosticBuffer(execDiagnosticOutputLimit),
-		stderr: newDiagnosticBuffer(execDiagnosticOutputLimit),
-		exit:   111,
-	}
-	s.diagnostics = append(s.diagnostics, record)
-	return record
-}
-
-func (s *ExecServer) finishExec(record *execDiagnostic, status int) {
-	if record == nil {
-		return
-	}
-	s.mu.Lock()
-	record.exit = status
-	s.mu.Unlock()
-}
-
-func (s *ExecServer) note(command string) {
-	s.mu.Lock()
-	s.entered = append(s.entered, command)
-	s.mu.Unlock()
-	select {
-	case s.seen <- command:
-	default:
 	}
 }
 
@@ -295,18 +268,10 @@ func (s *ExecServer) SetPassword(password string) {
 // sandbox.
 func (s *ExecServer) WaitIdle(t *testing.T) {
 	t.Helper()
-	deadline := time.After(30 * time.Second)
-	for {
-		s.mu.Lock()
-		active, changed := len(s.conns), s.connsChanged
-		s.mu.Unlock()
-		if active == 0 {
-			return
-		}
-		select {
-		case <-changed:
-		case <-deadline:
-			t.Fatalf("exec server still serves %d connections", active)
-		}
+	active, ok := s.waitCondition(&s.lastIdleWait, "idle", func() (int, bool, <-chan struct{}) {
+		return len(s.conns), len(s.conns) == 0, s.connsChanged
+	})
+	if !ok {
+		t.Fatalf("exec server did not become idle: active-conns=%d budget=%s", active, WaitBudget)
 	}
 }

@@ -30,8 +30,11 @@ func scenarioFailureKilledMidStream(t *testing.T) {
 	out := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
 		"target": targetName, "local": "big/blob.bin", "remote": s.sandbox + "/kill-midstream/blob.bin",
 	}))
-	if out.State != "failed" || out.ErrorClass != string(transfercore.ClassRemoteFailed) {
-		t.Fatalf("killed upload status = %+v", out)
+	if out.State != "failed" {
+		t.Fatal("killed upload did not reach the failed state")
+	}
+	if out.ErrorClass != string(transfercore.ClassRemoteFailed) {
+		t.Fatal("killed upload did not report remote_failed")
 	}
 	if _, err := os.Stat(s.sandbox + "/kill-midstream/blob.bin"); !os.IsNotExist(err) {
 		t.Fatal("killed upload published a destination")
@@ -41,8 +44,11 @@ func scenarioFailureKilledMidStream(t *testing.T) {
 	down := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
 		"target": targetName, "remote": s.sandbox + "/kill-dl/f.bin", "local": "big/came-back.bin",
 	}))
-	if down.State != "failed" || down.ErrorClass != string(transfercore.ClassRemoteFailed) {
-		t.Fatalf("killed download status = %+v", down)
+	if down.State != "failed" {
+		t.Fatal("killed download did not reach the failed state")
+	}
+	if down.ErrorClass != string(transfercore.ClassRemoteFailed) {
+		t.Fatal("killed download did not report remote_failed")
 	}
 	if _, err := os.Stat(filepath.Join(s.rootDir, "big", "came-back.bin")); !os.IsNotExist(err) {
 		t.Fatal("killed download published a destination")
@@ -62,8 +68,11 @@ func scenarioFailureCorruption(t *testing.T) {
 	out := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
 		"target": targetName, "local": "blob.bin", "remote": s.sandbox + "/in/blob.bin",
 	}))
-	if out.State != "failed" || out.ErrorClass != string(transfercore.ClassIntegrity) {
-		t.Fatalf("corrupted upload status = %+v", out)
+	if out.State != "failed" {
+		t.Fatal("corrupted upload did not reach the failed state")
+	}
+	if out.ErrorClass != string(transfercore.ClassIntegrity) {
+		t.Fatal("corrupted upload did not report integrity")
 	}
 	if _, err := os.Stat(s.sandbox + "/in/blob.bin"); !os.IsNotExist(err) {
 		t.Fatal("corrupted upload published a destination")
@@ -94,8 +103,11 @@ func scenarioFailureCancel(t *testing.T) {
 	}
 	s.server.Release()
 	out := waitStatus(t, s, &c, job)
-	if out.State != "cancelled" || out.ErrorClass != string(transfercore.ClassCancelled) {
-		t.Fatalf("cancelled status = %+v", out)
+	if out.State != "cancelled" {
+		t.Fatal("cancelled upload did not reach the cancelled state")
+	}
+	if out.ErrorClass != string(transfercore.ClassCancelled) {
+		t.Fatal("cancelled upload did not report cancelled")
 	}
 	if _, err := os.Stat(remote); !os.IsNotExist(err) {
 		t.Fatal("cancelled upload published a destination")
@@ -143,14 +155,20 @@ func scenarioFailureUnsupportedRemote(t *testing.T) {
 	out := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
 		"target": targetName, "local": "blob.bin", "remote": s.sandbox + "/in/blob.bin",
 	}))
-	if out.State != "failed" || out.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
-		t.Fatalf("unsupported upload status = %+v", out)
+	if out.State != "failed" {
+		t.Fatal("unsupported upload did not reach the failed state")
+	}
+	if out.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatal("unsupported upload did not report unsupported_remote")
 	}
 	down := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
 		"target": targetName, "remote": s.sandbox + "/in/missing.bin", "local": "missing.bin",
 	}))
-	if down.State != "failed" || down.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
-		t.Fatalf("unsupported download status = %+v", down)
+	if down.State != "failed" {
+		t.Fatal("unsupported download did not reach the failed state")
+	}
+	if down.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatal("unsupported download did not report unsupported_remote")
 	}
 	AssertNoStaging(t, s.rootDir)
 	AssertNoStaging(t, s.sandbox)
@@ -212,14 +230,20 @@ func scenarioFailureUnsupportedPublicationPrimitive(t *testing.T) {
 	upload := waitStatus(t, s, &c, startUpload(t, s, &c, map[string]any{
 		"target": targetName, "local": "upload-source.bin", "remote": s.sandbox + "/upload-dest/new.bin",
 	}))
-	if upload.State != "failed" || upload.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
-		t.Fatalf("unsupported upload publication status = %+v", upload)
+	if upload.State != "failed" {
+		t.Fatal("unsupported upload publication did not reach the failed state")
+	}
+	if upload.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatal("unsupported upload publication did not report unsupported_remote")
 	}
 	download := waitStatus(t, s, &c, startDownload(t, s, &c, map[string]any{
 		"target": targetName, "remote": s.sandbox + "/remote-source.bin", "local": "downloads/new.bin",
 	}))
-	if download.State != "failed" || download.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
-		t.Fatalf("unsupported download publication status = %+v", download)
+	if download.State != "failed" {
+		t.Fatal("unsupported download publication did not reach the failed state")
+	}
+	if download.ErrorClass != string(transfercore.ClassUnsupportedRemote) {
+		t.Fatal("unsupported download publication did not report unsupported_remote")
 	}
 	assertTreeSnapshot(t, s.rootDir, localFiles, localDirs)
 	assertTreeSnapshot(t, s.sandbox, remoteFiles, remoteDirs)
@@ -254,26 +278,37 @@ func scenarioManagerBounds(t *testing.T) {
 	}
 	first := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "one.bin", Remote: s.sandbox + "/in/one.bin"})
 	if !first.OK {
-		t.Fatalf("first start refused: %s", first.Error)
+		t.Fatal("first start refused")
 	}
 	second := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "two.bin", Remote: s.sandbox + "/in/two.bin"})
 	if !second.OK {
-		t.Fatalf("second start refused: %s", second.Error)
+		t.Fatal("second start refused")
 	}
-	if third := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "three.bin", Remote: s.sandbox + "/in/three.bin"}); third.OK || third.Error != "concurrent transfer limit reached" {
-		t.Fatalf("third start reply = %+v", third)
+	third := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "three.bin", Remote: s.sandbox + "/in/three.bin"})
+	if third.OK {
+		t.Fatal("third start unexpectedly succeeded")
 	}
-	if duplicate := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "three.bin", Remote: s.sandbox + "/in/one.bin"}); duplicate.OK || duplicate.Error != "another transfer is using this destination" {
-		t.Fatalf("duplicate destination reply = %+v", duplicate)
+	if third.Error != "concurrent transfer limit reached" {
+		t.Fatal("third start did not report concurrent transfer limit reached")
+	}
+	duplicate := request("transfer_upload", transfer.StartInput{Target: targetName, Local: "three.bin", Remote: s.sandbox + "/in/one.bin"})
+	if duplicate.OK {
+		t.Fatal("duplicate destination start unexpectedly succeeded")
+	}
+	if duplicate.Error != "another transfer is using this destination" {
+		t.Fatal("duplicate destination start did not report another transfer is using this destination")
 	}
 	s.server.Release()
 	for _, reply := range []wire.Reply{first, second} {
 		var started transfer.StartOutput
-		if wire.Decode(reply.Data, &started) != nil || started.JobID == "" {
-			t.Fatal("started job lost its id")
+		if wire.Decode(reply.Data, &started) != nil {
+			t.Fatal("started job reply did not decode")
+		}
+		if started.JobID == "" {
+			t.Fatal("started job reply returned an empty job id")
 		}
 		if out := waitStatus(t, s, &c, started.JobID); out.State != "done" {
-			t.Fatalf("held job finished as %+v", out)
+			t.Fatal("held job did not reach the done state")
 		}
 	}
 }

@@ -49,6 +49,7 @@ const (
 type hookRemote struct {
 	transferremote.ChunkRemote
 
+	diag       *fixture.RigDiagnostics
 	mu         sync.Mutex
 	streams    int
 	partCalls  []transferlink.Range
@@ -63,10 +64,13 @@ func (h *hookRemote) WriteFile(ctx context.Context, path string, src io.Reader, 
 	h.streams++
 	n, hook := h.streams, h.onStream
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigWrite, Attempt: n})
 	if hook != nil {
 		hook(n)
 	}
-	return h.ChunkRemote.WriteFile(ctx, path, src, executable)
+	got, err := h.ChunkRemote.WriteFile(ctx, path, src, executable)
+	h.diag.Complete(call, got, false, err)
+	return got, err
 }
 
 func (h *hookRemote) UploadPart(ctx context.Context, parent, key string, part transferlink.Range, src io.Reader) (transferremote.PartResult, error) {
@@ -74,10 +78,13 @@ func (h *hookRemote) UploadPart(ctx context.Context, parent, key string, part tr
 	h.partCalls = append(h.partCalls, part)
 	n, hook := len(h.partCalls), h.onPart
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigPart, Attempt: n, Offset: part.Off, Length: part.Len})
 	if hook != nil {
 		hook(n, part)
 	}
-	return h.ChunkRemote.UploadPart(ctx, parent, key, part, src)
+	got, err := h.ChunkRemote.UploadPart(ctx, parent, key, part, src)
+	h.diag.Complete(call, got.Count, got.Stored, err)
+	return got, err
 }
 
 func (h *hookRemote) AssembleStaging(ctx context.Context, parent, key string, parts []transferlink.Range, size int64, executable bool) (transferremote.Assembled, error) {
@@ -85,10 +92,13 @@ func (h *hookRemote) AssembleStaging(ctx context.Context, parent, key string, pa
 	h.assembles++
 	n, hook := h.assembles, h.onAssemble
 	h.mu.Unlock()
+	call := h.diag.Enter(fixture.RigCall{Action: fixture.RigAssemble, Attempt: n, Parts: len(parts), Size: size})
 	if hook != nil {
 		hook(n)
 	}
-	return h.ChunkRemote.AssembleStaging(ctx, parent, key, parts, size, executable)
+	got, err := h.ChunkRemote.AssembleStaging(ctx, parent, key, parts, size, executable)
+	h.diag.Complete(call, got.Size, false, err)
+	return got, err
 }
 
 // reset zeroes the counters and removes the hooks, between phases.
@@ -130,6 +140,8 @@ func newUploadRig(t *testing.T) *uploadRig {
 	rootDir, sandbox := evalDir(t), evalDir(t)
 	server := fixture.StartExecServer(t, sandbox, SandboxEnv(t, nil))
 	proxy := faultproxy.Start(t, server.Address())
+	server.RegisterFailureDiagnostics(t)
+	diag := fixture.RegisterRigDiagnostics(t, proxy)
 	config := &ssh.ClientConfig{
 		User:            "acceptance",
 		Auth:            []ssh.AuthMethod{sshauth.PublicKey(server.ClientSigner())},
@@ -146,7 +158,7 @@ func newUploadRig(t *testing.T) *uploadRig {
 	}
 	return &uploadRig{
 		t: t, rootDir: rootDir, sandbox: sandbox, server: server, proxy: proxy, root: root, limits: limits,
-		remote: &hookRemote{ChunkRemote: transferremote.NewChunk(runner, targetName, limits)},
+		remote: &hookRemote{ChunkRemote: transferremote.NewChunk(runner, targetName, limits), diag: diag},
 	}
 }
 
@@ -175,37 +187,35 @@ func (r *uploadRig) seed(rel string, payload []byte) string {
 func (r *uploadRig) upload(engine *transferengine.Engine, local, dest string) (transferengine.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uploadDeadline)
 	defer cancel()
+	r.remote.diag.Start(fixture.RigUpload)
 	res, err := engine.Upload(ctx, r.root, local, dest, false, nil)
-	// A remote command of a cut connection may still be finishing; wait for
-	// it before anyone looks at the sandbox.
-	r.server.WaitIdle(r.t)
+	r.remote.diag.Drain(r.t, r.server, res, err)
 	return res, err
 }
 
-// nextConn is the 1-based index the next accepted connection gets.
-func (r *uploadRig) nextConn() int { return r.proxy.Stats().Accepted + 1 }
-
 // cutNext cuts the next connection after exactly n client-to-server bytes.
 func (r *uploadRig) cutNext(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.Conns(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.DropAfterBytes(faultproxy.ClientToServer, n)},
-	})
+	r.remote.diag.ArmProxy(r.t, faultproxy.ClientToServer, n, false, false)
 }
 
 // cutFrom cuts every connection from the next one on after n bytes; control
 // sessions carry less than that and pass, payload sessions do not.
 func (r *uploadRig) cutFrom(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.FromConn(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.DropAfterBytes(faultproxy.ClientToServer, n)},
-	})
+	r.remote.diag.ArmProxy(r.t, faultproxy.ClientToServer, n, true, false)
 }
 
-func (r *uploadRig) clearFaults() { r.proxy.MustSetRules(r.t) }
+func (r *uploadRig) clearFaults() { r.remote.diag.ClearProxy(r.t) }
+
+func (r *uploadRig) armAssemblyKill(attempt int) {
+	r.server.ArmKill("assembled.$rnd", 1)
+	r.remote.diag.AssemblyKill(attempt)
+}
 
 // disarmKill makes the fixture's kill rule match nothing.
-func (r *uploadRig) disarmKill() { r.server.ArmKill("\x00no-such-command", 1) }
+func (r *uploadRig) disarmKill() {
+	r.server.ArmKill("\x00no-such-command", 1)
+	r.remote.diag.AssemblyKill(0)
+}
 
 func cutConns(stats faultproxy.Stats) []faultproxy.ConnStats {
 	var cuts []faultproxy.ConnStats
@@ -217,11 +227,19 @@ func cutConns(stats faultproxy.Stats) []faultproxy.ConnStats {
 	return cuts
 }
 
+func require(t *testing.T, passed bool, what string) {
+	t.Helper()
+	if !passed {
+		t.Fatal(what)
+	}
+}
+
 func requireClass(t *testing.T, err error, class transfercore.Class) {
 	t.Helper()
 	var failure *transfercore.Error
-	if !errors.As(err, &failure) || failure.Class != class {
-		t.Fatalf("error = %v, want class %s", err, class)
+	require(t, errors.As(err, &failure), "expected a typed transfer error")
+	if failure.Class != class {
+		t.Fatalf("expected transfer error class %s", class)
 	}
 }
 
@@ -242,9 +260,9 @@ func assertUploaded(t *testing.T, res transferengine.Result, dest string, payloa
 		t.Fatal("the published file is not byte-exact")
 	}
 	assertSHA(t, payload, res.SHA256)
-	if res.Kind != transferengine.KindFile || res.Files != 1 || res.Bytes != int64(len(payload)) {
-		t.Fatalf("result = %+v", res)
-	}
+	require(t, res.Kind == transferengine.KindFile, "expected a file result")
+	require(t, res.Files == 1, "expected one file in the result")
+	require(t, res.Bytes == int64(len(payload)), "result byte count must match payload size")
 }
 
 func (r *uploadRig) assertNoStaging(parent string) {
@@ -283,9 +301,8 @@ func stagedParts(t *testing.T, dir string) []transferlink.Range {
 			t.Fatalf("staging holds the odd entry %q", name)
 		}
 		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || info.Size() != rng.Len {
-			t.Fatalf("part %q has the wrong size", name)
-		}
+		require(t, err == nil, "could not stat the staged part")
+		require(t, info.Size() == rng.Len, "staged part size must match its range length")
 		parts = append(parts, rng)
 	}
 	return parts
@@ -311,26 +328,25 @@ func (r *uploadRig) strandUpload(local, dest string) string {
 	r.remote.reset()
 	r.clearFaults()
 	var failure *transfercore.Error
-	if !errors.As(err, &failure) || failure.Class != transfercore.ClassLinkUnstable || failure.Message != transfercore.MsgLinkUnstable {
-		r.t.Fatalf("stranded upload = %+v, %v; want link_unstable", res, err)
-	}
-	if res.Mode != transferengine.ModeChunked || res.ChunksDone < 1 || res.Attempts < 1+1+transferlink.MaxNoProgress {
-		r.t.Fatalf("stranded result = %+v", res)
-	}
+	require(r.t, errors.As(err, &failure), "expected a typed error for the stranded upload")
+	require(r.t, failure.Class == transfercore.ClassLinkUnstable, "stranded upload must report link_unstable")
+	require(r.t, failure.Message == transfercore.MsgLinkUnstable, "stranded upload must return the standard link_unstable message")
+	require(r.t, res.Mode == transferengine.ModeChunked, "stranded upload must be in chunked mode")
+	require(r.t, res.ChunksDone >= 1, "stranded upload must complete at least one chunk")
+	require(r.t, res.Attempts >= 1+1+transferlink.MaxNoProgress, "expected stream, successful part, and a full no-progress retry budget")
 	if exists(dest) {
 		r.t.Fatal("a stranded upload published the destination")
 	}
 	staging := findStaging(r.t, filepath.Dir(dest))
-	if info, err := os.Stat(staging); err != nil || info.Mode().Perm() != 0o700 {
-		r.t.Fatalf("stranded staging is not a private directory: %v %v", info, err)
-	}
+	info, statErr := os.Stat(staging)
+	require(r.t, statErr == nil, "could not stat stranded staging")
+	require(r.t, info.Mode().Perm() == 0o700, "stranded staging permissions must be 0700")
 	if got := string(readFile(r.t, filepath.Join(staging, "marker"))); !strings.HasPrefix(got, "SSJACK-STAGING 1 ") {
-		r.t.Fatalf("stranded staging has no marker: %q", got)
+		r.t.Fatal("stranded staging marker lacks the expected prefix")
 	}
 	parts := stagedParts(r.t, staging)
-	if len(parts) < 1 || int64(res.ChunksDone) != int64(len(parts)) {
-		r.t.Fatalf("stranded staging holds %v, result says %d parts", parts, res.ChunksDone)
-	}
+	require(r.t, len(parts) >= 1, "stranded staging must retain at least one part")
+	require(r.t, int64(res.ChunksDone) == int64(len(parts)), "completed chunk count must match retained part count")
 	return staging
 }
 
@@ -351,25 +367,24 @@ func ScenarioChunkUploadStreamDrop(t *testing.T) {
 
 	res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 	if err != nil {
-		t.Fatalf("upload after a dropped stream: %v", err)
+		t.Fatal("upload failed after the stream drop")
 	}
 	assertUploaded(t, res, dest, payload)
-	if res.Mode != transferengine.ModeChunked || res.ChunksDone < 2 || res.ChunksTotal != res.ChunksDone || res.Attempts < 1+res.ChunksDone+1 {
-		t.Fatalf("chunked telemetry = %+v", res)
-	}
-	if res.BytesPerSecond <= 0 || res.ChunkBytes <= 0 {
-		t.Fatalf("telemetry has no speed or chunk size: %+v", res)
-	}
+	require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the stream drop")
+	require(t, res.ChunksDone >= 2, "expected at least two completed chunks")
+	require(t, res.ChunksTotal == res.ChunksDone, "total chunk count must equal completed chunks")
+	require(t, res.Attempts >= 1+res.ChunksDone+1, "attempt count must cover stream, completed chunks, and assembly")
+	require(t, res.BytesPerSecond > 0, "expected positive throughput")
+	require(t, res.ChunkBytes > 0, "expected a positive chunk size")
 	assertOnlyEntries(t, parent, "blob.bin")
 	rig.assertNoStaging(parent)
 	streams, parts, assembles := rig.remote.counts()
-	if streams != 1 || parts != res.ChunksDone || assembles != 1 {
-		t.Fatalf("sessions: %d streams, %d parts, %d assemblies; result %+v", streams, parts, assembles, res)
-	}
+	require(t, streams == 1, "expected exactly one stream session")
+	require(t, parts == res.ChunksDone, "part session count must match completed chunks")
+	require(t, assembles == 1, "expected exactly one assembly session")
 	cuts := cutConns(rig.proxy.Stats())
-	if len(cuts) != 1 || cuts[0].ClientToServer != streamCut {
-		t.Fatalf("cut connections = %+v, want exactly one cut at %d bytes client to server", cuts, streamCut)
-	}
+	require(t, len(cuts) == 1, "expected exactly one proxy byte cut")
+	require(t, cuts[0].ClientToServer == streamCut, "first cut must match the client-to-server stream threshold")
 }
 
 // ScenarioChunkUploadDropMidChunk cuts the connection of the second part in
@@ -394,22 +409,22 @@ func ScenarioChunkUploadDropMidChunk(t *testing.T) {
 
 	res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 	if err != nil {
-		t.Fatalf("upload with a part cut in the middle: %v", err)
+		t.Fatal("upload failed after the part drop")
 	}
 	assertUploaded(t, res, dest, payload)
 	assertOnlyEntries(t, parent, "blob.bin")
 	rig.assertNoStaging(parent)
 	ranges := rig.remote.ranges()
-	if len(ranges) < 3 || ranges[1].Off != ranges[0].End() || ranges[2].Off != ranges[1].Off {
-		t.Fatalf("part sessions = %v, want the cut part sent again from its own offset", ranges)
-	}
+	require(t, len(ranges) >= 3, "expected at least three part sessions")
+	require(t, ranges[1].Off == ranges[0].End(), "second part must begin at the end of the first")
+	require(t, ranges[2].Off == ranges[1].Off, "third part must retry the second part's offset")
 	if res.ChunksDone != len(ranges)-1 {
 		t.Fatalf("%d parts done after %d part sessions, want exactly one lost", res.ChunksDone, len(ranges))
 	}
 	cuts := cutConns(rig.proxy.Stats())
-	if len(cuts) != 2 || cuts[0].ClientToServer != streamCut || cuts[1].ClientToServer != partCut {
-		t.Fatalf("cut connections = %+v, want the stream at %d and a part at %d", cuts, streamCut, partCut)
-	}
+	require(t, len(cuts) == 2, "expected exactly two proxy byte cuts")
+	require(t, cuts[0].ClientToServer == streamCut, "first cut must match the client-to-server stream threshold")
+	require(t, cuts[1].ClientToServer == partCut, "second cut must match the client-to-server part threshold")
 }
 
 // ScenarioChunkUploadDropDuringAssembly kills the transport while the
@@ -431,7 +446,7 @@ func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 		}
 		rig.remote.onAssemble = func(n int) {
 			if n == 1 {
-				rig.server.ArmKill("assembled.$rnd", 1)
+				rig.armAssemblyKill(n)
 			} else {
 				rig.disarmKill()
 			}
@@ -439,7 +454,7 @@ func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 
 		res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 		if err != nil {
-			t.Fatalf("upload with one assembly drop: %v", err)
+			t.Fatal("upload failed after one assembly drop")
 		}
 		assertUploaded(t, res, dest, payload)
 		assertOnlyEntries(t, parent, "blob.bin")
@@ -459,7 +474,7 @@ func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 				rig.cutNext(streamCut)
 			}
 		}
-		rig.remote.onAssemble = func(n int) { rig.server.ArmKill("assembled.$rnd", 1) }
+		rig.remote.onAssemble = func(n int) { rig.armAssemblyKill(n) }
 
 		res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 		rig.disarmKill()
@@ -467,28 +482,27 @@ func ScenarioChunkUploadDropDuringAssembly(t *testing.T) {
 		if _, _, assembles := rig.remote.counts(); assembles != transferlink.MaxNoProgress {
 			t.Fatalf("%d assembly sessions, want %d", assembles, transferlink.MaxNoProgress)
 		}
-		if res.Mode != transferengine.ModeChunked || res.Bytes != int64(len(payload)) {
-			t.Fatalf("stranded result = %+v, want every byte verified in parts", res)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "stranded assembly must report chunked mode")
+		require(t, res.Bytes == int64(len(payload)), "stranded assembly must retain every verified payload byte")
 		if exists(dest) {
 			t.Fatal("a failed assembly published the destination")
 		}
 		staging := findStaging(t, parent)
 		parts := stagedParts(t, staging)
 		if err := transferlink.ValidateTiling(int64(len(payload)), parts); err != nil {
-			t.Fatalf("the parts did not stay intact: %v", err)
+			t.Fatal("retained parts no longer tile the payload")
 		}
 
 		rig.remote.reset()
 		res, err = rig.upload(rig.engine(), "big/blob.bin", dest)
 		if err != nil {
-			t.Fatalf("second call after the assembly drops: %v", err)
+			t.Fatal("second upload failed after the assembly drops")
 		}
 		assertUploaded(t, res, dest, payload)
 		streams, sent, assembles := rig.remote.counts()
-		if streams != 0 || sent != 0 || assembles != 1 {
-			t.Fatalf("second call ran %d streams, %d parts, %d assemblies; want only the assembly", streams, sent, assembles)
-		}
+		require(t, streams == 0, "assembly retry must not open a stream")
+		require(t, sent == 0, "assembly retry must not resend parts")
+		require(t, assembles == 1, "assembly retry must open exactly one assembly session")
 		assertOnlyEntries(t, parent, "blob.bin")
 		rig.assertNoStaging(parent)
 	})
@@ -508,23 +522,21 @@ func ScenarioChunkUploadResumeByNewEngine(t *testing.T) {
 
 	res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 	if err != nil {
-		t.Fatalf("resume by a new engine: %v", err)
+		t.Fatal("upload resume by a new engine failed")
 	}
 	assertUploaded(t, res, dest, payload)
 	streams, parts, assembles := rig.remote.counts()
-	if streams != 0 || parts == 0 || assembles != 1 {
-		t.Fatalf("resume ran %d streams, %d parts, %d assemblies", streams, parts, assembles)
-	}
+	require(t, streams == 0, "resume must not open a stream")
+	require(t, parts != 0, "resume must send at least one part")
+	require(t, assembles == 1, "resume must open exactly one assembly session")
 	gaps, err := transferlink.Gaps(int64(len(payload)), before)
-	if err != nil || len(gaps) == 0 {
-		t.Fatalf("gaps of the stranded parts: %v, %v", gaps, err)
-	}
+	require(t, err == nil, "could not compute gaps in stranded parts")
+	require(t, len(gaps) != 0, "stranded parts must have at least one gap")
 	if first := rig.remote.ranges()[0]; first.Off != gaps[0].Off {
 		t.Fatalf("resume started at %d, want the first gap at %d", first.Off, gaps[0].Off)
 	}
-	if res.Mode != transferengine.ModeChunked || res.ChunksDone < len(before) {
-		t.Fatalf("resumed result = %+v", res)
-	}
+	require(t, res.Mode == transferengine.ModeChunked, "resumed upload must report chunked mode")
+	require(t, res.ChunksDone >= len(before), "completed chunk count must cover retained parts")
 	if exists(staging) {
 		t.Fatal("the resumed upload left its staging behind")
 	}
@@ -677,7 +689,7 @@ func ScenarioChunkUploadStaleStagingCollected(t *testing.T) {
 	}
 	for _, d := range kept {
 		if got := describe(t, filepath.Join(parent, d)); got != before[d] {
-			t.Fatalf("%q was modified or removed:\nbefore: %s\nafter: %s", d, before[d], got)
+			t.Fatal("kept staging changed")
 		}
 	}
 	if want := len(kept) + 1; len(entryNames(t, parent)) != want {
@@ -710,10 +722,7 @@ func (r *uploadRig) engineWithStall(limit time.Duration) *transferengine.Engine 
 // stallNext freezes the next connection after exactly n client-to-server bytes:
 // the socket stays open and nothing more crosses it.
 func (r *uploadRig) stallNext(n int64) {
-	r.proxy.MustSetRules(r.t, faultproxy.Rule{
-		Conns:  faultproxy.Conns(r.nextConn()),
-		Faults: []faultproxy.Fault{faultproxy.StallAfterBytes(faultproxy.ClientToServer, n)},
-	})
+	r.remote.diag.ArmProxy(r.t, faultproxy.ClientToServer, n, false, true)
 }
 
 func stalledConns(stats faultproxy.Stats) []faultproxy.ConnStats {
@@ -748,26 +757,26 @@ func ScenarioChunkUploadStallDetectedAndResumed(t *testing.T) {
 		res, err := rig.upload(rig.engineWithStall(stallScenarioLimit), "big/blob.bin", dest)
 		elapsed := time.Since(start)
 		if err != nil {
-			t.Fatalf("upload after a stalled stream: %v", err)
+			t.Fatal("upload failed after the stream stall")
 		}
 		assertUploaded(t, res, dest, payload)
 		if elapsed < stallScenarioLimit {
 			t.Fatalf("upload finished in %s, before the %s inactivity limit could have fired", elapsed, stallScenarioLimit)
 		}
-		if res.Mode != transferengine.ModeChunked || res.ChunksDone < 2 || res.Attempts < 1+res.ChunksDone+1 {
-			t.Fatalf("chunked telemetry = %+v", res)
-		}
+		require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the stream stall")
+		require(t, res.ChunksDone >= 2, "expected at least two completed chunks")
+		require(t, res.Attempts >= 1+res.ChunksDone+1, "attempt count must cover stream, completed chunks, and assembly")
 		assertOnlyEntries(t, parent, "blob.bin")
 		rig.assertNoStaging(parent)
 		streams, parts, assembles := rig.remote.counts()
-		if streams != 1 || parts != res.ChunksDone || assembles != 1 {
-			t.Fatalf("sessions: %d streams, %d parts, %d assemblies; result %+v", streams, parts, assembles, res)
-		}
+		require(t, streams == 1, "expected exactly one stream session")
+		require(t, parts == res.ChunksDone, "part session count must match completed chunks")
+		require(t, assembles == 1, "expected exactly one assembly session")
 		stats := rig.proxy.Stats()
 		stalled := stalledConns(stats)
-		if len(stalled) != 1 || stalled[0].ClientToServer != streamCut || stats.Dropped != 0 {
-			t.Fatalf("proxy stats = %+v, want exactly one connection frozen at %d bytes and none cut", stats, streamCut)
-		}
+		require(t, len(stalled) == 1, "expected exactly one stalled proxy connection")
+		require(t, stalled[0].ClientToServer == streamCut, "stall must match the client-to-server stream threshold")
+		require(t, stats.Dropped == 0, "expected no proxy drops during the stream stall")
 	})
 	t.Run("stalled part", func(t *testing.T) {
 		rig := newUploadRig(t)
@@ -790,7 +799,7 @@ func ScenarioChunkUploadStallDetectedAndResumed(t *testing.T) {
 		res, err := rig.upload(rig.engineWithStall(stallScenarioLimit), "big/blob.bin", dest)
 		elapsed := time.Since(start)
 		if err != nil {
-			t.Fatalf("upload with a stalled part: %v", err)
+			t.Fatal("upload failed after the part stall")
 		}
 		assertUploaded(t, res, dest, payload)
 		if elapsed < stallScenarioLimit {
@@ -799,21 +808,18 @@ func ScenarioChunkUploadStallDetectedAndResumed(t *testing.T) {
 		assertOnlyEntries(t, parent, "blob.bin")
 		rig.assertNoStaging(parent)
 		ranges := rig.remote.ranges()
-		if len(ranges) < 3 || ranges[1].Off != ranges[0].End() || ranges[2].Off != ranges[1].Off {
-			t.Fatalf("part sessions = %v, want the stalled part sent again from its own offset", ranges)
-		}
-		if res.Mode != transferengine.ModeChunked || res.ChunksDone != len(ranges)-1 {
-			t.Fatalf("%d parts done after %d part sessions, want exactly the stalled one lost (%+v)", res.ChunksDone, len(ranges), res)
-		}
+		require(t, len(ranges) >= 3, "expected at least three part sessions")
+		require(t, ranges[1].Off == ranges[0].End(), "second part must begin at the end of the first")
+		require(t, ranges[2].Off == ranges[1].Off, "third part must retry the second part's offset")
+		require(t, res.Mode == transferengine.ModeChunked, "expected chunked mode after the part stall")
+		require(t, res.ChunksDone == len(ranges)-1, "completed chunks must exclude exactly one stalled part session")
 		stats := rig.proxy.Stats()
 		stalled := stalledConns(stats)
-		if len(stalled) != 1 || stalled[0].ClientToServer != partCut {
-			t.Fatalf("proxy stats = %+v, want exactly one part connection frozen at %d bytes", stats, partCut)
-		}
+		require(t, len(stalled) == 1, "expected exactly one stalled proxy connection")
+		require(t, stalled[0].ClientToServer == partCut, "stall must match the client-to-server part threshold")
 		cuts := cutConns(stats)
-		if len(cuts) != 1 || cuts[0].ClientToServer != streamCut {
-			t.Fatalf("cut connections = %+v, want only the stream, cut at %d bytes", cuts, streamCut)
-		}
+		require(t, len(cuts) == 1, "expected exactly one proxy byte cut")
+		require(t, cuts[0].ClientToServer == streamCut, "cut must match the client-to-server stream threshold")
 	})
 }
 
@@ -868,16 +874,16 @@ func ScenarioChunkUploadLeftoverAssemblyCleaned(t *testing.T) {
 	defer cancel()
 	listing, err := rig.remote.ListStaging(ctx, parent, key, int64(len(payload)))
 	if err != nil {
-		t.Fatalf("ListStaging: %v", err)
+		t.Fatal("first staging listing failed")
 	}
-	if listing.StaleAssembled != len(leftovers) || listing.Overflow || len(listing.Remove) != 0 || len(listing.Parts) != len(before) {
-		t.Fatalf("listing = %+v, want %d leftovers removed and %d parts kept", listing, len(leftovers), len(before))
-	}
+	require(t, listing.StaleAssembled == len(leftovers), "removed assembly count must match planted leftovers")
+	require(t, !listing.Overflow, "staging listing must not overflow")
+	require(t, len(listing.Remove) == 0, "staging listing must not request additional removals")
+	require(t, len(listing.Parts) == len(before), "listed part count must match retained parts")
 	requireClean("after ListStaging")
 	again, err := rig.remote.ListStaging(ctx, parent, key, int64(len(payload)))
-	if err != nil || again.StaleAssembled != 0 {
-		t.Fatalf("second listing = %+v, %v; want nothing left to remove", again, err)
-	}
+	require(t, err == nil, "second staging listing failed")
+	require(t, again.StaleAssembled == 0, "second listing must find no assembly leftovers")
 
 	// The engine: the planted files are gone before the first part is sent and
 	// before the assembly starts.
@@ -903,7 +909,7 @@ func ScenarioChunkUploadLeftoverAssemblyCleaned(t *testing.T) {
 	}
 	res, err := rig.upload(rig.engine(), "big/blob.bin", dest)
 	if err != nil {
-		t.Fatalf("resumed upload with leftovers in the staging: %v", err)
+		t.Fatal("upload resume with assembly leftovers failed")
 	}
 	assertUploaded(t, res, dest, payload)
 	mu.Lock()
@@ -913,9 +919,8 @@ func ScenarioChunkUploadLeftoverAssemblyCleaned(t *testing.T) {
 		t.Fatalf("checks that ran = %q, want the first part and the assembly", ran)
 	}
 	streams, _, assembles := rig.remote.counts()
-	if streams != 0 || assembles != 1 {
-		t.Fatalf("resume ran %d streams and %d assemblies", streams, assembles)
-	}
+	require(t, streams == 0, "resume must not open a stream")
+	require(t, assembles == 1, "resume must open exactly one assembly session")
 	if exists(staging) {
 		t.Fatal("the upload left its staging behind")
 	}

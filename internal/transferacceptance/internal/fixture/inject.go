@@ -16,6 +16,7 @@ type killingStream struct {
 	limit  int64
 	seen   int64
 	fired  bool
+	onFire func(int64)
 }
 
 func (k *killingStream) Read(p []byte) (int, error) {
@@ -38,6 +39,9 @@ func (k *killingStream) cross(n int64) {
 	if k.seen >= k.limit {
 		k.fired = true
 		_ = k.conn.Close()
+		if k.onFire != nil {
+			k.onFire(k.seen)
+		}
 	}
 }
 
@@ -48,6 +52,7 @@ type corruptingReader struct {
 	at      int64
 	seen    int64
 	flipped bool
+	onFire  func(int64)
 }
 
 func (c *corruptingReader) Read(p []byte) (int, error) {
@@ -55,6 +60,9 @@ func (c *corruptingReader) Read(p []byte) (int, error) {
 	if n > 0 && !c.flipped && c.seen <= c.at && c.at < c.seen+int64(n) {
 		p[c.at-c.seen] ^= 0x01
 		c.flipped = true
+		if c.onFire != nil {
+			c.onFire(c.seen + int64(n))
+		}
 	}
 	c.seen += int64(n)
 	return n, err

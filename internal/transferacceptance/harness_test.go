@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshauth"
 	"github.com/PHPCraftdream/ssjack/internal/transfer"
@@ -46,7 +48,7 @@ func treeState(t *testing.T, base string) (map[string][]byte, []string) {
 
 const (
 	targetName = "fixture-target"
-	waitBudget = 45 * time.Second
+	waitBudget = fixture.WaitBudget
 )
 
 // stack is one complete in-process installation: an SSH fixture with a real
@@ -97,6 +99,8 @@ func newStackRoots(t *testing.T, limits transfercore.Limits, env []string, withR
 	t.Cleanup(cancel)
 	rootDir, sandbox := evalDir(t), evalDir(t)
 	server := StartExecServer(t, sandbox, sandboxEnv(t, env))
+	// Register after setup's closers so diagnostics run before any joins.
+	defer server.RegisterFailureDiagnostics(t)
 	config := &ssh.ClientConfig{
 		User:            "acceptance",
 		Auth:            []ssh.AuthMethod{sshauth.PublicKey(server.ClientSigner())},
@@ -221,13 +225,14 @@ func assertInventory(t *testing.T, ctx context.Context, session *mcp.ClientSessi
 }
 
 // assertNoLeaks fails when any captured result carries one of the leak forms
-// of a private payload: a raw prefix, base64 or hex of a prefix.
+// of a private payload: a raw prefix, base64, hex, or JSON-escaped text.
 func assertNoLeaks(t *testing.T, c captured, payload []byte) {
 	t.Helper()
+	forms := leakForms(payload)
 	for _, data := range c {
-		for _, form := range leakForms(payload) {
+		for _, form := range forms {
 			if bytes.Contains(data, []byte(form)) {
-				t.Fatalf("captured result disclosed transfer content: %s", data)
+				t.Fatal("captured result matched a prohibited transfer representation")
 			}
 		}
 	}
@@ -237,15 +242,23 @@ func leakForms(payload []byte) []string {
 	if len(payload) > 32 {
 		payload = payload[:32]
 	}
-	return []string{string(payload), base64.StdEncoding.EncodeToString(payload), hex.EncodeToString(payload)}
+	raw := string(payload)
+	forms := []string{raw, base64.StdEncoding.EncodeToString(payload), hex.EncodeToString(payload)}
+	if encoded, err := json.Marshal(raw); err == nil {
+		if escaped := string(encoded[1 : len(encoded)-1]); escaped != raw {
+			forms = append(forms, escaped)
+		}
+	}
+	return forms
 }
 
 // assertSHA fails when a status digest does not match the bytes.
 func assertSHA(t *testing.T, payload []byte, got string) {
 	t.Helper()
 	sum := sha256.Sum256(payload)
-	if got != hex.EncodeToString(sum[:]) {
-		t.Fatalf("status sha256 %q does not match the transferred bytes", got)
+	want := hex.EncodeToString(sum[:])
+	if got != want {
+		t.Fatalf("status sha256 does not match transferred bytes: got len=%d short=%s, want len=%d short=%s", len(got), flakediag.Short([]byte(got)), len(want), flakediag.Short([]byte(want)))
 	}
 }
 
