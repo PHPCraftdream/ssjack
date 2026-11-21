@@ -65,13 +65,23 @@ func ownerCommandPTYChild(t *testing.T) {
 	}
 }
 
+type nativeScreenSnapshot struct {
+	elapsed time.Duration
+	stage   string
+	bytes   int
+	partial bool
+}
+
 type nativeTerminalTrace struct {
-	started    time.Time
-	terminal   *ownerterminal.Terminal
-	capture    *ownerterminal.Capture
-	events     strings.Builder
-	screenRows string
-	screenNote string
+	started          time.Time
+	terminal         *ownerterminal.Terminal
+	capture          *ownerterminal.Capture
+	events           strings.Builder
+	snapshots        []nativeScreenSnapshot
+	fieldTimeline    strings.Builder
+	firstFieldChange string
+	screenRows       string
+	screenNote       string
 }
 
 func startNativeTerminal(t, diagnostics *testing.T, ctx context.Context, label string, command ownerterminal.Command) *nativeTerminalTrace {
@@ -84,25 +94,39 @@ func startNativeTerminal(t, diagnostics *testing.T, ctx context.Context, label s
 	trace := &nativeTerminalTrace{started: started, terminal: terminal}
 	ownerChildTerminal(diagnostics, label, command.Executable, terminal, nil, started)
 	flakediag.OnFailure(diagnostics, func() string {
-		return label + " timeline:\n" + trace.events.String() + trace.screenNote + trace.screenRows
+		return label + " timeline:\n" + trace.events.String() + "credential field state timeline:\n" +
+			trace.fieldTimeline.String() + trace.firstFieldChange + "last snapshot screen:\n" + trace.screenNote + trace.screenRows
 	})
 	trace.capture = ownerterminal.CaptureOutput(terminal.Output)
-	trace.record("start", "capture-bytes=%d", trace.capture.Len())
+	trace.recordCaptured("start", "", "")
 	return trace
 }
 
-func (trace *nativeTerminalTrace) record(stage, format string, args ...any) {
-	fmt.Fprintf(&trace.events, "+%s %s ", time.Since(trace.started), stage)
+func (trace *nativeTerminalTrace) record(snapshot nativeScreenSnapshot, stage, format string, args ...any) {
+	trace.snapshots = append(trace.snapshots, snapshot)
+	fmt.Fprintf(&trace.events, "+%s %s ", snapshot.elapsed, stage)
 	fmt.Fprintf(&trace.events, format, args...)
 	trace.events.WriteByte('\n')
+}
+
+func (trace *nativeTerminalTrace) recordCaptured(stage, operation, format string, args ...any) {
+	var snapshot nativeScreenSnapshot
+	trace.capture.Inspect(func(data []byte, _ int, overflow bool) {
+		snapshot = nativeScreenSnapshot{time.Since(trace.started), stage, len(data), overflow}
+	})
+	if operation != "" {
+		snapshot.stage += "/" + operation
+		stage += " " + operation
+	}
+	trace.record(snapshot, stage, format+"capture-bytes=%d", append(args, snapshot.bytes)...)
 }
 
 func (trace *nativeTerminalTrace) write(t *testing.T, stage string, data []byte) {
 	t.Helper()
 	defer clear(data)
-	trace.record(stage, "write-attempt requested=%d capture-bytes=%d", len(data), trace.capture.Len())
+	trace.recordCaptured(stage, "write-attempt", "requested=%d ", len(data))
 	n, err := trace.terminal.Input.Write(data)
-	trace.record(stage, "write-complete n=%d error-present=%t capture-bytes=%d", n, err != nil, trace.capture.Len())
+	trace.recordCaptured(stage, "write-complete", "n=%d error-present=%t ", n, err != nil)
 	if err != nil || n != len(data) {
 		t.Fatalf("%s: terminal write failed or was short", stage)
 	}
@@ -110,13 +134,14 @@ func (trace *nativeTerminalTrace) write(t *testing.T, stage string, data []byte)
 
 func (trace *nativeTerminalTrace) expect(t *testing.T, ctx context.Context, stage, failure string, match func([]byte) bool) {
 	t.Helper()
-	trace.record(stage, "expect-attempt capture-bytes=%d", trace.capture.Len())
-	matchedBytes := 0
+	trace.recordCaptured(stage, "expect-attempt", "")
+	var matched nativeScreenSnapshot
 	err := trace.capture.WaitFor(ctx, func(data []byte) bool {
 		if !match(data) {
 			return false
 		}
-		matchedBytes = len(data)
+		// WaitFor invokes the callback under the capture lock only before overflow.
+		matched = nativeScreenSnapshot{time.Since(trace.started), stage + "/expect-matched", len(data), false}
 		return true
 	})
 	if err != nil {
@@ -129,10 +154,10 @@ func (trace *nativeTerminalTrace) expect(t *testing.T, ctx context.Context, stag
 		case errors.Is(err, ownerterminal.ErrTerminal):
 			reason = "output ended or capture overflowed"
 		}
-		trace.record(stage, "expect-failed reason=%s capture-bytes=%d", reason, trace.capture.Len())
+		trace.recordCaptured(stage, "expect-failed", "reason=%s ", reason)
 		t.Fatalf("%s: %s (%s)", stage, failure, reason)
 	}
-	trace.record(stage, "expect-matched capture-bytes=%d", matchedBytes)
+	trace.record(matched, stage+" expect-matched", "capture-bytes=%d", matched.bytes)
 }
 
 func (trace *nativeTerminalTrace) expectText(t *testing.T, ctx context.Context, stage, text, failure string) {
@@ -144,9 +169,9 @@ func (trace *nativeTerminalTrace) expectText(t *testing.T, ctx context.Context, 
 
 func (trace *nativeTerminalTrace) wait(t *testing.T, ctx context.Context, failure string) {
 	t.Helper()
-	trace.record("child-wait", "wait-attempt capture-bytes=%d", trace.capture.Len())
+	trace.recordCaptured("child-wait", "wait-attempt", "")
 	err := trace.terminal.Wait(ctx)
-	trace.record("child-wait", "wait-complete error-present=%t capture-bytes=%d", err != nil, trace.capture.Len())
+	trace.recordCaptured("child-wait", "wait-complete", "error-present=%t ", err != nil)
 	if err != nil {
 		t.Fatal(failure)
 	}
@@ -164,7 +189,8 @@ func (trace *nativeTerminalTrace) finish(joinFailure string, t *testing.T, input
 	leaked := false
 	trace.capture.Inspect(func(data []byte, total int, overflow bool) {
 		partial := overflow || joinErr != nil
-		trace.record("finish", "capture-retained-bytes=%d capture-total-bytes=%d retained-digest=%s partial=%t join-error-present=%t",
+		snapshot := nativeScreenSnapshot{time.Since(trace.started), "finish", len(data), partial}
+		trace.record(snapshot, "finish", "capture-retained-bytes=%d capture-total-bytes=%d retained-digest=%s partial=%t join-error-present=%t",
 			len(data), total, flakediag.Short(data), partial, joinErr != nil)
 		stripped := []byte(ansi.Strip(string(data)))
 		defer clear(stripped)
@@ -175,20 +201,56 @@ func (trace *nativeTerminalTrace) finish(joinFailure string, t *testing.T, input
 				leaked = rawMatch || strippedMatch || leaked
 			}
 		}
-		trace.screenDiagnostics(data, partial, inputs...)
+		trace.replayScreenSnapshots(data, inputs...)
 	})
 	return leaked
 }
 
+func (trace *nativeTerminalTrace) replayScreenSnapshots(prefix []byte, inputs ...[]byte) {
+	screen := replayNativeCredentialScreenForDiagnostics(nil)
+	var previous string
+	foundChange := false
+	for i, snapshot := range trace.snapshots {
+		screen.consume(prefix[:snapshot.bytes])
+		field := screen.credentialFieldLabel()
+		rows := nativeMaskedDiagnosticRows(screen, inputs...)
+		fmt.Fprintf(&trace.fieldTimeline, "+%s stage=%s capture-bytes=%d field=%s rows-digest=%s partial=%t\n",
+			snapshot.elapsed, snapshot.stage, snapshot.bytes, field, flakediag.Short(rows), snapshot.partial)
+		firstChange := !foundChange && i > 0 && field != previous
+		last := i == len(trace.snapshots)-1
+		if last {
+			trace.screenRows = string(rows)
+			trace.screenNote = nativeScreenReplayNote(screen.ignored, snapshot.partial)
+			if firstChange {
+				trace.screenNote = "also the first field label change\n" + trace.screenNote
+			}
+		} else if firstChange {
+			trace.firstFieldChange = fmt.Sprintf("first field label change screen (stage=%s):\n%s%s",
+				snapshot.stage, nativeScreenReplayNote(screen.ignored, snapshot.partial), rows)
+		}
+		foundChange = foundChange || firstChange
+		previous = field
+	}
+}
+
 func (trace *nativeTerminalTrace) screenDiagnostics(prefix []byte, partial bool, inputs ...[]byte) {
 	screen := replayNativeCredentialScreenForDiagnostics(prefix)
+	trace.screenRows = string(nativeMaskedDiagnosticRows(screen, inputs...))
+	trace.screenNote = nativeScreenReplayNote(screen.ignored, partial)
+}
+
+func nativeMaskedDiagnosticRows(screen *nativeCredentialScreen, inputs ...[]byte) []byte {
 	rows := []byte(screen.diagnosticRows())
-	trace.screenRows = string(renderNativeRedaction(rows, nativeRedactionMask(rows, inputs...)))
-	clear(rows)
-	trace.screenNote = fmt.Sprintf("screen replay (ignored=%d):\n", screen.ignored)
-	if partial || screen.ignored != 0 {
-		trace.screenNote += "screen picture may be incomplete\n"
+	defer clear(rows)
+	return renderNativeRedaction(rows, nativeRedactionMask(rows, inputs...))
+}
+
+func nativeScreenReplayNote(ignored int, partial bool) string {
+	note := fmt.Sprintf("screen replay (ignored=%d):\n", ignored)
+	if partial || ignored != 0 {
+		note += "screen picture may be incomplete\n"
 	}
+	return note
 }
 
 func nativeRedactionMask(data []byte, inputs ...[]byte) []bool {
@@ -241,6 +303,30 @@ func TestNativeScreenDiagnosticsMasksEcho(t *testing.T) {
 	}
 	if !strings.Contains(trace.screenNote, "ignored=2") || !strings.Contains(trace.screenNote, "screen picture may be incomplete") {
 		t.Error("partial screen diagnostics lost the replay status")
+	}
+}
+
+func TestNativeScreenSnapshotsUseRecordedOffsets(t *testing.T) {
+	const empty = "> Credential: <hidden; empty>"
+	const entered = "\r\x1b[2K> Credential: <hidden; entered>"
+	trace := &nativeTerminalTrace{snapshots: []nativeScreenSnapshot{
+		{0, "first-tui-frame/expect-matched", len(empty), false},
+		{time.Second, "finish", len(empty + entered), true},
+	}}
+	trace.replayScreenSnapshots([]byte(empty + entered))
+	wantLine := func(elapsed time.Duration, stage, field, prefix string, partial bool) string {
+		screen := replayNativeCredentialScreenForDiagnostics([]byte(prefix))
+		return fmt.Sprintf("+%s stage=%s capture-bytes=%d field=%s rows-digest=%s partial=%t\n",
+			elapsed, stage, len(prefix), field, flakediag.Short(nativeMaskedDiagnosticRows(screen)), partial)
+	}
+	want := wantLine(0, "first-tui-frame/expect-matched", "empty", empty, false) +
+		wantLine(time.Second, "finish", "entered", empty+entered, true)
+	if trace.fieldTimeline.String() != want {
+		t.Error("field timeline did not replay the exact recorded prefixes")
+	}
+	if trace.firstFieldChange != "" || trace.screenRows == "" ||
+		!strings.Contains(trace.screenNote, "also the first field label change") {
+		t.Error("final snapshot was not retained once as the first field label change")
 	}
 }
 

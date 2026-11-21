@@ -90,22 +90,46 @@ func (s *nativeCredentialScreen) diagnosticRows() string {
 	return "Final viewport:\n" + current + "Last alternate viewport:\n" + s.lastAlternate
 }
 
+func (s *nativeCredentialScreen) credentialFieldLabel() string {
+	for row := range nativeScreenRows {
+		line := strings.TrimSpace(s.rowText(row))
+		line = strings.TrimSpace(strings.TrimPrefix(line, "> "))
+		value, ok := strings.CutPrefix(line, "Credential:")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(value) {
+		case "<hidden; empty>":
+			return "empty"
+		case "<hidden; entered>":
+			return "entered"
+		default:
+			return "other"
+		}
+	}
+	return "other"
+}
+
+func (s *nativeCredentialScreen) rowText(row int) string {
+	cells := s.cells[row*nativeScreenCols : (row+1)*nativeScreenCols]
+	var text strings.Builder
+	for _, r := range cells {
+		switch r {
+		case 0:
+			text.WriteByte(' ')
+		case -1:
+		default:
+			text.WriteRune(r)
+		}
+	}
+	return strings.TrimRight(text.String(), " ")
+}
+
 func (s *nativeCredentialScreen) maskedRows() string {
 	const label = "Credential:"
 	var rows strings.Builder
 	for row := range nativeScreenRows {
-		cells := s.cells[row*nativeScreenCols : (row+1)*nativeScreenCols]
-		var text strings.Builder
-		for _, r := range cells {
-			switch r {
-			case 0:
-				text.WriteByte(' ')
-			case -1:
-			default:
-				text.WriteRune(r)
-			}
-		}
-		line := strings.TrimRight(text.String(), " ")
+		line := s.rowText(row)
 		if line == "" {
 			continue
 		}
@@ -313,6 +337,32 @@ func (s *nativeCredentialScreen) csi(cmd ansi.Cmd, params ansi.Params) {
 		}
 	default:
 		s.ignored++
+	}
+}
+
+func TestNativeCredentialScreenFieldLabel(t *testing.T) {
+	const prefix = "\x1b[2;3H> Credential: <hidden; "
+	const empty = prefix + "empty>"
+	const unknown = empty + "\x1b[2;26Hentered>!"
+	const entered = unknown + "\x1b[2;34H\x1b[K"
+	data := []byte(entered)
+	s := newNativeCredentialScreen()
+	for _, step := range []struct {
+		end  int
+		want string
+	}{
+		{0, "other"},
+		{len(empty), "empty"},
+		{len(unknown), "other"},
+		{len(entered), "entered"},
+	} {
+		s.consume(data[:step.end])
+		if got := s.credentialFieldLabel(); got != step.want {
+			t.Fatalf("offset %d: field label = %q, want %q", step.end, got, step.want)
+		}
+		if step.end != 0 && s.diagnosticRows() != "2:   > Credential: <redacted>\n" {
+			t.Fatalf("offset %d: credential diagnostic row was not masked", step.end)
+		}
 	}
 }
 
