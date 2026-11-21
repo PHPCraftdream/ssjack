@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +21,8 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerterminal"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/crypto/ssh"
 )
 
 // The trusted-terminal bypass warning literal is pinned to the production
@@ -56,38 +58,28 @@ func remoteMCPConnectedStartupPTY(t *testing.T, parent context.Context, scenario
 	fixture := newRemoteMCPStartupFixture(t, ctx, scenario)
 	defer clear(fixture.password)
 	terminal, capture := remoteMCPStartupStart(t, ctx, fixture)
-	defer remoteMCPTeardown(t, terminal, capture, fixture.password)
+	defer remoteMCPTeardown(t, terminal, capture, fixture)
 	remoteMCPStartupDrive(t, ctx, scenario, fixture, terminal, capture)
+	fixture.pty.requireOutcome(t, ctx, terminal, capture)
 	switch scenario {
 	case "connected-empty":
-		if childdiag.TerminalWait(t, "connected-empty child exit", ctx, terminal) != nil {
-			t.Fatal("confirmed empty connected run did not exit")
-		}
-		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
-			t.Fatal("empty connected run omitted its positive harness marker")
-		}
 		if fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0 {
 			t.Fatal("confirmed empty choice contacted or called an upstream")
 		}
 	case "connected-cancel":
-		if childdiag.TerminalWait(t, "connected-cancel child exit", ctx, terminal) != nil {
-			t.Fatal("cancelled connected run did not exit")
-		}
-		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte("REMOTE-MCP-CONNECTED-CANCEL-VERIFIED")) {
-			t.Fatal("connected cancellation omitted its positive refusal marker")
-		}
 		if fixture.connected.authorized.Load() != 0 || fixture.connected.rejected.Load() != 0 || fixture.connected.calls.Load() != 0 || fixture.connected.waitCalls.Load() != 0 || fixture.connected.waitDone.Load() != 0 {
 			t.Fatal("cancelled selection contacted or called an upstream")
 		}
 	default:
-		if childdiag.TerminalWait(t, "connected child exit", ctx, terminal) != nil {
-			t.Fatal("connected startup child did not exit")
+		authorized, rejected := fixture.connected.authorized.Load(), fixture.connected.rejected.Load()
+		if authorized == 0 {
+			t.Errorf("verified TLS upstream accepted no selected credential: authorized=%d", authorized)
 		}
-		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPConnectedHarnessMarker+scenario)) {
-			t.Fatal("connected harness did not report its exact positive scenario marker")
+		if rejected != 0 {
+			t.Errorf("verified TLS upstream rejected credentials: rejected=%d", rejected)
 		}
-		if fixture.connected.authorized.Load() == 0 || fixture.connected.rejected.Load() != 0 {
-			t.Fatal("verified TLS upstream did not accept only the selected private credential")
+		if t.Failed() {
+			return
 		}
 		wantCalls := int32(2)
 		if scenario == "connected-active-cancel" || scenario == "connected-bypass" {
@@ -178,53 +170,28 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 	fixture := newRemoteMCPStartupFixture(t, ctx, scenario)
 	defer clear(fixture.password)
 	terminal, capture := remoteMCPStartupStart(t, ctx, fixture)
-	defer remoteMCPTeardown(t, terminal, capture, fixture.password)
+	defer remoteMCPTeardown(t, terminal, capture, fixture)
 	remoteMCPStartupDrive(t, ctx, scenario, fixture, terminal, capture)
-	shouldLaunch := scenario == "continue" || scenario == "receipt-remembered" || scenario == "empty" || scenario == "no-record" || scenario == "absent-directory"
+	fixture.pty.requireOutcome(t, ctx, terminal, capture)
+	shouldLaunch := fixture.pty.marker == "REMOTE-MCP-HARNESS-RAN"
 	if scenario == "mcp-nonterminal-refusal" {
-		if childdiag.TerminalWait(t, "mcp-nonterminal-refusal child exit", ctx, terminal) != nil {
-			t.Fatal("MCP nonterminal-refusal child did not exit successfully")
-		}
-		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPRefusalMarker(scenario))) {
-			t.Fatal("MCP nonterminal refusal did not join with its exact marker")
-		}
 		if capture.Contains([]byte("REMOTE-MCP-HARNESS-RAN")) {
 			t.Fatal("MCP nonterminal refusal reached the harness")
 		}
 	} else if scenario == "prepared-launch-no-output-filter" {
-		if childdiag.TerminalWait(t, "prepared-launch child exit", ctx, terminal) != nil {
-			t.Fatal("prepared-launch direct-loader child did not exit successfully")
-		}
-		if err := capture.Join(ctx); err != nil || !capture.Contains([]byte(remoteMCPPreparedMarker)) {
-			t.Fatal("prepared-launch direct-loader output did not join with its positive marker")
-		}
 		if capture.Contains([]byte("REMOTE-MCP-HARNESS-RAN")) {
 			t.Fatal("prepared-launch fixture invoked a fake bridge/harness")
 		}
-		if !capture.Contains([]byte("Remote MCP bridge is active for this session's selected connections.")) || capture.Contains([]byte("#357")) {
-			t.Fatal("prepared-launch warning did not accurately describe the available capability")
+		if !capture.Contains([]byte("Remote MCP bridge is active for this session's selected connections.")) {
+			t.Errorf("prepared-launch warning missing: present=%d", 0)
 		}
-	} else if shouldLaunch {
-		if childdiag.TerminalWait(t, "confirmed startup child exit", ctx, terminal) != nil {
-			t.Fatal("confirmed startup child did not exit successfully")
+		if capture.Contains([]byte("#357")) {
+			t.Errorf("prepared-launch warning check found forbidden reference: present=%d", 1)
 		}
-		if err := capture.Join(ctx); err != nil {
-			t.Fatal("confirmed startup output did not join")
+		if t.Failed() {
+			return
 		}
-		if !capture.Contains([]byte("REMOTE-MCP-HARNESS-RAN")) {
-			t.Fatal("confirmed startup omitted harness marker")
-		}
-	} else {
-		if childdiag.TerminalWait(t, "refusal child exit", ctx, terminal) != nil {
-			t.Fatal("verified refusal child did not exit successfully")
-		}
-		if err := capture.Join(ctx); err != nil {
-			t.Fatal("refusal child output did not join")
-		}
-		marker := remoteMCPRefusalMarker(scenario)
-		if marker == "" || !capture.Contains([]byte(marker)) {
-			t.Fatal("child did not emit its exact verified refusal marker")
-		}
+	} else if !shouldLaunch {
 		if capture.Contains([]byte("REMOTE-MCP-HARNESS-RAN")) {
 			t.Fatal("refused startup reached the harness")
 		}
@@ -303,39 +270,31 @@ func remoteMCPStartupPTY(t *testing.T, parent context.Context, scenario string) 
 
 func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, fixture *remoteMCPStartupFixture, terminal *ownerterminal.Terminal, capture *ownerterminal.Capture) {
 	t.Helper()
-	wait := func(text string) {
-		t.Helper()
-		childdiag.CaptureWaitDiag(t, ctx, capture, text, "native startup missed terminal text "+text)
-		fixture.phases.Mark("saw " + text)
-	}
-	if scenario != "mcp-nonterminal-refusal" && scenario != "prepared-launch-no-output-filter" {
-		wait("Vault secret:")
+	d := fixture.pty
+	if d.prompt.result != "skipped" {
+		d.wait(t, ctx, capture, "vault-prompt", &d.prompt, func(data []byte) bool {
+			d.prompt.title = bytes.Contains(data, []byte("Vault secret:"))
+			return d.prompt.title
+		})
 		ending := byte('\n')
 		if runtime.GOOS == "windows" {
 			ending = '\r'
 		}
 		input := append(append([]byte(nil), fixture.password...), ending)
-		_, writeErr := terminal.Input.Write(input)
+		writeErr := d.write(terminal, "password", input)
 		clear(input)
 		if writeErr != nil {
-			t.Fatal(writeErr)
+			t.Fatal("startup PTY password write failed")
 		}
-		fixture.phases.Mark("password input")
 	}
-	interactive := scenario != "absent-directory" && scenario != "mcp-nonterminal-refusal"
-	if interactive {
-		wait("Select MCP connections for SSH profile " + strconv.Quote(fixture.profile))
-		wait("Continue")
-	}
-	if scenario == "receipt-remembered" || scenario == "empty" || scenario == "prepared-launch-no-output-filter" {
-		if !capture.Contains([]byte("[x]")) {
-			t.Fatal("nonempty remembered binding was not shown as a suggestion")
-		}
-	} else if scenario != "no-record" && scenario != "absent-directory" && scenario != "mcp-nonterminal-refusal" && !capture.Contains([]byte("[ ]")) {
-		t.Fatal("first-use singleton was not left unchecked")
-	}
-	if scenario == "no-record" && !capture.Contains([]byte("(No remote MCP accounts configured.)")) {
-		t.Fatal("empty MCP directory did not present its explicit Continue choice")
+	if d.selector.result != "skipped" {
+		screen := newRemoteMCPStartupScreen()
+		defer screen.reset()
+		title := "Select MCP connections for SSH profile " + strconv.Quote(fixture.profile)
+		d.wait(t, ctx, capture, "selector", &d.selector, func(data []byte) bool {
+			screen.observe(data, title, &d.selector)
+			return d.selector.title && d.selector.action && d.selector.marker
+		})
 	}
 	if scenario == "stale-ciphertext" {
 		origin, err := os.ReadFile(fixture.path)
@@ -357,41 +316,35 @@ func remoteMCPStartupDrive(t *testing.T, ctx context.Context, scenario string, f
 	}
 	switch scenario {
 	case "connected-basic", "connected-bypass", "connected-active-cancel":
-		if _, err := terminal.Input.Write([]byte(" ")); err != nil {
+		if err := d.write(terminal, "toggle", []byte(" ")); err != nil {
 			t.Fatal("cannot toggle confirmed account")
 		}
-		if _, err := terminal.Input.Write([]byte("\t\t\r")); err != nil {
+		if err := d.write(terminal, "confirm", []byte("\t\t\r")); err != nil {
 			t.Fatal("cannot confirm selected account")
 		}
 	case "connected-empty":
-		if _, err := terminal.Input.Write([]byte("\t\t\r")); err != nil {
+		if err := d.write(terminal, "confirm", []byte("\t\t\r")); err != nil {
 			t.Fatal("cannot confirm empty account choice")
 		}
 	case "connected-cancel":
-		if _, err := terminal.Input.Write([]byte("q")); err != nil {
+		if err := d.write(terminal, "cancel", []byte("q")); err != nil {
 			t.Fatal("cannot cancel before account launch")
 		}
 	case "cancel":
-		_, _ = terminal.Input.Write([]byte("q"))
+		_ = d.write(terminal, "cancel", []byte("q"))
 	case "esc":
-		_, _ = terminal.Input.Write([]byte{27})
+		_ = d.write(terminal, "cancel-escape", []byte{27})
 	case "ctrl-c":
-		_, _ = terminal.Input.Write([]byte{3})
-	case "continue", "stale-ciphertext", "issue-refusal":
-		_, _ = terminal.Input.Write([]byte(" \t\r"))
-	case "receipt-remembered":
-		_, _ = terminal.Input.Write([]byte("\t\r"))
-	case "empty":
-		_, _ = terminal.Input.Write([]byte(" \t\r"))
-	case "prepared-launch-no-output-filter":
-		_, _ = terminal.Input.Write([]byte("\t\r"))
+		_ = d.write(terminal, "cancel-interrupt", []byte{3})
+	case "continue", "stale-ciphertext", "issue-refusal", "empty":
+		_ = d.write(terminal, "toggle-confirm", []byte(" \t\r"))
+	case "receipt-remembered", "prepared-launch-no-output-filter":
+		_ = d.write(terminal, "confirm", []byte("\t\r"))
 	case "mcp-nonterminal-refusal", "absent-directory":
-		// Nonterminal refusal uses the production loader directly; an absent
-		// directory intentionally has no selector or mandatory interaction.
 	default:
-		_, _ = terminal.Input.Write([]byte("\r"))
+		_ = d.write(terminal, "confirm", []byte("\r"))
 	}
-	fixture.phases.Mark("drive inputs sent")
+	d.phases.Mark("drive-finished")
 }
 
 type remoteMCPStartupFixture struct {
@@ -408,7 +361,7 @@ type remoteMCPStartupFixture struct {
 	ptyBridge          string
 	environment        []string
 	args               []string
-	phases             *childdiag.Phases
+	pty                *remoteMCPStartupPTYDiag
 }
 
 func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario string) *remoteMCPStartupFixture {
@@ -439,7 +392,7 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	profile := v.Servers[profileID].Accounts["main"]
 	var selected []mcpdirectory.Binding
 	var connectedServer *remoteMCPConnectedServer
-	var encodedRoute string
+	var encodedRoute, waitAck string
 	if remoteMCPConnectedScenario(scenario) {
 		otherTarget := target
 		otherTarget.PrivateKey = nil
@@ -449,7 +402,10 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 			t.Fatal("cannot prepare an unselected SSH account")
 		}
 		profile = v.Servers[profileID].Accounts["main"]
-		connected, route := newRemoteMCPConnectedServer(t, []byte(sshfixture.ConnectPassword))
+		if scenario == "connected-active-cancel" {
+			waitAck = filepath.Join(t.TempDir(), "upstream-wait")
+		}
+		connected, route := newRemoteMCPConnectedServer(t, []byte(sshfixture.ConnectPassword), waitAck)
 		endpoint := remoteMCPConnectedEndpoint
 		server, err := v.RemoteMCP.AddServer("coordinator", endpoint)
 		if err != nil {
@@ -525,8 +481,7 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	var args []string
-	args = []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
+	args := []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
 	environment := nativeStartupEnvironment()
 	environment = append(environment, "SSJACK_REMOTE_MCP_STARTUP_CHILD=1", "SSJACK_REMOTE_MCP_STARTUP_SCENARIO="+scenario)
 	if remoteMCPConnectedScenario(scenario) {
@@ -534,6 +489,9 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 			environment = append(environment, remoteMCPConnectedScenarioEnv+"="+scenario, "SSJACK_REMOTE_MCP_EXPECTED_NAMESPACE="+remoteMCPConnectedNamespace(selected[0]))
 		} else {
 			environment = append(environment, remoteMCPConnectedScenarioEnv+"=connected-cancel")
+		}
+		if waitAck != "" {
+			environment = append(environment, remoteMCPConnectedWaitAckEnv+"="+waitAck)
 		}
 		environment = append(environment, remoteMCPConnectedRouteEnv+"="+encodedRoute)
 		args = []string{"-test.run=^TestNativeRemoteMCPConnectedStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPConnectedHarness$"}
@@ -548,49 +506,443 @@ func newRemoteMCPStartupFixture(t *testing.T, ctx context.Context, scenario stri
 	if scenario == "prepared-launch-no-output-filter" {
 		environment = append(environment, "SSJACK_REMOTE_MCP_EXPECTED_BINDING="+fmt.Sprintf("%s/%s/%d/%d", selected[0].ServerID, selected[0].AccountID, selected[0].ServerRevision, selected[0].AccountRevision))
 	}
-	if !remoteMCPConnectedScenario(scenario) {
-		args = []string{"-test.run=^TestNativeRemoteMCPStartupChild$", "--", "--vault", path, "--profile", profile, "run", executable, "-test.run=^TestNativeRemoteMCPStartupHarness$"}
-	}
 	return &remoteMCPStartupFixture{scenario: scenario, path: path, profile: profile, password: append([]byte(nil), password...), selected: selected, connected: connectedServer, connectedRoute: encodedRoute, expectedCiphertext: expectedCiphertext, expectedFinal: expectedCiphertext, executable: executable, ptyBridge: ptyBridge, environment: environment, args: args}
+}
+
+const (
+	remoteMCPStartupCols = 200
+	remoteMCPStartupRows = 60
+)
+
+type remoteMCPStartupScreen struct {
+	parser         *ansi.Parser
+	cells          [remoteMCPStartupCols * remoteMCPStartupRows]rune
+	seen, x, y     int
+	savedX, savedY int
+	wrap, insert   bool
+	last           rune
+}
+
+func newRemoteMCPStartupScreen() *remoteMCPStartupScreen {
+	s := &remoteMCPStartupScreen{parser: ansi.NewParser()}
+	s.parser.SetDataSize(1)
+	s.parser.SetHandler(ansi.Handler{Print: s.print, Execute: s.execute, HandleCsi: s.csi, HandleEsc: s.esc})
+	return s
+}
+func (s *remoteMCPStartupScreen) observe(data []byte, title string, o *remoteMCPStartupObservation) {
+	for _, b := range data[s.seen:] {
+		s.parser.Advance(b)
+	}
+	s.seen = len(data)
+	o.title, o.action, o.marker = false, false, false
+	var row [remoteMCPStartupCols]rune
+	for y := range remoteMCPStartupRows {
+		for x, r := range s.cells[y*remoteMCPStartupCols : (y+1)*remoteMCPStartupCols] {
+			if r == 0 {
+				r = ' '
+			}
+			row[x] = r
+		}
+		line := strings.TrimSpace(string(row[:]))
+		o.title = o.title || line == title
+		o.action = o.action || line == "Continue" || line == "> Continue"
+		account := strings.TrimPrefix(line, "> ")
+		switch o.markerKind {
+		case "checked-account":
+			o.marker = o.marker || strings.HasPrefix(account, "[x] \"coordinator\" / \"main\" / ")
+		case "unchecked-account":
+			o.marker = o.marker || strings.HasPrefix(account, "[ ] \"coordinator\" / \"main\" / ")
+		case "empty-directory":
+			o.marker = o.marker || line == "(No remote MCP accounts configured.)"
+		}
+	}
+}
+
+func (s *remoteMCPStartupScreen) move(x, y int) {
+	s.x = max(0, min(x, remoteMCPStartupCols-1))
+	s.y = max(0, min(y, remoteMCPStartupRows-1))
+	s.wrap = false
+}
+
+func (s *remoteMCPStartupScreen) scroll(y, lines int) {
+	cells := s.cells[y*remoteMCPStartupCols:]
+	n := min(len(cells), max(lines, -lines)*remoteMCPStartupCols)
+	if lines > 0 {
+		copy(cells, cells[n:])
+		clear(cells[len(cells)-n:])
+	} else {
+		copy(cells[n:], cells)
+		clear(cells[:n])
+	}
+}
+
+func (s *remoteMCPStartupScreen) index() {
+	if s.y == remoteMCPStartupRows-1 {
+		s.scroll(0, 1)
+	}
+	s.move(s.x, s.y+1)
+}
+
+func (s *remoteMCPStartupScreen) print(r rune) {
+	w := 1
+	if r > 127 {
+		w = ansi.StringWidthWc(string(r))
+	}
+	if w == 0 {
+		return
+	}
+	if s.wrap || s.x+w > remoteMCPStartupCols {
+		s.x = 0
+		s.index()
+	}
+	row := s.cells[s.y*remoteMCPStartupCols+s.x : (s.y+1)*remoteMCPStartupCols]
+	if s.insert {
+		copy(row[w:], row)
+	}
+	row[0] = r
+	for i := 1; i < w; i++ {
+		row[i] = -1
+	}
+	s.last = r
+	s.wrap = s.x+w == remoteMCPStartupCols
+	s.x = min(s.x+w, remoteMCPStartupCols-1)
+}
+
+func (s *remoteMCPStartupScreen) execute(b byte) {
+	switch b {
+	case '\r':
+		s.move(0, s.y)
+	case '\n', '\v', '\f':
+		s.index()
+	case '\b':
+		s.move(s.x-1, s.y)
+	case '\t':
+		s.move((s.x/8+1)*8, s.y)
+	}
+}
+
+func (s *remoteMCPStartupScreen) reset() {
+	clear(s.cells[:])
+	s.move(0, 0)
+	s.last, s.insert = 0, false
+}
+
+func (s *remoteMCPStartupScreen) esc(cmd ansi.Cmd) {
+	if cmd.Intermediate() != 0 {
+		return
+	}
+	switch cmd.Final() {
+	case 'D':
+		s.index()
+	case 'E':
+		s.x = 0
+		s.index()
+	case 'M':
+		if s.y == 0 {
+			s.scroll(0, -1)
+		}
+		s.move(s.x, s.y-1)
+	case '7':
+		s.savedX, s.savedY = s.x, s.y
+	case '8':
+		s.move(s.savedX, s.savedY)
+	case 'c':
+		s.reset()
+	}
+}
+
+func (s *remoteMCPStartupScreen) csi(cmd ansi.Cmd, params ansi.Params) {
+	if cmd.Intermediate() != 0 {
+		return
+	}
+	final := cmd.Final()
+	if final == 'h' || final == 'l' {
+		for _, p := range params {
+			n := p.Param(0)
+			if cmd.Prefix() == '?' && (n == 47 || n == 1047 || n == 1049) {
+				s.reset()
+			} else if cmd.Prefix() == 0 && n == 4 {
+				s.insert = final == 'h'
+			}
+		}
+		return
+	}
+	if cmd.Prefix() != 0 {
+		return
+	}
+	p, _, _ := params.Param(0, 0)
+	n := min(len(s.cells), max(1, p))
+	x, y := s.x, s.y
+	pos := y*remoteMCPStartupCols + x
+	switch final {
+	case 'H', 'f':
+		col, _, _ := params.Param(1, 1)
+		s.move(max(1, col)-1, n-1)
+	case 'G', '`':
+		s.move(n-1, y)
+	case 'd':
+		s.move(x, n-1)
+	case 'A':
+		s.move(x, y-n)
+	case 'B', 'e':
+		s.move(x, y+n)
+	case 'C', 'a':
+		s.move(x+n, y)
+	case 'D':
+		s.move(x-n, y)
+	case 'E':
+		s.move(0, y+n)
+	case 'F':
+		s.move(0, y-n)
+	case 'J', 'K':
+		lo, hi := 0, len(s.cells)
+		if final == 'K' {
+			lo, hi = y*remoteMCPStartupCols, (y+1)*remoteMCPStartupCols
+		}
+		switch p {
+		case 0:
+			clear(s.cells[pos:hi])
+		case 1:
+			clear(s.cells[lo : pos+1])
+		case 2:
+			clear(s.cells[lo:hi])
+		}
+	case '@', 'P', 'X':
+		row := s.cells[pos : (y+1)*remoteMCPStartupCols]
+		n = min(n, len(row))
+		switch final {
+		case '@':
+			copy(row[n:], row)
+			clear(row[:n])
+		case 'P':
+			copy(row, row[n:])
+			clear(row[len(row)-n:])
+		case 'X':
+			clear(row[:n])
+		}
+	case 'S':
+		s.scroll(0, n)
+	case 'T':
+		s.scroll(0, -n)
+	case 'L':
+		s.scroll(y, -n)
+	case 'M':
+		s.scroll(y, n)
+	case 'b':
+		if s.last != 0 {
+			for range n {
+				s.print(s.last)
+			}
+		}
+	}
+}
+
+type remoteMCPStartupObservation struct {
+	result, markerKind    string
+	offset                int
+	title, action, marker bool
+}
+
+func (o remoteMCPStartupObservation) missing() string {
+	var missing []string
+	if !o.title {
+		if o.markerKind == "" {
+			missing = append(missing, "vault-secret-prompt")
+		} else {
+			missing = append(missing, "selector-title")
+		}
+	}
+	if o.markerKind != "" && !o.action {
+		missing = append(missing, "continue-action-row")
+	}
+	if o.markerKind != "" && !o.marker {
+		missing = append(missing, o.markerKind)
+	}
+	if len(missing) == 0 {
+		return "none"
+	}
+	return strings.Join(missing, ",")
+}
+func (o remoteMCPStartupObservation) String() string {
+	if o.result == "skipped" || o.result == "pending" {
+		return o.result
+	}
+	return fmt.Sprintf("%s offset=%d missing=%s", o.result, o.offset, o.missing())
+}
+
+type remoteMCPStartupPTYDiag struct {
+	phases           *childdiag.Phases
+	lifetime         context.Context
+	marker           string
+	start, snapshot  string
+	exit, drain      string
+	prompt, selector remoteMCPStartupObservation
+}
+
+func remoteMCPStartupClass(err error, other string) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return other
+	}
+}
+func (d *remoteMCPStartupPTYDiag) wait(t *testing.T, ctx context.Context, capture *ownerterminal.Capture, label string, o *remoteMCPStartupObservation, match func([]byte) bool) {
+	t.Helper()
+	d.phases.Mark(label + "-wait-begin")
+	err := capture.WaitFor(ctx, func(data []byte) bool {
+		o.offset = len(data)
+		return match(data)
+	})
+	o.result = remoteMCPStartupClass(err, "eof-or-read-error")
+	if errors.Is(err, ownerterminal.ErrTerminal) {
+		capture.Inspect(func(_ []byte, _ int, overflow bool) {
+			if overflow {
+				o.result = "overflow"
+			}
+		})
+	}
+	d.phases.Mark(label + "-wait-" + o.result)
+	if err != nil {
+		t.Fatalf("startup PTY %s wait failed: %s", label, o)
+	}
+}
+func (d *remoteMCPStartupPTYDiag) write(terminal *ownerterminal.Terminal, label string, data []byte) error {
+	d.phases.Mark(fmt.Sprintf("write-attempt[label=%s requested=%d]", label, len(data)))
+	n, err := terminal.Input.Write(data)
+	result := "complete"
+	if err != nil {
+		result = "error"
+	} else if n != len(data) {
+		result = "short"
+	}
+	d.phases.Mark(fmt.Sprintf("write-result[label=%s class=%s requested=%d written=%d]", label, result, len(data), n))
+	return err
+}
+func (d *remoteMCPStartupPTYDiag) requireOutcome(t *testing.T, ctx context.Context, terminal *ownerterminal.Terminal, capture *ownerterminal.Capture) {
+	t.Helper()
+	d.phases.Mark("child-wait-begin")
+	d.exit = remoteMCPStartupClass(terminal.Wait(ctx), "terminal-error")
+	d.phases.Mark("child-wait-" + d.exit)
+	if d.exit != "ok" {
+		t.Fatalf("startup PTY child exit failed: %s", d.exit)
+	}
+	d.phases.Mark("capture-join-begin")
+	d.drain = remoteMCPStartupClass(capture.Join(ctx), "drained-overflow")
+	d.phases.Mark("capture-join-" + d.drain)
+	if d.drain != "ok" {
+		t.Fatalf("startup PTY capture join failed: %s", d.drain)
+	}
+	if d.marker == "" || !capture.Contains([]byte(d.marker)) {
+		t.Fatal("startup PTY expected outcome marker missing")
+	}
+	d.phases.Mark("outcome-marker-visible")
+}
+
+func remoteMCPConnectedObservation(s *remoteMCPConnectedServer) string {
+	closed := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	return fmt.Sprintf("connected pre-cleanup: authorized=%d rejected=%d calls=%d wait-calls=%d wait-done=%d started=%t finished=%t ack-publication-failed=%t",
+		s.authorized.Load(), s.rejected.Load(), s.calls.Load(), s.waitCalls.Load(), s.waitDone.Load(), closed(s.waitStarted), closed(s.waitFinish), s.waitAckFailed.Load())
+}
+
+func (d *remoteMCPStartupPTYDiag) snapshotBeforeCleanup(t *testing.T, terminal *ownerterminal.Terminal, capture *ownerterminal.Capture, connected *remoteMCPConnectedServer) {
+	exitProbe, drainProbe := "not-run", "not-run"
+	if t.Failed() && (d.exit != "ok" && d.exit != "terminal-error" || d.drain != "ok" && d.drain != "drained-overflow") {
+		probe, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer stop()
+		if d.drain != "ok" && d.drain != "drained-overflow" {
+			drainProbe = remoteMCPStartupClass(capture.Join(probe), "drained-overflow")
+		}
+		if d.exit != "ok" && d.exit != "terminal-error" {
+			exitProbe = remoteMCPStartupClass(terminal.Wait(probe), "terminal-error")
+		}
+	}
+	capture.Inspect(func(data []byte, total int, overflow bool) {
+		marker := "missing"
+		switch {
+		case d.marker == "":
+			marker = "unset"
+		case bytes.Contains(data, []byte(d.marker)):
+			marker = "visible"
+		case overflow:
+			marker = "unknown-overflow"
+		}
+		d.snapshot = fmt.Sprintf("pre-cleanup: child-wait=%s child-probe=%s capture-join=%s capture-probe=%s lifetime=%s marker=%s retained=%d total=%d overflow=%t",
+			d.exit, exitProbe, d.drain, drainProbe, remoteMCPStartupClass(d.lifetime.Err(), "error"), marker, len(data), total, overflow)
+		if t.Failed() {
+			d.snapshot += "\nchild signals: " + remoteMCPStartupChildSignals(data)
+		}
+	})
+	if connected != nil {
+		d.snapshot += "\n" + remoteMCPConnectedObservation(connected)
+	}
+	d.phases.Mark("pre-cleanup-snapshot")
 }
 
 func remoteMCPStartupStart(t *testing.T, ctx context.Context, fixture *remoteMCPStartupFixture) (*ownerterminal.Terminal, *ownerterminal.Capture) {
 	t.Helper()
-	started := time.Now()
-	terminal, err := ownerterminal.Start(ctx, ownerterminal.Command{Executable: fixture.executable, UnixBridge: fixture.ptyBridge, Directory: t.TempDir(), Environment: fixture.environment, Args: fixture.args})
-	if err != nil {
-		t.Fatal(err)
+	d := &remoteMCPStartupPTYDiag{
+		phases: childdiag.NewPhases(), lifetime: ctx, marker: remoteMCPStartupMarker(fixture.scenario),
+		start: "pending", snapshot: "pre-cleanup: unavailable (no terminal)", exit: "unobserved", drain: "unobserved",
+		prompt: remoteMCPStartupObservation{result: "pending"}, selector: remoteMCPStartupObservation{result: "pending", markerKind: "unchecked-account"},
 	}
-	// Failure-only child evidence: command name, phase timing and a tail of
-	// the PTY output. The pid is not exposed by ownerterminal, so it cannot
-	// be reported without production changes.
-	tail := childdiag.NewTail()
-	phases := childdiag.NewPhases()
-	fixture.phases = phases
-	capture := ownerterminal.CaptureOutput(childdiag.TeeOutput(terminal.Output, tail))
+	fixture.pty = d
+	switch fixture.scenario {
+	case "mcp-nonterminal-refusal":
+		d.prompt.result, d.selector.result = "skipped", "skipped"
+	case "absent-directory":
+		d.selector.result = "skipped"
+	case "prepared-launch-no-output-filter":
+		d.prompt.result = "skipped"
+		d.selector.markerKind = "checked-account"
+	case "receipt-remembered", "empty":
+		d.selector.markerKind = "checked-account"
+	case "no-record":
+		d.selector.markerKind = "empty-directory"
+	}
 	flakediag.OnFailure(t, func() string {
-		return "startup PTY child: scenario=" + fixture.scenario +
-			" name=" + filepath.Base(fixture.executable) +
-			" bridge=" + filepath.Base(fixture.ptyBridge) +
-			" args=" + fmt.Sprint(len(fixture.args)) +
-			" started=" + started.Format(time.RFC3339) +
-			" elapsed=" + time.Since(started).Round(time.Millisecond).String() + "\n" +
-			phases.Render() +
-			"\noutput tail:" + flakediag.Tail(tail.Snapshot(), 16*1024) +
-			"\ngoroutine dump:\n" + flakediag.GoroutineDump(64*1024)
+		return fmt.Sprintf("startup PTY: scenario=%s start=%s\nprompt: %s\nselector: %s\n%s\n%s",
+			fixture.scenario, d.start, d.prompt, d.selector, d.snapshot, d.phases.Render())
 	})
+	d.phases.Mark("terminal-start-begin")
+	terminal, err := ownerterminal.Start(ctx, ownerterminal.Command{Executable: fixture.executable, UnixBridge: fixture.ptyBridge, Directory: t.TempDir(), Environment: fixture.environment, Args: fixture.args})
+	d.start = remoteMCPStartupClass(err, "terminal-error")
+	d.phases.Mark("terminal-start-" + d.start)
+	if err != nil {
+		t.Fatalf("startup PTY terminal start failed: %s", d.start)
+	}
+	capture := ownerterminal.CaptureOutput(terminal.Output)
+	d.phases.Mark("capture-started")
 	return terminal, capture
 }
 
-func remoteMCPTeardown(t *testing.T, terminal *ownerterminal.Terminal, capture *ownerterminal.Capture, password []byte) {
+func remoteMCPTeardown(t *testing.T, terminal *ownerterminal.Terminal, capture *ownerterminal.Capture, fixture *remoteMCPStartupFixture) {
 	t.Helper()
+	d := fixture.pty
+	d.snapshotBeforeCleanup(t, terminal, capture, fixture.connected)
+	password := fixture.password
 	cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 	defer stop()
-	if err := terminal.Close(cleanup); err != nil {
-		t.Error("terminal cleanup failed")
+	closeResult := remoteMCPStartupClass(terminal.Close(cleanup), "terminal-error")
+	d.phases.Mark("cleanup-close-" + closeResult)
+	if closeResult != "ok" {
+		t.Errorf("startup PTY terminal cleanup failed: %s", closeResult)
 	}
-	if err := capture.Join(cleanup); err != nil {
-		t.Error("terminal output cleanup did not join")
+	joinResult := remoteMCPStartupClass(capture.Join(cleanup), "drained-overflow")
+	d.phases.Mark("cleanup-join-" + joinResult)
+	if joinResult != "ok" {
+		t.Errorf("startup PTY capture cleanup failed: %s", joinResult)
 	}
 	for _, secret := range [][]byte{password, []byte("synthetic-mcp-startup-secret"), []byte("synthetic startup Basic credential"), []byte("synthetic MCP custom header"), []byte("synthetic-mcp-owner"), []byte("synthetic-unselected-account-secret")} {
 		if capture.Contains(secret) {
@@ -599,4 +951,5 @@ func remoteMCPTeardown(t *testing.T, terminal *ownerterminal.Terminal, capture *
 	}
 	capture.Clear()
 	clear(password)
+	d.phases.Mark("cleanup-cleared")
 }

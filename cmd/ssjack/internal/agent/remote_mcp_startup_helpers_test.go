@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -44,6 +45,61 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/startupsecret"
 )
+
+func remoteMCPStartupMarker(scenario string) string {
+	switch scenario {
+	case "connected-cancel":
+		return "REMOTE-MCP-CONNECTED-CANCEL-VERIFIED"
+	case "prepared-launch-no-output-filter":
+		return remoteMCPPreparedMarker
+	case "continue", "receipt-remembered", "empty", "no-record", "absent-directory":
+		return "REMOTE-MCP-HARNESS-RAN"
+	default:
+		if remoteMCPConnectedScenario(scenario) {
+			return remoteMCPConnectedHarnessMarker + scenario
+		}
+		return remoteMCPRefusalMarker(scenario)
+	}
+}
+
+func remoteMCPStartupChildSignals(data []byte) string {
+	lines := bytes.Split(data, []byte{'\n'})
+	var seen []string
+	for _, signal := range []struct{ text, class string }{
+		{"connected wait ACK environment could not be cleared", "ack-env-clear"},
+		{"connected wait ACK base is missing or not absolute", "ack-base-invalid"},
+		{"connected wait ACK was set outside active cancellation", "ack-env-unexpected"},
+		{"connected wait call returned before explicit cancellation", "wait-returned-early"},
+		{"connected wait dispatch ACK deadline expired", "dispatch-ack-timeout"},
+		{"connected wait started marker probe failed", "started-probe-error"},
+		{"connected wait call return deadline expired", "wait-return-timeout"},
+		{"connected wait call did not return context.Canceled", "wait-cancel-error-missing"},
+		{"connected harness tool listing failed", "registration-rpc-error"},
+		{"bounded tool listing did not reach the expected registration state", "registration-state-missing"},
+		{"connected harness could not attach to the real stdio bridge", "bridge-attach-error"},
+		{"connected bridge did not negotiate the latest protocol", "bridge-negotiation-error"},
+		{"selected account inventory was not exactly scoped", "bridge-inventory-error"},
+		{"connected bridge session cleanup did not join", "bridge-session-cleanup-error"},
+		{"harness MCP probe could not attach", "probe-attach-error"},
+		{"harness MCP probe tools/list failed", "probe-list-rpc-error"},
+		{"harness MCP probe tools/list returned a nil listing", "probe-list-nil"},
+		{"harness MCP probe tools/list returned a nil tool entry", "probe-tool-nil"},
+		{"harness MCP probe did not observe remote registration completion", "probe-registration-timeout"},
+		{"harness MCP probe failed to close", "probe-close-error"},
+	} {
+		for _, line := range lines {
+			line = bytes.TrimSuffix(line, []byte{'\r'})
+			if bytes.HasSuffix(line, []byte(": "+signal.text)) {
+				seen = append(seen, signal.class)
+				break
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return "none-observed"
+	}
+	return strings.Join(seen, ",")
+}
 
 func TestNativeRemoteMCPStartupChild(t *testing.T) {
 	if os.Getenv("SSJACK_REMOTE_MCP_STARTUP_CHILD") != "1" {
@@ -132,7 +188,7 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "native-harness-probe", Version: "dev"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 	if err != nil {
-		t.Fatalf("harness MCP probe could not attach: %v", err)
+		t.Fatal("harness MCP probe could not attach")
 	}
 	closed := false
 	defer func() {
@@ -141,9 +197,24 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 			_ = session.Close()
 		}
 	}()
+	listToolsFailed := errors.New("tools/list failed")
+	checkListing := func(listing *mcp.ListToolsResult, err error) error {
+		if err != nil {
+			return listToolsFailed
+		}
+		if listing == nil {
+			return errors.New("tools/list returned a nil listing")
+		}
+		for _, tool := range listing.Tools {
+			if tool == nil {
+				return errors.New("tools/list returned a nil tool entry")
+			}
+		}
+		return nil
+	}
 	listing, listErr := session.ListTools(ctx, nil)
-	if listErr != nil {
-		t.Fatal("harness MCP probe tools/list failed")
+	if err := checkListing(listing, listErr); err != nil {
+		t.Fatalf("harness MCP probe %s", err)
 	}
 	if len(os.Getenv(mcpchannel.Env)) != 0 {
 		done, _, lastErr := flakediag.WaitForDesc(t, "harness MCP probe remote registration", childdiag.DeadlineOf(ctx), func() (string, bool, error) {
@@ -155,14 +226,14 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 				return "", true, nil
 			}
 			next, listErr := session.ListTools(ctx, nil)
-			if listErr != nil {
-				return "tools/list failed", false, listErr
+			if err := checkListing(next, listErr); err != nil {
+				return err.Error(), false, err
 			}
 			listing = next
 			return "remote tools not registered yet", false, nil
 		})
 		if lastErr != nil {
-			t.Fatal("harness MCP probe tools/list failed")
+			t.Fatalf("harness MCP probe %s", lastErr)
 		}
 		if !done {
 			t.Fatal("harness MCP probe did not observe remote registration completion")
@@ -184,8 +255,36 @@ func remoteMCPHarnessMCPProbe(t *testing.T) {
 	}
 	for name := range names {
 		if strings.HasPrefix(name, "mcp") {
-			t.Fatalf("harness MCP probe observed remote tool %s without a connected upstream", name)
+			t.Fatal("harness MCP probe observed a remote tool without a connected upstream")
 		}
+	}
+}
+
+func TestRemoteMCPStartupScreenObserve(t *testing.T) {
+	const title = "Select remote MCP accounts"
+	for _, tc := range []struct{ kind, row string }{
+		{"checked-account", `[x] "coordinator" / "main" / fixture`},
+		{"unchecked-account", `[ ] "coordinator" / "main" / fixture`},
+		{"empty-directory", "(No remote MCP accounts configured.)"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			screen := newRemoteMCPStartupScreen()
+			observation := remoteMCPStartupObservation{markerKind: tc.kind}
+			var transcript []byte
+			check := func(stage, chunk string, action, marker bool) {
+				t.Helper()
+				transcript = append(transcript, chunk...)
+				screen.observe(transcript, title, &observation)
+				if !observation.title || observation.action != action || observation.marker != marker {
+					t.Fatalf("%s: got title=%t action=%t marker=%t; want title=true action=%t marker=%t", stage, observation.title, observation.action, observation.marker, action, marker)
+				}
+			}
+			check("instruction only", title+"\r\n"+tc.row+"\r\nSpace toggles; choose Continue explicitly", false, true)
+			check("partial clear sequence", "\x1b[2", false, true)
+			check("cleared viewport", "J\x1b[H"+title+"\r\n\r\n> Continue", true, false)
+			check("complete viewport", "\x1b[2;1H"+tc.row, true, true)
+			check("overwritten marker", "\r!", true, false)
+		})
 	}
 }
 
@@ -438,29 +537,31 @@ func remoteMCPNonterminalRefusalChild(t *testing.T, ctx context.Context, path st
 }
 
 type remoteMCPConnectedServer struct {
-	server       *http.Server
-	listener     net.Listener
-	rootDER      []byte
-	authorized   atomic.Int32
-	rejected     atomic.Int32
-	calls        atomic.Int32
-	waitCalls    atomic.Int32
-	waitStarted  chan struct{}
-	waitDone     atomic.Int32
-	waitFinish   chan struct{}
-	waitStart    sync.Once
-	waitEnd      sync.Once
-	knownLiteral []byte
-	shutdown     chan struct{}
-	serveDone    chan struct{}
-	workMu       sync.Mutex
-	closing      bool
-	active       int
-	activeDone   chan struct{}
-	shutdownOnce sync.Once
+	server        *http.Server
+	listener      net.Listener
+	rootDER       []byte
+	authorized    atomic.Int32
+	rejected      atomic.Int32
+	calls         atomic.Int32
+	waitCalls     atomic.Int32
+	waitStarted   chan struct{}
+	waitDone      atomic.Int32
+	waitFinish    chan struct{}
+	waitAck       string
+	waitAckFailed atomic.Bool
+	waitStart     sync.Once
+	waitEnd       sync.Once
+	knownLiteral  []byte
+	shutdown      chan struct{}
+	serveDone     chan struct{}
+	workMu        sync.Mutex
+	closing       bool
+	active        int
+	activeDone    chan struct{}
+	shutdownOnce  sync.Once
 }
 
-func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPConnectedServer, string) {
+func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte, waitAck string) (*remoteMCPConnectedServer, string) {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -477,7 +578,7 @@ func newRemoteMCPConnectedServer(t *testing.T, knownLiteral []byte) (*remoteMCPC
 	if err != nil {
 		t.Fatal("cannot listen for private TLS fixture")
 	}
-	fixture := &remoteMCPConnectedServer{listener: listener, rootDER: der, waitStarted: make(chan struct{}), waitFinish: make(chan struct{}), knownLiteral: append([]byte(nil), knownLiteral...)}
+	fixture := &remoteMCPConnectedServer{listener: listener, rootDER: der, waitStarted: make(chan struct{}), waitFinish: make(chan struct{}), waitAck: waitAck, knownLiteral: append([]byte(nil), knownLiteral...)}
 	fixture.initLifetime()
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("synthetic-mcp-owner:synthetic startup Basic credential"))
 	fixture.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -623,7 +724,10 @@ func (s *remoteMCPConnectedServer) handlerForRequest(requestCtx context.Context)
 func (s *remoteMCPConnectedServer) wait(ctx, requestCtx context.Context) (*mcp.CallToolResult, error) {
 	s.calls.Add(1)
 	s.waitCalls.Add(1)
-	s.waitStart.Do(func() { close(s.waitStarted) })
+	s.waitStart.Do(func() {
+		s.publishWaitStartedAck()
+		close(s.waitStarted)
+	})
 	defer s.waitEnd.Do(func() { close(s.waitFinish) })
 	select {
 	case <-ctx.Done():
@@ -634,6 +738,20 @@ func (s *remoteMCPConnectedServer) wait(ctx, requestCtx context.Context) (*mcp.C
 		return nil, requestCtx.Err()
 	case <-s.shutdown:
 		return nil, context.Canceled
+	}
+}
+
+func (s *remoteMCPConnectedServer) publishWaitStartedAck() {
+	if s.waitAck == "" {
+		return
+	}
+	file, err := os.OpenFile(s.waitAck+".started", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		s.waitAckFailed.Store(true)
+		return
+	}
+	if err := file.Close(); err != nil {
+		s.waitAckFailed.Store(true)
 	}
 }
 

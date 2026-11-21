@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ import (
 const remoteMCPConnectedHarnessMarker = "REMOTE-MCP-CONNECTED-HARNESS-VERIFIED:"
 const remoteMCPConnectedBridgeChildEnv = "SSJACK_REMOTE_MCP_CONNECTED_BRIDGE_CHILD"
 const remoteMCPConnectedScenarioEnv = "SSJACK_REMOTE_MCP_CONNECTED_SCENARIO"
+const remoteMCPConnectedWaitAckEnv = "SSJACK_REMOTE_MCP_CONNECTED_WAIT_ACK"
 
 // The production bridge negotiates the latest protocol version; the constant
 // lives in the internal remotemcp package, so the suite pins the same literal.
@@ -85,6 +88,17 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 	if !remoteMCPConnectedScenario(scenario) {
 		t.Skip("connected MCP harness only")
 	}
+	waitAck, hasWaitAck := os.LookupEnv(remoteMCPConnectedWaitAckEnv)
+	if err := os.Unsetenv(remoteMCPConnectedWaitAckEnv); err != nil {
+		t.Fatal("connected wait ACK environment could not be cleared")
+	}
+	if scenario == "connected-active-cancel" {
+		if !hasWaitAck || !filepath.IsAbs(waitAck) {
+			t.Fatal("connected wait ACK base is missing or not absolute")
+		}
+	} else if hasWaitAck {
+		t.Fatal("connected wait ACK was set outside active cancellation")
+	}
 	remoteMCPConnectedHarnessEnvironment(t)
 	_ = os.Unsetenv(remoteMCPConnectedScenarioEnv)
 	_ = os.Unsetenv(remoteMCPConnectedRouteEnv)
@@ -113,22 +127,22 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		t.Fatal("test executable unavailable")
 	}
 	command := exec.Command(executable, "-test.run=^TestNativeRemoteMCPConnectedBridge$")
-	// Failure-only evidence: keep the bridge child's stderr in a bounded
-	// tail instead of discarding it, so a failed attach reports what the
-	// real bridge process emitted.
-	bridgeStarted := time.Now()
-	bridgeTail := childdiag.NewTail()
-	command.Stderr = bridgeTail
-	childdiag.ProcessOnFailure(t, "connected bridge child", command, bridgeTail, bridgeStarted)
+	phases := childdiag.NewPhases()
+	flakediag.OnFailure(t, phases.Render)
+	// Bridge stderr may contain private data; report process metadata only.
+	command.Stderr = io.Discard
+	childdiag.ProcessOnFailure(t, "connected bridge child", command, nil, time.Now())
 	command.Env = append(nativeStartupEnvironment(), remoteMCPConnectedBridgeChildEnv+"=1")
 	if encodedChannels != "" {
 		command.Env = append(command.Env, mcpchannel.Env+"="+encodedChannels)
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "connected-acceptance-harness", Version: "1"}, nil)
+	phases.Mark("bridge attach attempted")
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 	if err != nil {
 		t.Fatal("connected harness could not attach to the real stdio bridge")
 	}
+	phases.Mark("bridge attached")
 	initializeResult := session.InitializeResult()
 	closed := false
 	defer func() {
@@ -140,6 +154,7 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 		t.Fatal("connected bridge did not negotiate the latest protocol")
 	}
 	listing := remoteMCPConnectedList(ctx, t, session, scenario != "connected-empty")
+	phases.Mark("tools registered")
 	if scenario != "connected-empty" {
 		remoteMCPConnectedCapabilityNegativeControl(t, ctx, encodedChannels, session)
 	}
@@ -182,22 +197,118 @@ func TestNativeRemoteMCPConnectedHarness(t *testing.T) {
 			t.Fatal("unknown remote tool was not denied locally")
 		}
 		if scenario == "connected-active-cancel" {
-			callCtx, stop := context.WithTimeout(ctx, time.Second)
-			_, waitErr := session.CallTool(callCtx, &mcp.CallToolParams{Name: waitTool, Arguments: map[string]any{}})
-			stop()
-			if waitErr == nil {
-				t.Fatal("active upstream call did not observe cancellation")
-			}
+			remoteMCPConnectedCancelWait(t, ctx, session, waitTool, waitAck, phases)
 		}
 	}
+	phases.Mark("bridge close attempted")
 	if err := session.Close(); err != nil {
 		t.Fatal("connected bridge session cleanup did not join")
 	}
 	closed = true
+	phases.Mark("bridge closed")
 	if scenario != "connected-empty" {
 		remoteMCPConnectedCapabilityNegativeControl(t, ctx, encodedChannels, nil)
 	}
 	fmt.Fprintln(os.Stderr, remoteMCPConnectedHarnessMarker+scenario)
+}
+
+// The parent supplies an absolute base in its t.TempDir to the harness only.
+// The upstream wait handler creates base+.started as an empty regular file
+// on entry. The marker must be absent before the fixture runs.
+func remoteMCPConnectedCancelWait(t *testing.T, ctx context.Context, session *mcp.ClientSession, tool, base string, phases *childdiag.Phases) {
+	t.Helper()
+	// Stay below the channel's 20s operation budget so its timeout cannot
+	// provide cancellation evidence in place of the explicit cancel below.
+	watchdog, stopWatchdog := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopWatchdog()
+	probeMarker := func(path string) (string, bool, error) {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return "marker absent", false, nil
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() != 0 {
+			return "marker probe failed", true, errors.New("wait ACK marker unreadable or invalid")
+		}
+		return "marker present", true, nil
+	}
+
+	callCtx, cancelCall := context.WithCancel(ctx)
+	type callOutcome struct{ canceled, early bool }
+	result := make(chan callOutcome, 1)
+	pending := true
+	defer func() {
+		cancelCall()
+		if pending {
+			drain := time.NewTimer(2 * time.Second)
+			defer drain.Stop()
+			select {
+			case <-result:
+				phases.Mark("wait call drained during cleanup")
+			case <-drain.C:
+				phases.Mark("wait call cleanup drain expired")
+			}
+		}
+	}()
+	phases.Mark("wait call launched")
+	go func() {
+		_, err := session.CallTool(callCtx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{}})
+		early := callCtx.Err() == nil
+		result <- callOutcome{canceled: errors.Is(err, context.Canceled), early: early}
+	}()
+	watchdogDeadline, _ := watchdog.Deadline()
+	watchdogSpent := func() bool {
+		return watchdog.Err() != nil || !time.Now().Before(watchdogDeadline) || ctx.Err() != nil
+	}
+	done, lastState, probeErr := flakediag.WaitForDesc(t, "connected wait dispatch ACK", childdiag.DeadlineOf(watchdog), func() (string, bool, error) {
+		select {
+		case <-result:
+			pending = false
+			return "wait call returned early", true, nil
+		default:
+		}
+		if watchdogSpent() {
+			return "wait dispatch deadline reached", true, nil
+		}
+		return probeMarker(base + ".started")
+	})
+	phases.Mark("wait dispatch: " + lastState)
+	if probeErr != nil {
+		t.Fatal("connected wait started marker probe failed")
+	}
+	// Check again after the marker probe, immediately before explicit cancel.
+	select {
+	case <-result:
+		pending = false
+	default:
+	}
+	if !pending {
+		t.Fatal("connected wait call returned before explicit cancellation")
+	}
+	if !done || lastState != "marker present" || watchdogSpent() || callCtx.Err() != nil {
+		t.Fatal("connected wait dispatch ACK deadline expired")
+	}
+	cancelCall()
+	phases.Mark("wait call explicitly canceled")
+	select {
+	case outcome := <-result:
+		pending = false
+		if watchdogSpent() {
+			t.Fatal("connected wait call return deadline expired")
+		}
+		if outcome.early {
+			t.Fatal("connected wait call returned before explicit cancellation")
+		}
+		if !outcome.canceled {
+			t.Fatal("connected wait call did not return context.Canceled")
+		}
+	case <-watchdog.Done():
+		t.Fatal("connected wait call return deadline expired")
+	case <-ctx.Done():
+		t.Fatal("connected wait call return deadline expired")
+	}
+	// This confirms local cancellation only. Broker dispatch uses its server
+	// context; the parent checks upstream handler completion after child exit.
+	phases.Mark("wait call returned context.Canceled")
 }
 
 func remoteMCPConnectedList(ctx context.Context, t *testing.T, session *mcp.ClientSession, wantRemote bool) []*mcp.Tool {
@@ -208,9 +319,12 @@ func remoteMCPConnectedList(ctx context.Context, t *testing.T, session *mcp.Clie
 	done, _, listErr := flakediag.WaitForDesc(t, "connected harness tool registration state", childdiag.DeadlineOf(deadline), func() (string, bool, error) {
 		listing, err := session.ListTools(deadline, nil)
 		if err != nil {
-			return "tools/list failed", false, err
+			return "tools/list failed", false, errors.New("tools/list RPC failed")
 		}
-		if listing != nil && len(listing.Tools) <= 72 {
+		if listing == nil {
+			return "tools/list returned nil result", false, nil
+		}
+		if len(listing.Tools) <= 72 {
 			remote := 0
 			for _, tool := range listing.Tools {
 				if tool != nil && strings.HasPrefix(tool.Name, "mcp") {
