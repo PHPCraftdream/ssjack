@@ -864,13 +864,14 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 func runEligibilitySession(t *testing.T, ctx context.Context, clock *testClock, bareFirst bool) {
 	t.Helper()
 	keeper := &taskKeeper{}
-	var strip atomic.Bool
+	strip, strips := &atomic.Bool{}, &atomic.Int64{}
 	session, _ := newTaskBridge(t, ctx, keeper, clock.Now, true, "2026-07-28", func(client *mcp.Client) {
 		client.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 				if method == "tools/call" && strip.Load() {
-					if call, ok := req.(*mcp.ClientRequest[*mcp.CallToolParams]); ok && call.Params != nil {
-						call.Params.Meta = nil
+					if params := req.GetParams(); params != nil {
+						params.SetMeta(nil)
+						strips.Add(1)
 					}
 				}
 				return next(ctx, method, req)
@@ -889,16 +890,18 @@ func runEligibilitySession(t *testing.T, ctx context.Context, clock *testClock, 
 	}
 	args := map[string]any{"target": "allowed", "local": "a.bin", "remote": "/srv/a.bin"}
 	uploads := 1
-	if bareFirst {
-		strip.Store(true)
-	} else {
+	if !bareFirst {
 		if result := callTaskTool(t, ctx, session, "remote_upload", args); result.IsError || len(result.Content) != 0 {
 			t.Fatalf("a declaring call did not answer a task handle: %+v", result)
 		}
 		uploads++
-		strip.Store(true)
 	}
+	strip.Store(true)
+	before := strips.Load()
 	result := callTaskTool(t, ctx, session, "remote_upload", args)
+	if got := strips.Load(); got != before+1 {
+		t.Fatalf("the bare call still carried request metadata: the strip ran %d times, want one", got-before)
+	}
 	started := keeper.started()
 	if len(started) != uploads {
 		t.Fatalf("the keeper started %d jobs, want %d", len(started), uploads)
