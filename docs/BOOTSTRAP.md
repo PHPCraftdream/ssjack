@@ -55,10 +55,18 @@ the bridge defines no custom errors in that range beyond the stated
 are allowed. A genuine asynchronous tool-list registration can enable tool-list
 change notifications; there are no invented streams or secret-bearing events.
 If nothing is both requested and available, the SDK acknowledges with `{}` and
-the listen completes. At most one listen is active, for up to one minute; the
-client may renew it. A listen does not block other requests and is cancelled on
-shutdown. The upstream SDK is untouched; its internally pinned protocol
-baseline is `2025-06-18`.
+the listen completes. At most one listen is active; an accepted listen is not
+cut short by a fixed budget, but stays open for the lifetime of the session and
+ends only on client cancellation, transport close or bridge shutdown, and a
+shutdown cancels a parked listen instead of waiting for it. A listen does not
+block other requests. `tools/list` results follow the `2026-07-28` cache
+rules: they carry `ttlMs` and a private `cacheScope`, and their tools appear in
+the registry's stable name order. The hint only states how long a cached answer
+may be served; whether and how a client caches, and when it fetches again, is
+the client's choice. `tools/list_changed`
+tells a subscribed client that its cached list is stale and leaves the refresh
+to that client; it neither schedules a fetch nor guarantees one. The upstream
+SDK is untouched; its internally pinned protocol baseline is `2025-06-18`.
 
 To find out why a bridge dropped, the keeper and the bridge append fixed
 lifecycle events to `.claude/ssjack/lifecycle.log` in the project (owner-only

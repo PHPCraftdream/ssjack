@@ -331,7 +331,7 @@ func TestMCPStdioWriteTimeoutReturnsFromConnectedServer(t *testing.T) {
 			transport := newMCPStdioTransport(serverInput, witness)
 			transport.writeBudget = mcpWriteTimeoutTestBudget
 			server := mcp.NewServer(&mcp.Implementation{Name: "write-timeout-fixture", Version: "1"}, nil)
-			configureMCPStdioServer(server)
+			configureMCPStdioServer(server, context.Background())
 			var toolCalls atomic.Int32
 			server.AddTool(&mcp.Tool{Name: "timeout_fixture_tool", Description: "real write-timeout fixture", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				toolCalls.Add(1)
@@ -644,7 +644,7 @@ func TestMCPStdioHostileWriterIgnoresCloseAndRefusesFollowingFrames(t *testing.T
 			transport := newMCPStdioTransport(serverInput, witness)
 			transport.writeBudget = mcpWriteTimeoutTestBudget
 			server := mcp.NewServer(&mcp.Implementation{Name: "hostile-writer-fixture", Version: "1"}, nil)
-			configureMCPStdioServer(server)
+			configureMCPStdioServer(server, context.Background())
 			var toolCalls atomic.Int32
 			server.AddTool(&mcp.Tool{Name: "timeout_fixture_tool", Description: "hostile writer fixture", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				toolCalls.Add(1)
@@ -759,8 +759,8 @@ func TestMCPStdioHostileReaderCannotHoldServerShutdown(t *testing.T) {
 	clientOutput, serverOutput := io.Pipe()
 	transport := newMCPStdioTransport(source, serverOutput)
 	server := mcp.NewServer(&mcp.Implementation{Name: "hostile-reader-fixture", Version: "1"}, nil)
-	configureMCPStdioServer(server)
 	ctx, cancel := context.WithCancel(context.Background())
+	configureMCPStdioServer(server, ctx)
 	runErr := make(chan error, 1)
 	runExited := make(chan struct{})
 	go func() {

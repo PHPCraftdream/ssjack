@@ -18,7 +18,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"time"
 )
 
 func runHook(args []string) (int, error) {
@@ -80,8 +79,8 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 	if err != nil {
 		return 1, "registry", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
-	configureMCPStdioServer(server)
 	connCtx, cancel := context.WithCancel(ctx)
+	configureMCPStdioServer(server, connCtx)
 	registration := startRemoteMCPRegistration(connCtx, descriptors, server)
 	life.Event("serving")
 	runErr := server.Run(connCtx, newMCPStdioTransport(os.Stdin, os.Stdout))
@@ -121,10 +120,28 @@ func stdioCause(err error) string {
 
 const (
 	maxRemoteMCPSubscriptionsListenHandlers = 1
-	remoteMCPSubscriptionsListenBudget      = time.Minute
+	// remoteMCPToolListCacheTTLMs bounds how long a client may reuse a
+	// tools/list result; a registry change notifies subscribed clients at
+	// once, so it only bounds the staleness a client that subscribed to
+	// nothing can observe.
+	remoteMCPToolListCacheTTLMs = 5000
+	// remoteMCPToolListCacheScope is private: the list describes the owner's
+	// configured targets, applications and channels, not a shared resource.
+	remoteMCPToolListCacheScope = "private"
 )
 
-func configureMCPStdioServer(server *mcp.Server) {
+// configureMCPStdioServer gives the served registry its listen and list-cache
+// policy. shutdown is the bridge's own lifetime, the context handed to
+// Server.Run: ending it must never wait on a parked listen. At most one
+// subscriptions/listen is admitted, and it holds its slot for as long as its
+// request context lives. The SDK cancels a parked listen on session close only
+// after it has recorded the request ID, and it releases the request for
+// asynchronous handling before that record, so a close starting in between
+// would wait on the handler indefinitely; the shutdown context therefore
+// cancels every admitted listen as well. The SDK still acknowledges only the
+// requested notification types it advertises and completes a listen that
+// accepted none.
+func configureMCPStdioServer(server *mcp.Server, shutdown context.Context) {
 	var mu sync.Mutex
 	active := 0
 
@@ -145,15 +162,30 @@ func configureMCPStdioServer(server *mcp.Server) {
 			active++
 			mu.Unlock()
 
+			listenCtx, ceaseListen := context.WithCancel(ctx)
+			stopShutdown := context.AfterFunc(shutdown, ceaseListen)
 			defer func() {
+				stopShutdown()
+				ceaseListen()
 				mu.Lock()
 				active--
 				mu.Unlock()
 			}()
 
-			boundedCtx, cancel := context.WithTimeout(ctx, remoteMCPSubscriptionsListenBudget)
-			defer cancel()
-			return next(boundedCtx, method, req)
+			return next(listenCtx, method, req)
+		}
+	})
+
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, req)
+			if err != nil || method != "tools/list" {
+				return result, err
+			}
+			if listing, ok := result.(*mcp.ListToolsResult); ok && listing != nil {
+				listing.Cacheable = mcp.Cacheable{TTLMs: remoteMCPToolListCacheTTLMs, CacheScope: remoteMCPToolListCacheScope}
+			}
+			return result, nil
 		}
 	})
 }
