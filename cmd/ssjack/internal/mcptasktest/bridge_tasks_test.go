@@ -849,17 +849,40 @@ var sentinelForms = [][2]string{
 	{"987656", "987,656"}, {"2718281828", "2.7 GB/s"},
 }
 
+// sentinelFields is the field part of the sentinel record's status text: the
+// Phase/Mode/Chunks/Chunk size/Attempts line, the Bytes/Files/Dirs/Speed line,
+// and the SHA-256, Manifest SHA-256 and Failed lines.
+var sentinelFields = []string{
+	"Phase: SENTINEL-PHASE · Mode: SENTINEL-MODE · Chunks: 123456/123457 · Chunk size: 3,141,592 bytes · Attempts: 987,656",
+	"Bytes: 987,654,321 · Files: 8675309 · Dirs: 8675310 · Speed: 2.7 GB/s",
+	"SHA-256: SENTINEL-SHA256",
+	"Manifest SHA-256: SENTINEL-MANIFEST",
+	"Failed: SENTINEL-ERRORCLASS",
+}
+
 // sentinelLine and sentinelText are the status message and completed text of
 // the sentinel record.
-var sentinelLine = "Phase: SENTINEL-PHASE · Mode: SENTINEL-MODE · Chunks: 123456/123457 · Chunk size: 3,141,592 bytes · Attempts: 987,656 · Bytes: 987,654,321 · Files: 8675309 · Dirs: 8675310 · Speed: 2.7 GB/s · SHA-256: SENTINEL-SHA256 · Manifest SHA-256: SENTINEL-MANIFEST · Failed: SENTINEL-ERRORCLASS"
-var sentinelText = "Transfer SENTINEL-JOB: SENTINEL-DIRECTION SENTINEL-KIND, done\n" + strings.ReplaceAll(sentinelLine, " · ", "\n")
+var sentinelLine = strings.Join(sentinelFields, " · ")
+var sentinelText = "Transfer SENTINEL-JOB: SENTINEL-DIRECTION SENTINEL-KIND, done\n" + strings.Join(sentinelFields, "\n")
+
+// encodedText returns one text value as the SDK writes it in a frame: a JSON
+// string without HTML escaping, with newlines escaped.
+func encodedText(text string) []byte {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if encoder.Encode(text) != nil {
+		return nil
+	}
+	return bytes.TrimRight(buffer.Bytes(), "\n")
+}
 
 // leakedSentinel returns the first record sentinel a frame still carries after
 // removing the exact texts the test expects the frame to carry.
 func leakedSentinel(frame []byte, expect ...string) string {
 	body := frame
 	for _, text := range expect {
-		if encoded, err := json.Marshal(text); err == nil {
+		if encoded := encodedText(text); encoded != nil {
 			body = bytes.Replace(body, encoded, nil, 1)
 		}
 	}

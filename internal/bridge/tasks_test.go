@@ -843,9 +843,6 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 		t.Fatalf("the keeper saw %d status reads, want three", got)
 	}
 	rawFrames := tap.taskFrames()
-	if len(rawFrames) < 4 {
-		t.Fatalf("the recording holds %d task frames, want at least four", len(rawFrames))
-	}
 	seen := make(map[string]int)
 	for _, frame := range rawFrames {
 		seen[frame[0]]++
@@ -856,13 +853,8 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 			t.Fatalf("the raw %s frame carries the keeper record sentinel %q: %s", frame[0], leaked, frame[1])
 		}
 	}
-	for _, method := range []string{"tools/call", "tasks/get", "tasks/cancel"} {
-		if seen[method] == 0 {
-			t.Fatalf("the recording holds no %s answer: %v", method, seen)
-		}
-	}
-	if seen["tasks/cancel"] != 1 {
-		t.Fatalf("the recording holds %d answers to the outbound tasks/cancel, want one: %v", seen["tasks/cancel"], seen)
+	if seen["tools/call"] != 1 || seen["tasks/get"] != 3 || seen["tasks/cancel"] != 1 {
+		t.Fatalf("the recording holds the task answers %v, want one handle, three polls and one ack", seen)
 	}
 }
 
