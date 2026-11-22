@@ -106,7 +106,6 @@ type taskAck struct {
 	ResultType string `json:"resultType"`
 }
 
-// TestMCPTaskBridgeChild is the production stdio MCP bridge child.
 func TestMCPTaskBridgeChild(t *testing.T) {
 	if os.Getenv(bridgeGate) != "1" {
 		t.Skip("mcp task bridge child only")
@@ -120,8 +119,6 @@ func TestMCPTaskBridgeChild(t *testing.T) {
 	}
 }
 
-// TestMCPTaskPathOverTheLaunchedBridge drives the transfer task path over the
-// launched bridge with a client that declares the tasks extension.
 func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), bridgeTestBudget)
@@ -271,21 +268,20 @@ func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 	}
 }
 
-// TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries proves a keeper error reply and the start arguments never reach a server-to-client frame.
 func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), bridgeTestBudget)
 	defer cancel()
 
 	keeper := &launchKeeper{}
-	keeper.status = func(call int, input transfer.StatusInput) wire.Reply {
+	keeper.status = func(call int, _ transfer.StatusInput) wire.Reply {
 		switch call {
 		case 1:
-			return broker.Result(transfer.StatusOutput{JobID: input.JobID, State: "running", Direction: "upload", Kind: "file", Bytes: 1}, nil)
+			return broker.Result(sentinelRecord("running"), nil)
 		case 2:
 			return wire.Reply{Error: "stderr: CANARY-STDERR-7c1f4a sk-CANARY-SECRET-9e2b6d"}
 		}
-		return broker.Result(transfer.StatusOutput{JobID: input.JobID, State: "done", Direction: "upload", Kind: "file", Bytes: 3, Files: 1, SHA256: "aa"}, nil)
+		return broker.Result(sentinelRecord("done"), nil)
 	}
 	command := startBridge(t, ctx, keeper.Handle)
 	logbook := &recorder{}
@@ -333,12 +329,11 @@ func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {
 	if err != nil || done == nil {
 		t.Fatalf("the third poll failed: %v", err)
 	}
-	wantText := fmt.Sprintf("Transfer %s: upload file, done\nBytes: 3 · Files: 1 · Dirs: 0\nSHA-256: aa", jobID)
 	if done.Result == nil {
 		t.Fatal("a completed task carried no result")
 	}
-	if text := requireSingleText(t, "tasks/get", done.Result); text != wantText {
-		t.Fatalf("the completed task text was\n%s\nwant\n%s", text, wantText)
+	if text := requireSingleText(t, "tasks/get", done.Result); text != sentinelText {
+		t.Fatalf("the completed task text was\n%s\nwant\n%s", text, sentinelText)
 	}
 
 	cancelled, err := mcp.CallCustomMethod[*taskCancelParams, *taskAck, taskCancelParams](ctx, session, "tasks/cancel", &taskCancelParams{TaskID: jobID})
@@ -347,6 +342,11 @@ func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {
 	}
 
 	requireOps(t, keeper, "session.describe", "transfer_upload", "transfer_status", "transfer_status", "transfer_status")
+	for index, frame := range logbook.since(0) {
+		if leaked := leakedSentinel(frame, sentinelLine, sentinelText); leaked != "" {
+			t.Fatalf("recorded frame %d carries the keeper record sentinel %q: %s", index, leaked, frame)
+		}
+	}
 	for _, want := range []string{`"resultType":"task"`, `"status":"completed"`, "the task could not be read", `"resultType":"complete"`} {
 		if _, ok := logbook.contains(want); !ok {
 			t.Fatalf("no recorded frame carried %q; %d frames were read", want, logbook.count())
@@ -361,8 +361,6 @@ func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {
 	}
 }
 
-// TestMCPFallbackPinOverTheLaunchedBridge proves a modern client that
-// declares no extension keeps today's polling text for the transfer tools.
 func TestMCPFallbackPinOverTheLaunchedBridge(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), bridgeTestBudget)
@@ -795,4 +793,164 @@ func (c *recordingConnection) Read(ctx context.Context) (jsonrpc.Message, error)
 		c.recorder.add(encoded)
 	}
 	return message, nil
+}
+
+const rawTaskMeta = `"_meta":{"io.modelcontextprotocol/protocolVersion":"` + modernVersion + `","io.modelcontextprotocol/clientCapabilities":{"extensions":{"` + taskExtension + `":{}}}}`
+
+// taskResultMembers lists the result member names the design allows per method.
+var taskResultMembers = map[string]string{
+	"tools/call":   "resultType taskId status statusMessage createdAt lastUpdatedAt ttlMs pollIntervalMs _meta",
+	"tasks/get":    "resultType taskId status statusMessage createdAt lastUpdatedAt ttlMs pollIntervalMs result error _meta",
+	"tasks/cancel": "resultType _meta",
+	"tasks/update": "resultType _meta",
+}
+
+// taskFrameViolation names the first member of one task frame the design does
+// not allow, or returns "".
+func taskFrameViolation(method, frame string) string {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(frame), &envelope); err != nil {
+		return fmt.Sprintf("the %s frame did not decode: %v: %s", method, err, frame)
+	}
+	for name := range envelope {
+		if !strings.Contains(" jsonrpc id result error ", " "+name+" ") {
+			return fmt.Sprintf("the %s frame carries the extra top-level member %q: %s", method, name, frame)
+		}
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal(envelope["result"], &result) != nil {
+		return ""
+	}
+	for name := range result {
+		if !strings.Contains(" "+taskResultMembers[method]+" ", " "+name+" ") {
+			return fmt.Sprintf("the %s result carries the extra member %q: %s", method, name, frame)
+		}
+	}
+	return ""
+}
+
+// sentinelRecord is a successful status record whose every displayed field
+// carries its own marker.
+func sentinelRecord(state string) transfer.StatusOutput {
+	return transfer.StatusOutput{
+		JobID: "SENTINEL-JOB", State: state, Direction: "SENTINEL-DIRECTION", Phase: "SENTINEL-PHASE", Kind: "SENTINEL-KIND",
+		Mode: "SENTINEL-MODE", Files: 8675309, Dirs: 8675310, Bytes: 987654321, SHA256: "SENTINEL-SHA256",
+		ManifestSHA256: "SENTINEL-MANIFEST", ErrorClass: "SENTINEL-ERRORCLASS", ChunkBytes: 3141592,
+		ChunksDone: 123456, ChunksTotal: 123457, Attempts: 987656, BytesPerSecond: 2718281828,
+	}
+}
+
+// sentinelForms pairs each record sentinel with the rendered form the status
+// line groups or rounds.
+var sentinelForms = [][2]string{
+	{"SENTINEL-JOB"}, {"SENTINEL-DIRECTION"}, {"SENTINEL-PHASE"}, {"SENTINEL-KIND"}, {"SENTINEL-MODE"},
+	{"SENTINEL-SHA256"}, {"SENTINEL-MANIFEST"}, {"SENTINEL-ERRORCLASS"}, {"8675309"}, {"8675310"},
+	{"987654321", "987,654,321"}, {"3141592", "3,141,592"}, {"123456"}, {"123457"},
+	{"987656", "987,656"}, {"2718281828", "2.7 GB/s"},
+}
+
+// sentinelLine and sentinelText are the status message and completed text of
+// the sentinel record.
+var sentinelLine = "Phase: SENTINEL-PHASE · Mode: SENTINEL-MODE · Chunks: 123456/123457 · Chunk size: 3,141,592 bytes · Attempts: 987,656 · Bytes: 987,654,321 · Files: 8675309 · Dirs: 8675310 · Speed: 2.7 GB/s · SHA-256: SENTINEL-SHA256 · Manifest SHA-256: SENTINEL-MANIFEST · Failed: SENTINEL-ERRORCLASS"
+var sentinelText = "Transfer SENTINEL-JOB: SENTINEL-DIRECTION SENTINEL-KIND, done\n" + strings.ReplaceAll(sentinelLine, " · ", "\n")
+
+// leakedSentinel returns the first record sentinel a frame still carries after
+// removing the exact texts the test expects the frame to carry.
+func leakedSentinel(frame []byte, expect ...string) string {
+	body := frame
+	for _, text := range expect {
+		if encoded, err := json.Marshal(text); err == nil {
+			body = bytes.Replace(body, encoded, nil, 1)
+		}
+	}
+	for _, pair := range sentinelForms {
+		for _, form := range pair {
+			if form != "" && bytes.Contains(body, []byte(form)) {
+				return form
+			}
+		}
+	}
+	return ""
+}
+
+// rawAnswerID returns the id of one raw reply.
+func rawAnswerID(line string) int {
+	var answer struct {
+		ID int `json:"id"`
+	}
+	if json.Unmarshal([]byte(line), &answer) != nil {
+		return 0
+	}
+	return answer.ID
+}
+
+func TestMCPTaskRawFramesCarryOnlyTheContractMembers(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), bridgeTestBudget)
+	defer cancel()
+	keeper := &launchKeeper{}
+	keeper.status = func(call int, _ transfer.StatusInput) wire.Reply {
+		if call == 1 {
+			return broker.Result(sentinelRecord("running"), nil)
+		}
+		return broker.Result(sentinelRecord("done"), nil)
+	}
+	stdin, stdout, _ := startRawBridge(t, ctx, keeper.Handle)
+	t.Cleanup(func() { _ = stdout.Close() })
+	reader := newRawReader(stdout, nil)
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+modernVersion+`","capabilities":{},"clientInfo":{"name":"raw-task","version":"1"}}}`)
+	reader.next(t, ctx, "initialize reply")
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remote_upload","arguments":{"target":"allowed","local":"a.bin","remote":"/srv/a.bin"},`+rawTaskMeta+`}}`)
+	frames := [][2]string{{"tools/call", reader.next(t, ctx, "tools/call reply")}}
+	minted := keeper.minted()
+	if len(minted) != 1 {
+		t.Fatalf("the keeper started %d jobs, want one", len(minted))
+	}
+	for id := 3; id <= 4; id++ {
+		writeRawFrame(t, stdin, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tasks/get","params":{"taskId":%q,`, id, minted[0])+rawTaskMeta+`}}`)
+		frames = append(frames, [2]string{"tasks/get", reader.next(t, ctx, "tasks/get reply")})
+	}
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":5,"method":"tasks/cancel","params":{"taskId":"`+minted[0]+`",`+rawTaskMeta+`}}`)
+	ack := reader.next(t, ctx, "tasks/cancel reply")
+	if rawAnswerID(ack) != 5 {
+		t.Fatalf("the tasks/cancel capture is not the answer to request 5: %s", ack)
+	}
+	frames = append(frames, [2]string{"tasks/cancel", ack})
+	if !bytes.Contains([]byte(frames[1][1]), []byte("SENTINEL-PHASE")) || !bytes.Contains([]byte(frames[2][1]), []byte("SENTINEL-JOB")) {
+		t.Fatalf("the raw polls do not carry the sentinel record: %v", frames[1:])
+	}
+	for _, frame := range frames {
+		if violation := taskFrameViolation(frame[0], frame[1]); violation != "" {
+			t.Fatal(violation)
+		}
+		if leaked := leakedSentinel([]byte(frame[1]), sentinelLine, sentinelText); leaked != "" {
+			t.Fatalf("the raw %s frame carries the keeper record sentinel %q: %s", frame[0], leaked, frame[1])
+		}
+	}
+}
+
+func TestMCPTaskRawFrameCheckNamesAnInjectedMember(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), bridgeTestBudget)
+	defer cancel()
+	keeper := &launchKeeper{}
+	stdin, stdout, _ := startRawBridge(t, ctx, keeper.Handle)
+	t.Cleanup(func() { _ = stdout.Close() })
+	reader := newRawReader(stdout, func(line string) string { return line[:len(line)-1] + `,"task-leak":true}` })
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+modernVersion+`","capabilities":{},"clientInfo":{"name":"raw-task","version":"1"}}}`)
+	reader.next(t, ctx, "initialize reply")
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remote_upload","arguments":{"target":"allowed","local":"a.bin","remote":"/srv/a.bin"},`+rawTaskMeta+`}}`)
+	handle := reader.next(t, ctx, "tools/call reply")
+	if violation := taskFrameViolation("tools/call", handle); !strings.Contains(violation, `"task-leak"`) {
+		t.Fatalf("the frame check did not name the injected member: %q", violation)
+	}
+}
+
+func TestMCPTaskCancelAckCaptureCorrelatesByRequestID(t *testing.T) {
+	if rawAnswerID(`{"jsonrpc":"2.0","id":6,"result":{"resultType":"complete"}}`) == 5 {
+		t.Fatal("the capture took another request's answer")
+	}
+	if rawAnswerID(`{"jsonrpc":"2.0","id":5,"result":{"resultType":"complete"}}`) != 5 {
+		t.Fatal("the capture did not take the answer to the outbound tasks/cancel")
+	}
 }

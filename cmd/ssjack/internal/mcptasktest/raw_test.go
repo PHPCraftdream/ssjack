@@ -32,15 +32,20 @@ type rawReader struct {
 	lines chan string
 }
 
-// newRawReader starts the only reader of the child's stdout.
-func newRawReader(stream io.Reader) *rawReader {
+// newRawReader starts the only reader of the child's stdout; wrap may rewrite
+// each line before it is recorded.
+func newRawReader(stream io.Reader, wrap func(string) string) *rawReader {
 	reader := &rawReader{lines: make(chan string, 16)}
 	go func() {
 		defer close(reader.lines)
 		scanner := bufio.NewScanner(stream)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			reader.lines <- scanner.Text()
+			line := scanner.Text()
+			if wrap != nil {
+				line = wrap(line)
+			}
+			reader.lines <- line
 		}
 	}()
 	return reader
@@ -82,7 +87,7 @@ func TestMCPTaskMethodsAreRefusedOnALegacyConnection(t *testing.T) {
 	keeper := &launchKeeper{}
 	stdin, stdout, process := startRawBridge(t, ctx, keeper.Handle)
 	t.Cleanup(func() { _ = stdout.Close() })
-	reader := newRawReader(stdout)
+	reader := newRawReader(stdout, nil)
 
 	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+legacyVersion+`","capabilities":{},"clientInfo":{"name":"legacy-probe","version":"1"}}}`)
 	requireLegacyInitialize(t, reader.next(t, ctx, "initialize reply"))

@@ -192,23 +192,12 @@ func (c *testClock) Advance(d time.Duration) {
 // connection and returns an MCP client session to it.
 func newTaskBridge(t *testing.T, ctx context.Context, keeper *taskKeeper, clock func() time.Time, declareExtension bool, version string, configure ...func(*mcp.Client)) (*mcp.ClientSession, *broker.Server) {
 	t.Helper()
-	return newTaskBridgeWith(t, ctx, keeper, clock, declareExtension, version, nil, configure...)
-}
-
-// newRecordingTaskBridge answers like newTaskBridge and keeps every frame the
-// client read.
-func newRecordingTaskBridge(t *testing.T, ctx context.Context, keeper *taskKeeper, clock func() time.Time, declareExtension bool, version string) (*mcp.ClientSession, *broker.Server, *recorder) {
-	t.Helper()
-	kept := &recorder{}
-	session, server := newTaskBridgeWith(t, ctx, keeper, clock, declareExtension, version, func(inner mcp.Transport) mcp.Transport {
-		return &recordingTransport{inner: inner, recorder: kept}
-	})
-	return session, server, kept
+	return newTaskBridgeWith(t, ctx, keeper, clock, declareExtension, version, nil, nil, configure...)
 }
 
 // newTaskBridgeWith builds the bridge of newTaskBridge over an optionally
 // wrapped client transport.
-func newTaskBridgeWith(t *testing.T, ctx context.Context, keeper *taskKeeper, clock func() time.Time, declareExtension bool, version string, wrap func(mcp.Transport) mcp.Transport, configure ...func(*mcp.Client)) (*mcp.ClientSession, *broker.Server) {
+func newTaskBridgeWith(t *testing.T, ctx context.Context, keeper *taskKeeper, clock func() time.Time, declareExtension bool, version string, pipe func() (mcp.Transport, mcp.Transport), wrap func(mcp.Transport) mcp.Transport, configure ...func(*mcp.Client)) (*mcp.ClientSession, *broker.Server) {
 	t.Helper()
 	auth := wire.Auth{Version: 2, Session: strings.Repeat("5", 64), Token: strings.Repeat("6", 64)}
 	server, err := broker.Listen(ctx, auth.Session, auth.Token, time.Minute, keeper.handle)
@@ -221,8 +210,10 @@ func newTaskBridgeWith(t *testing.T, ctx context.Context, keeper *taskKeeper, cl
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { connection.Close() })
-	serverTransport, inMemoryClient := mcp.NewInMemoryTransports()
-	clientTransport := mcp.Transport(inMemoryClient)
+	if pipe == nil {
+		pipe = func() (mcp.Transport, mcp.Transport) { return mcp.NewInMemoryTransports() }
+	}
+	serverTransport, clientTransport := pipe()
 	if wrap != nil {
 		clientTransport = wrap(clientTransport)
 	}
@@ -414,9 +405,6 @@ func doneRecord(input transfer.StatusInput) wire.Reply {
 	return broker.Result(transfer.StatusOutput{JobID: input.JobID, State: "done", Direction: "upload", Kind: "file", Bytes: 3, Files: 1, SHA256: "aa"}, nil)
 }
 
-// TestTaskAdvertisementAndRefusals checks what the server advertises and how
-// the task methods and the eligible tool calls answer a client that may not
-// use them.
 func TestTaskAdvertisementAndRefusals(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -487,8 +475,6 @@ func TestTaskAdvertisementAndRefusals(t *testing.T) {
 	})
 }
 
-// TestTaskStartAnswersAHandleOnlyForTheTransferTools checks which tool calls
-// turn into a task handle.
 func TestTaskStartAnswersAHandleOnlyForTheTransferTools(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -511,8 +497,6 @@ func TestTaskStartAnswersAHandleOnlyForTheTransferTools(t *testing.T) {
 	}
 }
 
-// TestTaskUnknownForeignAndExpiredHandles checks the three handles this bridge
-// must not answer.
 func TestTaskUnknownForeignAndExpiredHandles(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -590,7 +574,6 @@ func TestTaskUnknownForeignAndExpiredHandles(t *testing.T) {
 	})
 }
 
-// TestTaskCancelErrorPaths checks every way tasks/cancel can refuse or give up.
 func TestTaskCancelErrorPaths(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -702,8 +685,6 @@ func TestTaskCancelErrorPaths(t *testing.T) {
 	})
 }
 
-// TestTaskUpdateAcknowledgesKnownHandles checks that tasks/update acks without
-// touching the keeper or the record.
 func TestTaskUpdateAcknowledgesKnownHandles(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -736,10 +717,6 @@ func TestTaskUpdateAcknowledgesKnownHandles(t *testing.T) {
 	}
 }
 
-// TestTaskStatusMessageIsTheGoldenFieldLine pins the one-line status message of
-// a running task: the field lines of the record joined by the separator, so the
-// field order, the thousands separators, the decimal rate and the " · "
-// separator are all fixed together.
 func TestTaskStatusMessageIsTheGoldenFieldLine(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -769,7 +746,6 @@ func TestTaskStatusMessageIsTheGoldenFieldLine(t *testing.T) {
 	}
 }
 
-// TestTaskRawFramesCarryNoCanaries checks that no raw frame the client reads carries a start-argument canary or the keeper's error text.
 func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -781,16 +757,19 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 		"CANARY-REMOTE-c3d4",
 	}
 	keeper := &taskKeeper{}
-	keeper.setStatus(func(call int, input transfer.StatusInput) wire.Reply {
+	keeper.setStatus(func(call int, _ transfer.StatusInput) wire.Reply {
 		switch call {
 		case 1:
-			return runningRecord(input)
+			return broker.Result(sentinelRecord("running"), nil)
 		case 2:
 			return wire.Reply{Error: "stderr: CANARY-STDERR-7c1f4a sk-CANARY-SECRET-9e2b6d"}
 		}
-		return doneRecord(input)
+		return broker.Result(sentinelRecord("done"), nil)
 	})
-	session, _, kept := newRecordingTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+	tap, kept := &pipeTap{}, &recorder{}
+	session, _ := newTaskBridgeWith(t, ctx, keeper, nil, true, "2026-07-28", tap.pipes, func(inner mcp.Transport) mcp.Transport {
+		return &recordingTransport{inner: inner, recorder: kept}
+	})
 	result := callTaskTool(t, ctx, session, "remote_upload", map[string]any{"target": "allowed", "local": "CANARY-LOCAL-a1b2", "remote": "/srv/CANARY-REMOTE-c3d4"})
 	if result.IsError || len(result.Content) != 0 {
 		t.Fatalf("remote_upload did not answer a task handle: %+v", result)
@@ -806,6 +785,9 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 	}
 	if first.Status != "working" {
 		t.Fatalf("the first poll reported %q, want working", first.Status)
+	}
+	if first.StatusMessage != sentinelLine {
+		t.Fatalf("the first poll reported the status message %q, want the sentinel line %q", first.StatusMessage, sentinelLine)
 	}
 	if answer, err := taskGet(ctx, session, id); err == nil {
 		t.Fatalf("a refused read answered a task: %+v", answer)
@@ -826,6 +808,9 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 		t.Fatalf("the third poll reported %q, want completed", third.Status)
 	}
 	text := answerText(t, third.Result)
+	if text != sentinelText {
+		t.Fatalf("the completed text is\n%s\nwant\n%s", text, sentinelText)
+	}
 	ack, err := taskCancel(ctx, session, id)
 	if err != nil || ack == nil {
 		t.Fatalf("tasks/cancel failed: %+v, %v", ack, err)
@@ -856,6 +841,28 @@ func TestTaskRawFramesCarryNoCanaries(t *testing.T) {
 	}
 	if got := countOps(keeper.ops(), "transfer_status"); got != 3 {
 		t.Fatalf("the keeper saw %d status reads, want three", got)
+	}
+	rawFrames := tap.taskFrames()
+	if len(rawFrames) < 4 {
+		t.Fatalf("the recording holds %d task frames, want at least four", len(rawFrames))
+	}
+	seen := make(map[string]int)
+	for _, frame := range rawFrames {
+		seen[frame[0]]++
+		if violation := taskFrameViolation(frame[0], frame[1]); violation != "" {
+			t.Fatal(violation)
+		}
+		if leaked := leakedSentinel([]byte(frame[1]), sentinelLine, sentinelText); leaked != "" {
+			t.Fatalf("the raw %s frame carries the keeper record sentinel %q: %s", frame[0], leaked, frame[1])
+		}
+	}
+	for _, method := range []string{"tools/call", "tasks/get", "tasks/cancel"} {
+		if seen[method] == 0 {
+			t.Fatalf("the recording holds no %s answer: %v", method, seen)
+		}
+	}
+	if seen["tasks/cancel"] != 1 {
+		t.Fatalf("the recording holds %d answers to the outbound tasks/cancel, want one: %v", seen["tasks/cancel"], seen)
 	}
 }
 
@@ -924,8 +931,6 @@ func runEligibilitySession(t *testing.T, ctx context.Context, clock *testClock, 
 	}
 }
 
-// TestTaskEligibilityIgnoresSessionState checks that every call answers from
-// its own request metadata, whether the bare call comes first or later.
 func TestTaskEligibilityIgnoresSessionState(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -935,9 +940,6 @@ func TestTaskEligibilityIgnoresSessionState(t *testing.T) {
 	t.Run("bare first", func(t *testing.T) { runEligibilitySession(t, ctx, clock, true) })
 }
 
-// TestTaskStartRefusesAnUnknownArgumentBeforeTheKeeper checks that an argument
-// the tool's input schema does not know is refused before the tool handler and
-// the keeper, so no transfer starts.
 func TestTaskStartRefusesAnUnknownArgumentBeforeTheKeeper(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -958,9 +960,6 @@ func TestTaskStartRefusesAnUnknownArgumentBeforeTheKeeper(t *testing.T) {
 	}
 }
 
-// TestTaskStartWithoutAJobIDAnswersTodaysText checks that a start the keeper
-// answers without a job id never becomes a task, for a client that declares the
-// extension and for one that does not.
 func TestTaskStartWithoutAJobIDAnswersTodaysText(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

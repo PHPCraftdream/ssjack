@@ -1,7 +1,11 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -15,9 +19,6 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
-// TestTaskPollsQueueOnTheKeeperConnection checks that a tasks/get poll takes
-// its status read on the shared keeper connection behind a waiting call: the
-// poll waits for the broker client mutex and only then reads the record.
 func TestTaskPollsQueueOnTheKeeperConnection(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -129,8 +130,6 @@ func TestTaskPollsQueueOnTheKeeperConnection(t *testing.T) {
 	}
 }
 
-// TestTaskCancelAcknowledgesAfterTheKeeperReply checks that tasks/cancel does
-// not acknowledge a cancellation before the keeper answered it.
 func TestTaskCancelAcknowledgesAfterTheKeeperReply(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -225,8 +224,6 @@ func requireTaskResultText(t *testing.T, answer *taskAnswer, toolText string) {
 	}
 }
 
-// TestTaskCancellationComesFromTheRecord checks that a cancellation is decided
-// by the following status record, never by the cancellation reply.
 func TestTaskCancellationComesFromTheRecord(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -359,8 +356,6 @@ func TestTaskCancellationComesFromTheRecord(t *testing.T) {
 	})
 }
 
-// TestTaskFrozenFailedWhenTheKeeperLostTheJob checks that a job the keeper no
-// longer knows freezes the task as failed and is not read again.
 func TestTaskFrozenFailedWhenTheKeeperLostTheJob(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -407,8 +402,6 @@ func TestTaskFrozenFailedWhenTheKeeperLostTheJob(t *testing.T) {
 	}
 }
 
-// TestTaskRetriesAWellFormedReadError checks that a read the keeper refused is
-// retryable and that the next poll completes the task.
 func TestTaskRetriesAWellFormedReadError(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -444,8 +437,6 @@ func TestTaskRetriesAWellFormedReadError(t *testing.T) {
 	requireTaskResultText(t, answer, toolText)
 }
 
-// TestTaskFreezesFailedOnALostAttachment checks that a keeper attachment that
-// ended while the task is not frozen freezes it as failed.
 func TestTaskFreezesFailedOnALostAttachment(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -482,8 +473,6 @@ func TestTaskFreezesFailedOnALostAttachment(t *testing.T) {
 	}
 }
 
-// TestTaskResultEqualsTheStatusText checks that a completed task result is the
-// transfer_status text byte for byte, hint included.
 func TestTaskResultEqualsTheStatusText(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -508,8 +497,6 @@ func TestTaskResultEqualsTheStatusText(t *testing.T) {
 	}
 }
 
-// TestTaskBoundsDropTheOldestHandle checks the record bound: the oldest handle
-// is dropped and an unknown handle reaches nothing.
 func TestTaskBoundsDropTheOldestHandle(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -544,7 +531,6 @@ func TestTaskBoundsDropTheOldestHandle(t *testing.T) {
 	}
 }
 
-// TestTaskPollComparesTheKeeperRecordNotItsRenderedSpeed checks that a poll whose record moved while its rendered speed rounded to the same text still moves lastUpdatedAt.
 func TestTaskPollComparesTheKeeperRecordNotItsRenderedSpeed(t *testing.T) {
 	flakediag.Begin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -585,5 +571,206 @@ func TestTaskPollComparesTheKeeperRecordNotItsRenderedSpeed(t *testing.T) {
 	}
 	if !after.After(before) {
 		t.Fatalf("a changed record left lastUpdatedAt at %s, want later than %s", second.LastUpdatedAt, first.LastUpdatedAt)
+	}
+}
+
+// pipeTap records both directions of the bridge pipe as whole JSON-RPC lines
+// before the SDK decodes them, and can rewrite the server->client ones.
+type pipeTap struct {
+	mu     sync.Mutex
+	reader io.ReadCloser
+	writer io.WriteCloser
+	down   bytes.Buffer
+	up     bytes.Buffer
+	wrap   func(string) string
+	once   sync.Once
+}
+
+func (t *pipeTap) pipes() (mcp.Transport, mcp.Transport) {
+	serverIn, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	t.reader, t.writer = clientRead, clientWrite
+	return &mcp.IOTransport{Reader: serverIn, Writer: serverWrite}, &mcp.IOTransport{Reader: t, Writer: t}
+}
+
+func (t *pipeTap) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	t.mu.Lock()
+	t.down.Write(p[:n])
+	t.mu.Unlock()
+	return n, err
+}
+
+func (t *pipeTap) Write(p []byte) (int, error) {
+	n, err := t.writer.Write(p)
+	t.mu.Lock()
+	t.up.Write(p[:n])
+	t.mu.Unlock()
+	return n, err
+}
+
+func (t *pipeTap) Close() error {
+	t.once.Do(func() { t.reader.Close(); t.writer.Close() })
+	return nil
+}
+
+// recorded returns one direction as whole lines, rewritten by wrap.
+func (t *pipeTap) recorded(buf *bytes.Buffer, wrap func(string) string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var lines []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			if wrap != nil {
+				line = wrap(line)
+			}
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// taskFrames returns every recorded server->client frame with the method of
+// the request it answers.
+func (t *pipeTap) taskFrames() [][2]string {
+	methods := make(map[string]string)
+	for _, frame := range t.recorded(&t.up, nil) {
+		var sent struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal([]byte(frame), &sent) == nil && len(sent.ID) != 0 {
+			methods[string(sent.ID)] = sent.Method
+		}
+	}
+	var frames [][2]string
+	for _, frame := range t.recorded(&t.down, t.wrap) {
+		var answer struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if json.Unmarshal([]byte(frame), &answer) != nil {
+			continue
+		}
+		if method, ok := methods[string(answer.ID)]; ok && taskResultMembers[method] != "" {
+			frames = append(frames, [2]string{method, frame})
+		}
+	}
+	return frames
+}
+
+// taskResultMembers lists the result member names the design allows per method.
+var taskResultMembers = map[string]string{
+	"tools/call":   "resultType taskId status statusMessage createdAt lastUpdatedAt ttlMs pollIntervalMs _meta",
+	"tasks/get":    "resultType taskId status statusMessage createdAt lastUpdatedAt ttlMs pollIntervalMs result error _meta",
+	"tasks/cancel": "resultType _meta",
+	"tasks/update": "resultType _meta",
+}
+
+// taskFrameViolation names the first member of one task frame the design does
+// not allow, or returns "".
+func taskFrameViolation(method, frame string) string {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(frame), &envelope); err != nil {
+		return fmt.Sprintf("the %s frame did not decode: %v: %s", method, err, frame)
+	}
+	for name := range envelope {
+		if !strings.Contains(" jsonrpc id result error ", " "+name+" ") {
+			return fmt.Sprintf("the %s frame carries the extra top-level member %q: %s", method, name, frame)
+		}
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal(envelope["result"], &result) != nil {
+		return ""
+	}
+	for name := range result {
+		if !strings.Contains(" "+taskResultMembers[method]+" ", " "+name+" ") {
+			return fmt.Sprintf("the %s result carries the extra member %q: %s", method, name, frame)
+		}
+	}
+	return ""
+}
+
+// sentinelRecord is a successful status record whose every displayed field
+// carries its own marker.
+func sentinelRecord(state string) transfer.StatusOutput {
+	return transfer.StatusOutput{
+		JobID: "SENTINEL-JOB", State: state, Direction: "SENTINEL-DIRECTION", Phase: "SENTINEL-PHASE", Kind: "SENTINEL-KIND",
+		Mode: "SENTINEL-MODE", Files: 8675309, Dirs: 8675310, Bytes: 987654321, SHA256: "SENTINEL-SHA256",
+		ManifestSHA256: "SENTINEL-MANIFEST", ErrorClass: "SENTINEL-ERRORCLASS", ChunkBytes: 3141592,
+		ChunksDone: 123456, ChunksTotal: 123457, Attempts: 987656, BytesPerSecond: 2718281828,
+	}
+}
+
+// sentinelForms pairs each record sentinel with the rendered form the status
+// line groups or rounds.
+var sentinelForms = [][2]string{
+	{"SENTINEL-JOB"}, {"SENTINEL-DIRECTION"}, {"SENTINEL-PHASE"}, {"SENTINEL-KIND"}, {"SENTINEL-MODE"},
+	{"SENTINEL-SHA256"}, {"SENTINEL-MANIFEST"}, {"SENTINEL-ERRORCLASS"}, {"8675309"}, {"8675310"},
+	{"987654321", "987,654,321"}, {"3141592", "3,141,592"}, {"123456"}, {"123457"},
+	{"987656", "987,656"}, {"2718281828", "2.7 GB/s"},
+}
+
+// sentinelLine and sentinelText are the status message and completed text of
+// the sentinel record.
+var sentinelLine = "Phase: SENTINEL-PHASE · Mode: SENTINEL-MODE · Chunks: 123456/123457 · Chunk size: 3,141,592 bytes · Attempts: 987,656 · Bytes: 987,654,321 · Files: 8675309 · Dirs: 8675310 · Speed: 2.7 GB/s · SHA-256: SENTINEL-SHA256 · Manifest SHA-256: SENTINEL-MANIFEST · Failed: SENTINEL-ERRORCLASS"
+var sentinelText = "Transfer SENTINEL-JOB: SENTINEL-DIRECTION SENTINEL-KIND, done\n" + strings.ReplaceAll(sentinelLine, " · ", "\n")
+
+// leakedSentinel returns the first record sentinel a frame still carries after
+// removing the exact texts the test expects the frame to carry.
+func leakedSentinel(frame []byte, expect ...string) string {
+	body := frame
+	for _, text := range expect {
+		if encoded, err := json.Marshal(text); err == nil {
+			body = bytes.Replace(body, encoded, nil, 1)
+		}
+	}
+	for _, pair := range sentinelForms {
+		for _, form := range pair {
+			if form != "" && bytes.Contains(body, []byte(form)) {
+				return form
+			}
+		}
+	}
+	return ""
+}
+
+func TestTaskRawCheckNamesAnInjectedMember(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	tap := &pipeTap{wrap: func(frame string) string { return frame[:len(frame)-1] + `,"task-leak":true}` }}
+	keeper := &taskKeeper{}
+	session, _ := newTaskBridgeWith(t, ctx, keeper, nil, true, "2026-07-28", tap.pipes, nil)
+	startTask(t, ctx, session, keeper)
+	for _, frame := range tap.taskFrames() {
+		if violation := taskFrameViolation(frame[0], frame[1]); strings.Contains(violation, `"task-leak"`) {
+			return
+		}
+	}
+	t.Fatal("the frame check did not name the injected member")
+}
+
+func TestTaskCancelAckCaptureCorrelatesByRequestID(t *testing.T) {
+	tap := &pipeTap{}
+	tap.up.WriteString(`{"jsonrpc":"2.0","id":7,"method":"tasks/cancel","params":{}}` + "\n")
+	tap.down.WriteString(`{"jsonrpc":"2.0","id":6,"result":{"resultType":"complete"}}` + "\n")
+	if frames := tap.taskFrames(); len(frames) != 0 {
+		t.Fatalf("the capture took another request's answer: %v", frames)
+	}
+	tap.down.WriteString(`{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete"}}` + "\n")
+	frames := tap.taskFrames()
+	if len(frames) != 1 || frames[0][0] != "tasks/cancel" {
+		t.Fatalf("the capture did not take the answer to the outbound tasks/cancel: %v", frames)
+	}
+}
+
+func TestTaskSentinelCheckNamesARenderedCopy(t *testing.T) {
+	line, err := json.Marshal(sentinelLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := []byte(`{"jsonrpc":"2.0","id":1,"result":{"statusMessage":` + string(line) + `,"echo":` + string(line) + `}}`)
+	if leaked := leakedSentinel(frame, sentinelLine); leaked == "" {
+		t.Fatal("the sentinel check did not see the rendered status line copied into an extra member")
 	}
 }

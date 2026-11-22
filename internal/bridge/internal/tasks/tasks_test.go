@@ -730,7 +730,6 @@ func TestRetentionEndsAFrozenRecordAfterAnHour(t *testing.T) {
 	}
 }
 
-// A completed freeze drops the progress message of the running poll before it.
 func TestCompletedFreezeDropsTheStaleStatusMessage(t *testing.T) {
 	m, tools, _ := newTestManager(t)
 	id := createTask(t, m, tools)
@@ -764,7 +763,6 @@ func TestCompletedFreezeDropsTheStaleStatusMessage(t *testing.T) {
 	}
 }
 
-// A failed freeze drops the progress message of the running poll before it.
 func TestFailedFreezeDropsTheStaleStatusMessage(t *testing.T) {
 	m, tools, _ := newTestManager(t)
 	id := createTask(t, m, tools)
@@ -798,7 +796,6 @@ func TestFailedFreezeDropsTheStaleStatusMessage(t *testing.T) {
 	}
 }
 
-// An unchanged running record keeps its last updated stamp across polls.
 func TestUnchangedRecordKeepsItsLastUpdatedAt(t *testing.T) {
 	m, tools, clock := newTestManager(t)
 	id := createTask(t, m, tools)
@@ -827,7 +824,6 @@ func TestUnchangedRecordKeepsItsLastUpdatedAt(t *testing.T) {
 	}
 }
 
-// A keeper record change under identical text still moves the last updated stamp.
 func TestRoundingHiddenRecordChangeMovesLastUpdatedAt(t *testing.T) {
 	m, tools, clock := newTestManager(t)
 	id := createTask(t, m, tools)
@@ -856,7 +852,6 @@ func TestRoundingHiddenRecordChangeMovesLastUpdatedAt(t *testing.T) {
 	}
 }
 
-// A frozen record acks a cancel and keeps its answer once the keeper dropped the job.
 func TestFrozenCancelAfterTheKeeperEvictedTheJob(t *testing.T) {
 	m, tools, _ := newTestManager(t)
 	id := createTask(t, m, tools)
@@ -909,7 +904,6 @@ func TestFrozenCancelAfterTheKeeperEvictedTheJob(t *testing.T) {
 	}
 }
 
-// Eviction drops the earliest-frozen record, not the earliest-created one.
 func TestEvictionDropsTheEarliestFrozenRecord(t *testing.T) {
 	m, tools, clock := newTestManager(t)
 	oldestCreated := createTask(t, m, tools)
