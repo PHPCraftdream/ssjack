@@ -663,7 +663,17 @@ func validateMCPStdioMessage(frame []byte) error {
 // supportedMCPMethod is the whole surface the bridge admits to the SDK.
 func supportedMCPMethod(method string) bool {
 	switch method {
-	case "initialize", "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping", "server/discover", "subscriptions/listen":
+	case "initialize", "notifications/initialized", "notifications/cancelled", "tools/list", "tools/call", "ping", "server/discover", "subscriptions/listen", "tasks/get", "tasks/update", "tasks/cancel":
+		return true
+	}
+	return false
+}
+
+// taskMethod reports whether method belongs to the tasks extension, which
+// only revision 2026-07-28 and later serve.
+func taskMethod(method string) bool {
+	switch method {
+	case "tasks/get", "tasks/update", "tasks/cancel":
 		return true
 	}
 	return false

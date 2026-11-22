@@ -42,9 +42,10 @@ const (
 )
 
 var (
-	ErrDial     = brokercore.ErrDial
-	ErrAuth     = brokercore.ErrAuth
-	ErrRejected = brokercore.ErrRejected
+	ErrDial          = brokercore.ErrDial
+	ErrAuth          = brokercore.ErrAuth
+	ErrRejected      = brokercore.ErrRejected
+	ErrSessionClosed = brokercore.ErrSessionClosed
 )
 
 func ConnectBootstrap(ctx context.Context, bootstrap Bootstrap) (*Client, error) {

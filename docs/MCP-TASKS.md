@@ -1,9 +1,6 @@
 # MCP tasks for the ssjack bridge tools
 
-Status: design only. Nothing described here is implemented; this document and the
-cross-links it adds are the only change. It specifies the MCP Tasks extension
-(`io.modelcontextprotocol/tasks`) for ssjack's MCP bridges, for the two transfer
-tools only; a task path for the exec tools is a separate design noted at the end.
+Status: implemented for `remote_upload` and `remote_download`. It specifies the MCP Tasks extension (`io.modelcontextprotocol/tasks`) for ssjack's MCP bridges, for the two transfer tools only; a task path for the exec tools is a separate design noted at the end. "Verification against the sources" and "What landed" below state what the sources confirmed and what the code and tests establish.
 
 The tags below mark the source of every statement in this document.
 `[client docs]` is taken from the Claude Code MCP documentation
@@ -32,6 +29,8 @@ text of the ssjack tools"). That model has three costs:
 
 `[client docs]` The MCP Tasks extension lets a supporting client follow and
 cancel the job itself.
+
+This is implemented for the two transfer tools; the exec tools keep the polling path below.
 
 The twelve decisions in this document, and the section that takes each one. The
 table repeats the decisions; each section below carries the tags for its own
@@ -202,6 +201,28 @@ The go.mod pin stays at v1.8.0; nothing here patches the SDK.
   Closing the keeper session cancels the running jobs (FILE-TRANSFER.md,
   "Cancellation and lifetime").
 
+## Verification against the sources
+
+Checked at implementation time against SEP-2663 (`seps/2663-tasks-extension.md` in modelcontextprotocol/modelcontextprotocol), the extension overview at modelcontextprotocol.io/extensions/tasks/overview, and the Claude Code page code.claude.com/docs/en/mcp ("MCP tasks that run on the server" and "MCP tasks for server authors").
+
+Confirmed as this document assumed it, and implemented that way:
+
+- A failed task is a successful `tasks/get` result whose `status` is `failed` and which carries the failure in a nested `error` object with `code` and `message`; the client reads that `message`. The envelope assumption in "Error behaviour" is settled this way.
+- `tasks/get` answers carry `resultType: "complete"`; `taskId`, `status`, `createdAt`, `lastUpdatedAt` and `ttlMs` are required, `ttlMs` may be `null`, and this bridge always sends `7200000`.
+- `pollIntervalMs` is optional, is re-read from every `tasks/get` answer, is clamped to 250..30000 and defaults to 2000 when absent, so 10000 is inside it.
+- A `taskId` may be at most 128 printable ASCII characters without spaces, and a `CreateTaskResult` needs no `content` array but needs a `taskId` and a valid `status`.
+- An invalid or nonexistent `taskId` is `-32602`: required for `tasks/get`, recommended for `tasks/update` and `tasks/cancel`. This bridge answers it for all three, as "Error behaviour" says.
+- A tool result that ended with `isError: true` is `completed`; `failed` is reserved for a JSON-RPC error. The job mapping in "The final result" matches.
+
+One requirement the first version of this document did not carry, now implemented:
+
+- The extension makes it a MUST that a server answer `tasks/get`, `tasks/update` and `tasks/cancel` from a request that does not declare the extension with the JSON-RPC error `-32021` (Missing Required Client Capability) and the required extension in the error `data`. The bridge does that: on revision 2026-07-28 a task method whose request omits `io.modelcontextprotocol/tasks` under `_meta["io.modelcontextprotocol/clientCapabilities"].extensions` is refused with `-32021` and `{"requiredCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}` before any record or keeper call. `tools/call` is unaffected: it falls back to today's text instead.
+
+Two advisory points on which this document stays stricter or quieter than the extension, because the client does not depend on them:
+
+- The extension says a `tasks/get` answer for a `failed` task SHOULD carry a `statusMessage` with diagnostics; this bridge omits it and carries the fixed message in the nested `error` instead, so a status line is never repeated and a result never reappears as a message. The client reads the error message.
+- The extension only recommends `-32602` for an unknown `taskId` on `tasks/update` and `tasks/cancel`; this bridge always answers it.
+
 ## Decisions
 
 ### Which tools carry a task
@@ -276,11 +297,14 @@ without the hint line; it is omitted when no field line exists.
 - A running chunked upload: `Phase: transfer · Mode: chunked · Chunks: 12/64 ·
   Attempts: 3 · Bytes: 52,428,800 · Files: 0 · Dirs: 0 · Speed: 1.3 MB/s`.
 - `completed` and `failed` omit `statusMessage`, so it never repeats a result.
-  `cancelled` carries the fixed line `Cancelled job <job_id>`: a fixed message,
-  not a result, because `result` is defined for a completed task only.
+  Freezing drops the progress message of an earlier poll instead of carrying it
+  into a terminal state. `cancelled` carries the fixed line `Cancelled job
+  <job_id>`: a fixed message, not a result, because `result` is defined for a
+  completed task only.
 - `createdAt` and `lastUpdatedAt` are RFC 3339 in UTC with whole seconds;
-  `lastUpdatedAt` changes while the task is not frozen, when a read returns a
-  different record, and stops changing once the task freezes.
+  `lastUpdatedAt` changes while the task is not frozen, whenever a read returns
+  a keeper record that differs from the previous one - not merely when the
+  rendered text differs - and stops changing once the task freezes.
 
 `[ssjack code]` The line reuses the transfer status renderer
 (`internal/bridge/internal/tooltext/render.go`), so a field can never appear in a
@@ -370,12 +394,16 @@ exchange or connection failure, which closes the client.
 
 - `[client docs]` `-32602` is the extension's unknown-task error; `-32603` is an
   internal error, and its fixed message travels as the error text.
+- The extension also requires `-32021` (Missing Required Client Capability)
+  for a task method from a request that does not declare the extension. The
+  bridge answers that error with the required extension in `data` and touches
+  no record; "Verification against the sources" records the requirement.
 - Envelope: a frozen `failed` task is a successful `tasks/get` result whose task
-  status is `failed` and which carries the failure in a nested `error`
-  `[assumption: to verify against the extension text before implementation]`; a
-  retryable read error is a JSON-RPC error response and changes nothing in the
-  record. The two are never mixed: an error response never freezes a task, and a
-  frozen task is never reported as an error response.
+  status is `failed` and which carries the failure in a nested `error` with
+  `code` and `message`; a retryable read error is a JSON-RPC error response
+  and changes nothing in the record. The two are never mixed: an error response
+  never freezes a task, and a frozen task is never reported as an error
+  response.
 - Why the split: a well-formed error reply means the keeper is alive and the
   transport still works, so the next poll can succeed and the task is not ended; a
   lost attachment means no later read can succeed, so the task is frozen `failed`
@@ -404,8 +432,12 @@ exchange or connection failure, which closes the client.
   revision 2026-07-28; its
   `params._meta["io.modelcontextprotocol/clientCapabilities"].extensions`
   carries `io.modelcontextprotocol/tasks`; the tool has a task path (the two
-  transfer tools, in this step); and the keeper returned a job id. Anything else
-  takes today's path and produces today's bytes.
+  transfer tools, in this step); and the keeper returned a job id. The
+  declaration is read from the request's own `_meta`: the revision and
+  capabilities an earlier `server/discover` or `initialize` stored in the SDK
+  session never make a later request eligible, and the same rule governs
+  `tasks/get`, `tasks/update` and `tasks/cancel`. Anything else takes today's
+  path and produces today's bytes.
 - No new startup flag and no owner registration: the fallback is the existing
   behaviour, and the tool descriptions keep the polling step, gaining one
   sentence for the task case.
@@ -619,14 +651,18 @@ share one keeper connection, and nothing below needs them to.
   - `tasks/cancel` on an unknown handle answers `-32602` with no keeper operation;
     on an unfrozen record after eviction it answers `-32602` and drops the record;
     on a keeper error reply it answers `-32603` and leaves the record;
-  - `tasks/cancel` on a frozen record (the client has already polled to a terminal
-    state, the keeper then evicted the job) answers the empty result with no keeper
-    operation, and the following `tasks/get` still returns the same frozen record.
+  - `tasks/cancel` on a frozen record: the client has already polled to a terminal
+    state and the keeper then evicts the job; `tasks/cancel` answers the empty
+    result and the following `tasks/get` returns the same frozen record, and
+    neither makes a keeper call.
   - `tasks/update` on an unknown handle answers `-32602`; on a known handle it
     answers an empty result with no keeper operation.
   - frozen state: after a `tasks/get` returns a terminal record, the fake keeper
     drops the job and records no further operation; the next `tasks/get` returns
     the same state and text, and `lastUpdatedAt` is unchanged.
+  - record eviction: the fixture has two frozen records where the earliest-created
+    is not the earliest-frozen, and the 64-record bound evicts the earliest-frozen
+    record.
   - equality: for a finished record, the completed task's
     `result.content[0].text` equals the text the same bridge returns from
     `transfer_status` for that job, byte for byte, including the `link_unstable`
@@ -635,6 +671,8 @@ share one keeper connection, and nothing below needs them to.
     `server/discover` result of a 2026-07-28 connection both carry the extension,
     and `tasks/get`, `tasks/update` and `tasks/cancel` are method-not-found on the
     legacy connection.
+  - eligibility: a bare `tools/call` as the first tool call after a declaring
+    discovery answers today's text.
 - Launched-bridge tests, one bridge and keeper per client kind.
   - Fallback pin: an `mcp.NewClient` with default capabilities over
     `mcp.CommandTransport` (the pattern of `cmd/ssjack/internal/transfertest`)
@@ -659,10 +697,15 @@ share one keeper connection, and nothing below needs them to.
   record's fields, for example `Phase: transfer · Mode: chunked · Chunks: 12/64 ·
   Attempts: 3 · Bytes: 52,428,800 · Files: 0 · Dirs: 0 · Speed: 1.3 MB/s`, so
   `12/64` and `MB/s` are expected content and no blanket separator ban applies.
-  Canary strings planted in a remote path, a root-relative local path and a remote
-  stderr buffer are asserted absent from the task handle, from every
-  `statusMessage` and from `tasks/cancel` replies; the final result is compared
-  only against the status text it is defined to equal.
+  Canary strings - a remote path marker and a root-relative local path marker
+  planted in the `tools/call` start arguments, and a remote stderr marker and a
+  secret-looking marker planted in a keeper ERROR reply (a generic keeper error
+  is answered with the fixed `-32603` message, so its text must never reach the
+  wire) - are asserted absent from the full raw JSON of the task handle, of every
+  `tasks/get` answer and of the `tasks/cancel` acknowledgement, in both the
+  in-process and the launched-bridge test; a keeper `Message` on a record is
+  legitimately rendered as a field and is therefore not a canary carrier. The
+  final result is compared only against the status text it is defined to equal.
 - Stability. The timing-sensitive checks (queueing, acknowledgement ordering, the
   one-hour retention, the 64-record bound) run on injected clocks or timers the
   way `jobwait.Timer` and the manager already do, and every wait is
@@ -672,6 +715,12 @@ share one keeper connection, and nothing below needs them to.
   (bridge, transfer, remotemcp), so an ordinary feature push runs them on the
   three platforms; a sprint completion still needs `[ci:full]` (docs/CI.md), and
   scoped success is not a full gate.
+- Where they live: the in-process checks are the task tests of package
+  `internal/bridge` with the record set's unit tests in
+  `internal/bridge/internal/tasks`; the launched-bridge checks are
+  `cmd/ssjack/internal/mcptasktest`, which spawns the production stdio bridge
+  as a child process for the fallback pin, the task path with its canary
+  assertions, and a raw legacy probe.
 
 ### Implementation order and non-goals
 
@@ -694,6 +743,28 @@ Each step is independently mergeable:
 5. The acceptance tests below and their CI wiring.
 6. Exact-SHA review, CI on the three platforms, then the full gate at sprint
    completion.
+
+State in the tree: steps 1-5 are landed;
+steps 2-5 are covered by tests.
+
+- Step 1: this document and the cross-links in FILE-TRANSFER.md,
+  APP-CONTRACT.md and REMOTE-MCP.md.
+- Step 2: the bridge's stdio transport admits `tasks/get`, `tasks/update` and
+  `tasks/cancel` on revision 2026-07-28 only, and answers method-not-found on
+  every earlier revision (`cmd/ssjack/internal/remotemcp`).
+- Step 3: the bounded RAM-only record set, the one-hour retention, the
+  injected clock and the three method handlers are
+  `internal/bridge/internal/tasks`, with their unit tests beside them.
+- Step 4: the advertisement (both `server/discover` and the legacy
+  `initialize` answer), the `tools/call` interception for the two transfer
+  tools and the tool-description sentence are
+  `internal/bridge/internal/tooltext/registry.go`. The interception runs the
+  tool's own handler, so the input schema, the keeper start and the refusal
+  result are the transfer tool's.
+- Step 5: the in-process acceptance tests are the task tests of package
+  `internal/bridge` (real `broker.Client`, fake keeper, SDK server over an
+  in-memory transport); the launched-bridge tests are
+  `cmd/ssjack/internal/mcptasktest`.
 
 Non-goals: channels and any server-initiated request; `notifications/tasks` and
 delivery over `subscriptions/listen`; `tasks/result` and `tasks/list`; logging
@@ -737,6 +808,8 @@ would allow a separate design.
 The first eight are design choices; the last four are the uncertainties this
 document cannot settle from the sources and which the accepted design leaves
 open.
+
+Resolved at implementation: every question below already carried a stated default, and every default is the behaviour now in the tree; no question was decided against its default. The list stays as the owner's record of what can still be changed, and it no longer blocks the implementation.
 
 1. Advertisement gating: advertise the extension unconditionally in full mode
    (the default here), or behind a startup flag so an owner can keep tasks out of

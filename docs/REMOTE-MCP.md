@@ -358,7 +358,7 @@ names are printed in full and untranslated. The transfer tools are specified in
 `FILE-TRANSFER.md` ("Result text"). The results of tools proxied from a remote
 MCP server are not rewritten by the bridge.
 
-Design only: a client that declares the MCP tasks extension is to receive a task for `remote_upload` and `remote_download`; `remote_exec` and `app_exec` keep the job-id path described below, and their task path is a later design whose prerequisites are listed in [MCP-TASKS.md](MCP-TASKS.md). Every other client, and every tool without a task path, sees the text exactly as specified below.
+A client that declares the MCP tasks extension (`io.modelcontextprotocol/tasks`) on revision 2026-07-28 receives a task handle for `remote_upload` and `remote_download` and follows it with its own `tasks/get`, `tasks/cancel` and `tasks/update`; the final task result is exactly the `transfer_status` text those tools produce (FILE-TRANSFER.md, "MCP tasks"). `remote_exec` and `app_exec` keep the job-id path described below, and their task path is a later design whose prerequisites are listed in [MCP-TASKS.md](MCP-TASKS.md). Every other client, and every tool without a task path, sees the text exactly as specified below. The bridge advertises the extension in `server/discover` (and in a legacy `initialize` answer); a `tasks/get`, `tasks/update` or `tasks/cancel` answers `-32601 method not found` on an earlier revision, and `-32021` when a 2026-07-28 request does not declare the extension.
 
 - `remote_targets`: `N approved targets:` (`1 approved target:`) and one
   `- <name>` line per target; `No approved targets.` when empty.

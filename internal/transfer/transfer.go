@@ -36,3 +36,12 @@ func NewEngine(runner remote.StreamRunner, target string, limits transfercore.Li
 func NewManager(roots []*transferlocal.Root, targets []string, limits transfercore.Limits, build func(string) (Engine, error)) (*Manager, error) {
 	return manager.NewManager(roots, targets, limits, build)
 }
+
+// ErrUnknownJob is the keeper's word for a job it no longer retains.
+var ErrUnknownJob = manager.ErrUnknownJob
+
+// IsUnknownJob reports whether err carries the keeper's unknown-job reply,
+// whether it is the keeper's own error or the broker client's re-created one.
+func IsUnknownJob(err error) bool {
+	return err != nil && err.Error() == manager.ErrUnknownJob.Error()
+}

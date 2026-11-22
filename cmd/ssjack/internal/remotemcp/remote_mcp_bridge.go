@@ -314,6 +314,19 @@ func (c *mcpStdioConnection) refuseUnsupported(ctx context.Context, messages []j
 			}
 			continue
 		}
+		if taskMethod(request.Method) && (!present || version < mcpProtocol20260728) {
+			if !request.ID.IsValid() {
+				continue
+			}
+			refusal, err := methodNotFound(request.ID)
+			if err != nil {
+				return nil, err
+			}
+			if err := c.Write(ctx, refusal); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if supportedMCPMethod(request.Method) {
 			admitted = append(admitted, request)
 			continue

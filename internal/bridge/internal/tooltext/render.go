@@ -260,7 +260,20 @@ func renderTransferStatus(s transfer.StatusOutput) string {
 		headline += subject + ", "
 	}
 	headline += s.State
-	lines := []string{headline}
+	lines := append([]string{headline}, transferStatusFields(s)...)
+	switch {
+	case s.State == "running":
+		lines = append(lines, fmt.Sprintf("Still running; check again with transfer_status job_id=%s and wait_seconds 20.", s.JobID))
+	case s.ErrorClass == "link_unstable":
+		lines = append(lines, fmt.Sprintf("Resume: call %s again with the same arguments to continue from the staged parts; transfer_cancel removes them instead.", resumeTool(s.Direction)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// transferStatusFields is the status text after the headline and before the
+// hint: the 'Key: value' field lines of one record.
+func transferStatusFields(s transfer.StatusOutput) []string {
+	var lines []string
 
 	var chunks string
 	switch {
@@ -298,13 +311,13 @@ func renderTransferStatus(s transfer.StatusOutput) string {
 	if s.ErrorClass != "" || s.Message != "" {
 		lines = append(lines, failureLine(s))
 	}
-	switch {
-	case s.State == "running":
-		lines = append(lines, fmt.Sprintf("Still running; check again with transfer_status job_id=%s and wait_seconds 20.", s.JobID))
-	case s.ErrorClass == "link_unstable":
-		lines = append(lines, fmt.Sprintf("Resume: call %s again with the same arguments to continue from the staged parts; transfer_cancel removes them instead.", resumeTool(s.Direction)))
-	}
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+// transferStatusLine is the one-line status message of a task: the field lines
+// joined, without the headline and without the hint.
+func transferStatusLine(s transfer.StatusOutput) string {
+	return strings.Join(transferStatusFields(s), fieldSep)
 }
 
 // failureLine is the Failed (or Cancelled) line of a status.

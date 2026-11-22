@@ -19,6 +19,10 @@ var (
 	ErrDial     = errors.New("failed to establish a secure connection to the keeper")
 	ErrAuth     = errors.New("failed to authenticate to the keeper")
 	ErrRejected = errors.New("keeper rejected the connection")
+
+	// ErrSessionClosed reports a keeper connection that is no longer usable:
+	// an exchange failed or the keeper closed it.
+	ErrSessionClosed = errors.New("keeper connection closed; start a new session")
 )
 
 type Client struct {
@@ -95,7 +99,7 @@ func (c *Client) CallRaw(ctx context.Context, operation string, input any) (stri
 	var reply wire.Reply
 	if !c.exchange(operation, data, &reply) {
 		c.conn.Close()
-		return "", errors.New("keeper connection closed; start a new session")
+		return "", ErrSessionClosed
 	}
 	c.conn.SetDeadline(time.Time{})
 	if !reply.OK {
@@ -124,7 +128,7 @@ func (c *Client) Call(ctx context.Context, operation string, input, output any) 
 	var reply wire.Reply
 	if !c.exchange(operation, data, &reply) {
 		c.conn.Close()
-		return errors.New("keeper connection closed; start a new session")
+		return ErrSessionClosed
 	}
 	c.conn.SetDeadline(time.Time{})
 	if !reply.OK {
@@ -166,7 +170,7 @@ func (c *Client) CallWait(ctx context.Context, operation string, input, output a
 		defer c.mu.Unlock()
 		if !ok {
 			c.conn.Close()
-			return errors.New("keeper connection closed; start a new session")
+			return ErrSessionClosed
 		}
 		c.conn.SetDeadline(time.Time{})
 		if !reply.OK {

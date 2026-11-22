@@ -33,7 +33,7 @@ through `ssjack run`, which creates a new channel. A re-attach path would widen
 the trust boundary and is not implemented.
 
 The bridge keeps stdio open for unsupported requests: it responds with JSON-RPC
-`-32601 method not found`; unsupported notifications are dropped. Served MCP
+`-32601 method not found`; unsupported notifications are dropped. Admitted requests are `initialize`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `tools/call`, `ping`, `server/discover`, `subscriptions/listen` and, on revision 2026-07-28 only, `tasks/get`, `tasks/update` and `tasks/cancel`. Served MCP
 protocol versions are preferred in this order: `2026-07-28`, `2025-11-25`,
 `2025-06-18`, `2025-03-26`, `2024-11-05`. For modern clients, the bridge handles
 `server/discover` natively, returning `resultType` and cache information at the
@@ -45,11 +45,11 @@ served versions remain available. A `_meta` protocol mismatch returns
 `-32022` with `data` identifying the supported and requested versions. The
 client must not retry the spent token or re-attach.
 
-The bridge is tools-only: tasks, extensions, MRTR, roots, sampling, resources,
-and prompts are not implemented. Modern logging and `ping` are removed; legacy
+The bridge is tools-only. The one extension it serves is `io.modelcontextprotocol/tasks`, and only for `remote_upload` and `remote_download` on revision 2026-07-28 (MCP-TASKS.md); MRTR, roots, sampling, resources and prompts are not implemented. Modern logging and `ping` are removed; legacy
 `ping` remains available. JSON-RPC `-32020` through `-32099` are reserved, so
 the bridge defines no custom errors in that range beyond the stated
-`-32022` mismatch response.
+`-32022` mismatch response and the standard `-32021` missing-client-capability
+answer of the tasks extension.
 
 `subscriptions/listen` acknowledges only requested notification types that
 are allowed. A genuine asynchronous tool-list registration can enable tool-list

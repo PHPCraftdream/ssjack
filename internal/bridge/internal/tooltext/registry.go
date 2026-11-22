@@ -3,10 +3,12 @@ package bridge
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
+	tasks "github.com/PHPCraftdream/ssjack/internal/bridge/internal/tasks"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/declarativeslice"
@@ -133,19 +135,45 @@ func cancelTool(client *broker.Client, operation string) func(context.Context, r
 	}
 }
 
+// transferStart starts one transfer job and returns its job id.
+func transferStart(ctx context.Context, client *broker.Client, operation string, input transfer.StartInput) (string, error) {
+	var out transfer.StartOutput
+	if err := client.Call(ctx, operation, input, &out); err != nil {
+		return "", err
+	}
+	tasks.CapturedStart(ctx, out.JobID)
+	return out.JobID, nil
+}
+
 // transferTool serves the start of an upload or a download.
 func transferTool(client *broker.Client, operation string) func(context.Context, transfer.StartInput) (string, error) {
 	return func(ctx context.Context, input transfer.StartInput) (string, error) {
-		var out transfer.StartOutput
-		if err := client.Call(ctx, operation, input, &out); err != nil {
+		jobID, err := transferStart(ctx, client, operation, input)
+		if err != nil {
 			return "", err
 		}
-		return renderTransferStarted(out.JobID), nil
+		return renderTransferStarted(jobID), nil
 	}
 }
 
+// NewFullServer is the full registry of the remote, application and transfer
+// tools, with the MCP tasks extension for the two transfer tools.
 func NewFullServer(client *broker.Client) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, nil)
+	return NewFullServerWithClock(client, nil)
+}
+
+// NewFullServerWithClock is NewFullServer with the task retention clock
+// replaced (nil is the real clock), for the in-process acceptance tests.
+func NewFullServerWithClock(client *broker.Client, now func() time.Time) *mcp.Server {
+	capabilities := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}
+	capabilities.AddExtension(tasks.Extension, map[string]any{})
+	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, &mcp.ServerOptions{Capabilities: capabilities})
+	if err := tasks.NewManager(transferTaskTools{client: client}, now).Install(server); err != nil {
+		// The three task method names are fixed and none of them shadows a
+		// standard method, so registering them cannot fail.
+		panic(err)
+	}
+
 	addTextTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys. Returns plain text: a count line, then one '- name' line per target."},
 		func(ctx context.Context, _ struct{}) (string, error) {
 			var out remote.TargetsOutput
@@ -174,9 +202,9 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 		readTool(client, "app_read"))
 	addTextTool(server, &mcp.Tool{Name: "app_cancel", Description: "Cancel a registered application operation and revoke its child transport. A detached remote process may continue running. Returns plain text: 'Cancelled job <id>', or 'Job <id> had already finished'."},
 		cancelTool(client, "app_cancel"))
-	addTextTool(server, &mcp.Tool{Name: "remote_upload", Description: "Copy a file from an owner-registered local transfer root to an absolute POSIX path on an approved target, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is relative to the registered root (omit root when exactly one is registered); target must be one of the remote_targets. The remote path is written with the profile's SSH principal. overwrite=true requires confirm=true. Returns plain text 'Started job <job_id>'; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_upload again with the same arguments to resume from the parts already staged next to the remote destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the remote disk needs about twice the file size. Directories are never chunked."},
+	addTextTool(server, &mcp.Tool{Name: "remote_upload", Description: "Copy a file from an owner-registered local transfer root to an absolute POSIX path on an approved target, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is relative to the registered root (omit root when exactly one is registered); target must be one of the remote_targets. The remote path is written with the profile's SSH principal. overwrite=true requires confirm=true. Returns plain text 'Started job <job_id>'; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_upload again with the same arguments to resume from the parts already staged next to the remote destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the remote disk needs about twice the file size. Directories are never chunked. A client that declares the MCP tasks extension (io.modelcontextprotocol/tasks) receives a task with this job id instead and follows it with tasks/get."},
 		transferTool(client, "transfer_upload"))
-	addTextTool(server, &mcp.Tool{Name: "remote_download", Description: "Copy a file from an approved target into an owner-registered local transfer root, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is the root-relative destination (omit root when exactly one is registered); target must be one of the remote_targets. The remote read uses the profile's SSH principal. overwrite=true requires confirm=true. Returns plain text 'Started job <job_id>'; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_download again with the same arguments to resume from the parts already staged beside the local destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the local disk needs about twice the file size. Directories are never chunked."},
+	addTextTool(server, &mcp.Tool{Name: "remote_download", Description: "Copy a file from an approved target into an owner-registered local transfer root, as a background job. Copy only: the source is never modified. No file content, absolute local path or remote stderr is ever returned. local is the root-relative destination (omit root when exactly one is registered); target must be one of the remote_targets. The remote read uses the profile's SSH principal. overwrite=true requires confirm=true. Returns plain text 'Started job <job_id>'; follow it with transfer_status (wait_seconds 20 avoids repeated polling) and cancel with transfer_cancel. A single file whose link is slow or drops continues automatically in chunks and is published only after a whole-file SHA-256 check. If the job ends with error_class link_unstable, call remote_download again with the same arguments to resume from the parts already staged beside the local destination, also after a keeper restart; transfer_cancel removes those parts instead. While chunking, the local disk needs about twice the file size. Directories are never chunked. A client that declares the MCP tasks extension (io.modelcontextprotocol/tasks) receives a task with this job id instead and follows it with tasks/get."},
 		transferTool(client, "transfer_download"))
 	addTextTool(server, &mcp.Tool{Name: "transfer_status", Description: "Report a bounded, content-free transfer status as plain text: 'Transfer <job_id>: <direction> <kind>, <state>' (state running, done, failed or cancelled), then 'Key: value' lines: Phase, Mode (stream or chunked), Chunks done/total, Chunk size, Attempts, Bytes (never decreases), Files, Dirs, Speed, SHA-256 or Manifest SHA-256 when available and, on failure, 'Failed: <error_class> — <message>' with a fixed message (error_class is refused_path, exists, limit, unsupported_remote, integrity, remote_failed, link_unstable, cancelled or internal). Chunk fields appear only for a single file and only while present; a running chunked job shows live part progress, a directory never carries them; a failed chunked job keeps its verified bytes and counts. link_unstable means the link was too unstable to finish: the staged parts are kept and the same upload or download call resumes. Never contains file content or local paths. The fields are stable and listed in docs/FILE-TRANSFER.md. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the job is running until it is done, failed or cancelled, or the wait expires, then returns the status; prefer one call with wait_seconds 20 over repeated immediate polling."},
 		func(ctx context.Context, input transfer.StatusInput) (string, error) {
@@ -200,4 +228,29 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 			return renderTransferCancelled(input.JobID, out.Cancelled), nil
 		})
 	return server
+}
+
+// transferTaskTools is the tasks package's view of the transfer tools: their
+// keeper operations and the texts and refusal result they already produce.
+type transferTaskTools struct{ client *broker.Client }
+
+func (t transferTaskTools) Status(ctx context.Context, input transfer.StatusInput) (transfer.StatusOutput, error) {
+	var out transfer.StatusOutput
+	input.WaitSeconds = 0
+	err := t.client.Call(ctx, "transfer_status", input, &out)
+	return out, err
+}
+
+func (t transferTaskTools) Cancel(ctx context.Context, input transfer.CancelInput) (transfer.CancelOutput, error) {
+	var out transfer.CancelOutput
+	err := t.client.Call(ctx, "transfer_cancel", input, &out)
+	return out, err
+}
+
+func (transferTaskTools) StatusText(out transfer.StatusOutput) string {
+	return renderTransferStatus(out)
+}
+func (transferTaskTools) StatusLine(out transfer.StatusOutput) string { return transferStatusLine(out) }
+func (transferTaskTools) CancelledText(jobID string) string {
+	return renderTransferCancelled(jobID, true)
 }

@@ -26,6 +26,9 @@ var (
 	errSessionClosed = errors.New("session closed")
 )
 
+// ErrUnknownJob is the keeper's word for a job it no longer retains.
+var ErrUnknownJob = errUnknownJob
+
 type jobState string
 
 const (
