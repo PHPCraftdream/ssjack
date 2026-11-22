@@ -358,6 +358,8 @@ names are printed in full and untranslated. The transfer tools are specified in
 `FILE-TRANSFER.md` ("Result text"). The results of tools proxied from a remote
 MCP server are not rewritten by the bridge.
 
+Design only: a client that declares the MCP tasks extension is to receive a task for `remote_upload` and `remote_download`; `remote_exec` and `app_exec` keep the job-id path described below, and their task path is a later design whose prerequisites are listed in [MCP-TASKS.md](MCP-TASKS.md). Every other client, and every tool without a task path, sees the text exactly as specified below.
+
 - `remote_targets`: `N approved targets:` (`1 approved target:`) and one
   `- <name>` line per target; `No approved targets.` when empty.
 - `app_list`: `N registered applications:` (`1 registered application:`) and one
