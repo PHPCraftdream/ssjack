@@ -14,8 +14,8 @@ import (
 func TestScanRejectsDirectoryReparseSymlink(t *testing.T) {
 	t.Run("directory symlink", func(t *testing.T) {
 		root := t.TempDir()
-		target := filepath.Join(root, "target")
-		writeDescriptor(t, target, "target")
+		target := filepath.Join(root, "real")
+		writeDescriptor(t, target, "real")
 		link := filepath.Join(root, "symlink")
 		if err := windows.CreateSymbolicLink(windows.StringToUTF16Ptr(link), windows.StringToUTF16Ptr(target), windows.SYMBOLIC_LINK_FLAG_DIRECTORY); err != nil {
 			t.Skip("directory reparse fixture unavailable")
@@ -25,7 +25,7 @@ func TestScanRejectsDirectoryReparseSymlink(t *testing.T) {
 		}
 
 		got := Scan(root)
-		if len(got.Candidates) != 1 || got.Candidates[0].Path != "target" {
+		if len(got.Candidates) != 1 || got.Candidates[0].Path != "real" {
 			t.Fatalf("candidate_count=%d", len(got.Candidates))
 		}
 		found := false
@@ -43,15 +43,15 @@ func TestScanRejectsDirectoryReparseSymlink(t *testing.T) {
 func TestScanRejectsDirectoryJunction(t *testing.T) {
 	t.Run("directory junction", func(t *testing.T) {
 		root := t.TempDir()
-		target := filepath.Join(root, "target")
-		writeDescriptor(t, target, "target")
+		target := filepath.Join(root, "real")
+		writeDescriptor(t, target, "real")
 		junction := filepath.Join(root, "junction")
 		if err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).Run(); err != nil {
 			t.Skip("directory junction fixture unavailable")
 		}
 
 		got := Scan(root)
-		if len(got.Candidates) != 1 || got.Candidates[0].Path != "target" {
+		if len(got.Candidates) != 1 || got.Candidates[0].Path != "real" {
 			t.Fatalf("candidate_count=%d", len(got.Candidates))
 		}
 		found := false

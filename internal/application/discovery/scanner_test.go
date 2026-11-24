@@ -347,13 +347,13 @@ func TestScanRejectsControlFilename(t *testing.T) {
 func TestScanRejectsLinksAndBoundsDescriptor(t *testing.T) {
 	t.Run("directory symlink rejected with target retained once", func(t *testing.T) {
 		root := t.TempDir()
-		target := filepath.Join(root, "target")
+		target := filepath.Join(root, "real")
 		writeDescriptor(t, target, "linked")
 		if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
 			t.Skip("symlink_unavailable")
 		}
 		got := Scan(root)
-		if !reflect.DeepEqual(paths(got.Candidates), []string{"target"}) {
+		if !reflect.DeepEqual(paths(got.Candidates), []string{"real"}) {
 			t.Fatalf("candidate_count=%d", len(got.Candidates))
 		}
 		count := 0
@@ -368,12 +368,12 @@ func TestScanRejectsLinksAndBoundsDescriptor(t *testing.T) {
 	})
 	t.Run("descriptor symlink rejected with target retained once", func(t *testing.T) {
 		root := t.TempDir()
-		writeDescriptor(t, filepath.Join(root, "target"), "safe")
-		if err := os.Symlink(filepath.Join(root, "target", "ssjack-app.json"), filepath.Join(root, "ssjack-app.json")); err != nil {
+		writeDescriptor(t, filepath.Join(root, "real"), "safe")
+		if err := os.Symlink(filepath.Join(root, "real", "ssjack-app.json"), filepath.Join(root, "ssjack-app.json")); err != nil {
 			t.Skip("symlink_unavailable")
 		}
 		got := Scan(root)
-		if !reflect.DeepEqual(paths(got.Candidates), []string{"target"}) {
+		if !reflect.DeepEqual(paths(got.Candidates), []string{"real"}) {
 			t.Fatalf("candidate_count=%d", len(got.Candidates))
 		}
 		count := 0
