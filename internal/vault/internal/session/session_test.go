@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync/atomic"
@@ -196,6 +197,51 @@ func TestSessionCloseTimeoutDoesNotDiscardPendingState(t *testing.T) {
 		t.Fatal("pending save could not finish after close timeout")
 	}
 }
+func TestSnapshotSaved(t *testing.T) {
+	t.Run("copies unchanged saved ciphertext", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "vault")
+		password := []byte("test-password")
+		state, server := vaulttest.DirectoryFixture(t)
+		if err := core.CreateWithRecords(context.Background(), path, state, password); err != nil {
+			t.Fatal(err)
+		}
+		state.Close()
+		state, err := core.Load(path, password)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := StartSession(context.Background(), path, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Discard()
+		if err := s.Apply(func(v *Vault) error { return v.RenameServer(server, "snapshot-test") }); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Flush(vaulttest.Context(t)); err != nil {
+			t.Fatal(err)
+		}
+		backup, err := s.SnapshotSaved(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copied, err := os.ReadFile(backup)
+		if err != nil || !bytes.Equal(copied, current) {
+			t.Fatal("snapshot differs from persisted ciphertext")
+		}
+		if err := os.WriteFile(path, []byte("different ciphertext"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SnapshotSaved(path); err == nil {
+			t.Fatal("snapshot accepted ciphertext different from the saved digest")
+		}
+	})
+}
+
 func TestSavedCipherDigestRefusesUnavailableMetadata(t *testing.T) {
 	v, _ := vaulttest.DirectoryFixture(t)
 	s := newSession(v, func(context.Context, []byte) error { return nil }, func() {})

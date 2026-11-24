@@ -5,14 +5,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownertui/internal/approvals"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -22,8 +27,14 @@ import (
 type fakeBackend struct {
 	backend                             // Unused fake methods intentionally panic.
 	metadata                            vault.DirectoryMetadata
+	path                                string
+	vaultFile                           string
+	editFn                              func(func(*vault.Vault) error) error
 	status                              ownerdb.Status
 	closeErr                            error
+	snapshotErr                         error
+	snapshots                           int
+	snapshotBytes                       []byte
 	change                              vault.OwnerChange
 	exportRequest                       ownerdb.ExportRequest
 	imp                                 ownerdb.ImportStatus
@@ -35,8 +46,26 @@ type fakeBackend struct {
 }
 
 func (b *fakeBackend) Metadata() (vault.DirectoryMetadata, error) { return b.metadata, nil }
-func (b *fakeBackend) Status() ownerdb.Status                     { return b.status }
-func (b *fakeBackend) Edit(func(*vault.Vault) error) error        { b.edits++; return nil }
+func (b *fakeBackend) SnapshotVault() (string, error) {
+	if b.snapshotErr != nil {
+		return "", b.snapshotErr
+	}
+	data, err := os.ReadFile(b.path)
+	if err != nil {
+		return "", err
+	}
+	b.snapshotBytes = append([]byte(nil), data...)
+	b.snapshots++
+	return b.path, nil
+}
+func (b *fakeBackend) Status() ownerdb.Status { return b.status }
+func (b *fakeBackend) Edit(edit func(*vault.Vault) error) error {
+	b.edits++
+	if b.editFn != nil {
+		return b.editFn(edit)
+	}
+	return nil
+}
 func (b *fakeBackend) Submit(change vault.OwnerChange) error {
 	b.submissions, b.change = b.submissions+1, change
 	b.change.Value = append([]byte(nil), change.Value...)
@@ -79,6 +108,462 @@ func check(t *testing.T, bad bool, msg any) {
 	}
 }
 func must(t *testing.T, err error) { t.Helper(); check(t, err != nil, err) }
+
+func putApprovalDescriptor(t *testing.T, root string) string {
+	t.Helper()
+	child := filepath.Join(root, "svc-a")
+	if err := os.MkdirAll(filepath.Join(child, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(child, "bin", "tool"+suffix), []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `{"format":"ssjack-app-v1","name":"service-a","launch":{"executable":"bin/tool` + suffix + `"}}`
+	if err := os.WriteFile(filepath.Join(child, "ssjack-app.json"), []byte(descriptor), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return child
+}
+
+func approvalFixture(t *testing.T, b *fakeBackend, withRecord bool) (*Model, string) {
+	t.Helper()
+	root := t.TempDir()
+	child := putApprovalDescriptor(t, root)
+	previous, err := os.Getwd()
+	must(t, err)
+	must(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	m := testModel(b)
+	if withRecord {
+		m.metadata.Approvals = []vault.Approval{{Name: "metadata-only", Path: filepath.Join(root, "recorded"), Hash: strings.Repeat("a", 64)}}
+	}
+	m.push(location{screen: approvalsScreen})
+	return m, child
+}
+
+func approvalPress(m *Model, code rune) tea.Cmd {
+	return press(m, code)
+}
+func completeApprovalCmd(t *testing.T, m *Model, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected asynchronous approval command")
+	}
+	msg := cmd()
+	m.Update(msg)
+	return msg
+}
+func syncApprovalRefresh(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd != nil {
+		msg := cmd()
+		m.Update(msg)
+	}
+}
+func realApprovalBackend(t *testing.T, metadata vault.DirectoryMetadata) *fakeBackend {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "owner-vault")
+	password := []byte("approval-test-password")
+	v := vault.NewDirectory()
+	must(t, vault.CreateWithRecords(context.Background(), path, v, password))
+	b := &fakeBackend{metadata: metadata, path: path, vaultFile: path}
+	b.editFn = func(edit func(*vault.Vault) error) error {
+		v, err := vault.Load(path, password)
+		if err != nil {
+			return err
+		}
+		if b.edits == 1 && b.snapshots > 0 {
+			before, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if !bytes.Equal(before, b.snapshotBytes) {
+				return errors.New("snapshot did not match pre-edit ciphertext")
+			}
+		}
+		if err := edit(v); err != nil {
+			return err
+		}
+		if err := vault.Save(path, v, password); err != nil {
+			return err
+		}
+		b.metadata.Approvals, err = vault.ListApplicationApprovals(v)
+		return err
+	}
+	return b
+}
+func approvalSnapshots(t *testing.T, path string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(path + ".approval-snapshot-*-*.ssjack.ktav")
+	must(t, err)
+	return matches
+}
+
+func rewriteApprovalDescriptor(t *testing.T, child string) {
+	t.Helper()
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(child, "bin", "tool2"+suffix), []byte("fixture-two"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `{"format":"ssjack-app-v1","name":"service-a","launch":{"executable":"bin/tool2` + suffix + `"}}`
+	if err := os.WriteFile(filepath.Join(child, "ssjack-app.json"), []byte(descriptor), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func refreshApprovals(m *Model) {
+	m.approvals.SetRecords(m.metadata.Approvals)
+	m.approvals.Refresh()
+}
+
+func TestApprovalsModelFlows(t *testing.T) {
+	t.Run("renders candidates without default selection", func(t *testing.T) {
+		m, _ := approvalFixture(t, &fakeBackend{}, true)
+		view := m.View().Content
+		if !strings.Contains(view, `candidate name="service-a"`) || strings.Contains(view, "> ") {
+			t.Fatalf("view did not render an unselected quoted candidate: %q", view)
+		}
+	})
+	t.Run("approve writes and snapshots only once", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, child := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		msg := completeApprovalCmd(t, m, approvalPress(m, 13))
+		if _, ok := msg.(operationMsg); !ok || b.edits != 1 {
+			t.Fatalf("approve message=%T edits=%d", msg, b.edits)
+		}
+		paths := approvalSnapshots(t, b.path)
+		if len(paths) != 0 || b.snapshots != 1 {
+			t.Fatalf("snapshot count=%d files=%v", b.snapshots, paths)
+		}
+		v, err := vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		canonical, err := filepath.EvalSymlinks(child)
+		if err != nil {
+			canonical = child
+		}
+		if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
+			t.Fatalf("approval record=%+v", records)
+		}
+		if _, err := hex.DecodeString(records[0].Hash); err != nil {
+			t.Fatalf("approval hash is not hex: %q", records[0].Hash)
+		}
+		_, refresh := m.Update(operationMsg{action: "approvals"})
+		syncApprovalRefresh(t, m, refresh)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'x')
+		msg = completeApprovalCmd(t, m, approvalPress(m, 13))
+		if _, ok := msg.(operationMsg); !ok || b.edits != 2 {
+			t.Fatalf("revoke message=%T edits=%d", msg, b.edits)
+		}
+		if got := approvalSnapshots(t, b.path); len(got) != 0 || b.snapshots != 1 {
+			t.Fatalf("revoke created extra snapshot: files=%v snapshots=%d", got, b.snapshots)
+		}
+		v, err = vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err = vault.ListApplicationApprovals(v)
+		must(t, err)
+		if len(records) != 0 {
+			t.Fatalf("revoked approvals remain: %v", records)
+		}
+	})
+	t.Run("reject is session-local and renders rejected", func(t *testing.T) {
+		b := &fakeBackend{}
+		m, _ := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'r')
+		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || len(approvalSnapshots(t, b.path)) != 0 {
+			t.Fatal("reject wrote through backend or created a snapshot")
+		}
+		m.approvals.Refresh()
+		if !strings.Contains(m.View().Content, "rejected") {
+			t.Fatalf("rejected status missing: %q", m.View().Content)
+		}
+	})
+	t.Run("requires explicit selection", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, _ := approvalFixture(t, b, false)
+		approvalPress(m, 'a')
+		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || len(approvalSnapshots(t, b.path)) != 0 {
+			t.Fatal("unselected approve caused backend or snapshot effects")
+		}
+		v, err := vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		if len(records) != 0 {
+			t.Fatalf("unselected approve wrote records: %v", records)
+		}
+	})
+	t.Run("cancel clears armed approval", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, _ := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		approvalPress(m, 27)
+		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || len(approvalSnapshots(t, b.path)) != 0 {
+			t.Fatal("cancelled approval caused write effects")
+		}
+	})
+	t.Run("snapshot failure blocks approve edit", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b.snapshotErr = errors.New("snapshot unavailable")
+		m, _ := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		if cmd := approvalPress(m, 13); cmd != nil || m.message != "snapshot_failed" || b.edits != 0 {
+			t.Fatalf("snapshot failure cmd=%v message=%q edits=%d", cmd != nil, m.message, b.edits)
+		}
+		b.snapshotErr = nil
+		cmd := approvalPress(m, 13)
+		if cmd == nil || b.edits != 0 {
+			t.Fatal("snapshot retry did not queue the edit")
+		}
+		completeApprovalCmd(t, m, cmd)
+		if b.edits != 1 || b.snapshots != 1 {
+			t.Fatalf("retry edits=%d snapshots=%d", b.edits, b.snapshots)
+		}
+	})
+	t.Run("arm then changed scan refuses confirmation", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, child := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		rewriteApprovalDescriptor(t, child)
+		m.approvals.SetRecords(m.metadata.Approvals)
+		m.approvals.Refresh()
+		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || m.approvals.Message() != "review_stale" {
+			t.Fatalf("cmd=%v edits=%d message=%q", cmd != nil, b.edits, m.approvals.Message())
+		}
+		v, err := vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		if len(records) != 0 {
+			t.Fatalf("stale scan wrote records: %v", records)
+		}
+	})
+	t.Run("arm then changed stored hash refuses", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, child := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		rewriteApprovalDescriptor(t, child)
+		m.metadata.Approvals = append([]vault.Approval(nil), b.metadata.Approvals...)
+		refreshApprovals(m)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		m.metadata.Approvals[0].Hash = strings.Repeat("b", 64)
+		refreshApprovals(m)
+		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 1 || m.approvals.Message() != "review_stale" {
+			t.Fatalf("cmd=%v edits=%d message=%q", cmd != nil, b.edits, m.approvals.Message())
+		}
+	})
+	t.Run("arm unchanged refresh stays confirmable", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, child := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		refreshApprovals(m)
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		v, err := vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		canonical, err := filepath.EvalSymlinks(child)
+		if err != nil {
+			canonical = child
+		}
+		if b.edits != 1 || len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
+			t.Fatalf("edits=%d records=%+v", b.edits, records)
+		}
+		if _, err := hex.DecodeString(records[0].Hash); err != nil {
+			t.Fatalf("hash=%q", records[0].Hash)
+		}
+	})
+	t.Run("snapshot precedes edit and matches pre-edit bytes", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, _ := approvalFixture(t, b, false)
+		b.editFn = func(edit func(*vault.Vault) error) error {
+			if b.edits == 1 {
+				if b.snapshots != 1 {
+					return fmt.Errorf("snapshot count before edit=%d", b.snapshots)
+				}
+				before, err := os.ReadFile(b.path)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(before, b.snapshotBytes) {
+					return errors.New("snapshot differs from pre-edit ciphertext")
+				}
+			}
+			v, err := vault.Load(b.path, []byte("approval-test-password"))
+			if err != nil {
+				return err
+			}
+			if err := edit(v); err != nil {
+				return err
+			}
+			if err := vault.Save(b.path, v, []byte("approval-test-password")); err != nil {
+				return err
+			}
+			b.metadata.Approvals, err = vault.ListApplicationApprovals(v)
+			return err
+		}
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		after, err := os.ReadFile(b.path)
+		must(t, err)
+		if bytes.Equal(after, b.snapshotBytes) {
+			t.Fatal("vault ciphertext did not change after edit")
+		}
+		_, refresh := m.Update(operationMsg{action: "approvals"})
+		syncApprovalRefresh(t, m, refresh)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'x')
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		if b.snapshots != 1 {
+			t.Fatalf("second mutation took another snapshot: %d", b.snapshots)
+		}
+	})
+	t.Run("reordered armed candidate stays pinned through confirm", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, first := approvalFixture(t, b, false)
+		root := filepath.Dir(first)
+		second := filepath.Join(root, "svc-b")
+		if err := os.MkdirAll(filepath.Join(second, "bin"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		suffix := ""
+		if runtime.GOOS == "windows" {
+			suffix = ".exe"
+		}
+		if err := os.WriteFile(filepath.Join(second, "bin", "tool"+suffix), []byte("fixture-b"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		descriptor := `{"format":"ssjack-app-v1","name":"service-b","launch":{"executable":"bin/tool` + suffix + `"}}`
+		if err := os.WriteFile(filepath.Join(second, "ssjack-app.json"), []byte(descriptor), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		mut, ok := m.approvals.Pending()
+		if !ok || mut.Name != "service-a" {
+			t.Fatalf("armed mutation=%+v ok=%t", mut, ok)
+		}
+		reviewedHash := mut.Hash
+		renamed := filepath.Join(root, "svc-z")
+		if err := os.Rename(first, renamed); err != nil {
+			t.Fatal(err)
+		}
+		refreshApprovals(m)
+		entries := m.approvals.Entries()
+		cursor := m.approvals.Cursor()
+		if cursor < 0 || cursor >= len(entries) || entries[cursor].Name != "service-a" || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
+			t.Fatalf("reviewed row not selected after reordering: cursor=%d entries=%+v view=%q", cursor, entries, m.View().Content)
+		}
+		canonical, err := filepath.EvalSymlinks(renamed)
+		if err != nil {
+			canonical = renamed
+		}
+		b.editFn = func(edit func(*vault.Vault) error) error {
+			v, err := vault.Load(b.path, []byte("approval-test-password"))
+			if err != nil {
+				return err
+			}
+			if err := edit(v); err != nil {
+				return err
+			}
+			records, err := vault.ListApplicationApprovals(v)
+			if err != nil {
+				return err
+			}
+			if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != reviewedHash {
+				return fmt.Errorf("approved record=%+v", records)
+			}
+			if err := vault.Save(b.path, v, []byte("approval-test-password")); err != nil {
+				return err
+			}
+			b.metadata.Approvals = records
+			return nil
+		}
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		if b.edits != 1 {
+			t.Fatalf("edits=%d", b.edits)
+		}
+	})
+	t.Run("unprintable record path never rendered", func(t *testing.T) {
+		b := &fakeBackend{}
+		root := t.TempDir()
+		m := testModel(b)
+		m.approvalCWD = root
+		m.approvals = approvals.New(nil, root, nil)
+		m.metadata.Approvals = []vault.Approval{{Name: "unsafe\x02name", Path: filepath.Join(root, "bad\x01path"), Hash: strings.Repeat("a", 64)}}
+		m.approvals.SetRecords(m.metadata.Approvals)
+		m.approvals.Refresh()
+		m.at = location{screen: approvalsScreen}
+		view := m.View().Content
+		if !strings.Contains(view, "path_unprintable") || !strings.Contains(view, "name_unprintable") || strings.ContainsRune(view, '\x01') || strings.ContainsRune(view, '\x02') {
+			t.Fatalf("unsafe path rendering: %q", view)
+		}
+	})
+	t.Run("outside record shows fixed marker", func(t *testing.T) {
+		root, outside := t.TempDir(), t.TempDir()
+		m := testModel(&fakeBackend{})
+		m.approvalCWD = root
+		m.approvals = approvals.New(nil, root, nil)
+		m.metadata.Approvals = []vault.Approval{{Name: "outside", Path: filepath.Join(outside, "app"), Hash: strings.Repeat("a", 64)}}
+		m.approvals.SetRecords(m.metadata.Approvals)
+		m.approvals.Refresh()
+		m.at = location{screen: approvalsScreen}
+		view := m.View().Content
+		if !strings.Contains(view, "outside_working_folder") || strings.Contains(view, outside) {
+			t.Fatalf("outside record rendering: %q", view)
+		}
+	})
+	t.Run("revoke of an outside record works", func(t *testing.T) {
+		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		m, child := approvalFixture(t, b, false)
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'a')
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		v, err := vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		root := t.TempDir()
+		m.approvalCWD = root
+		m.approvals = approvals.New(nil, root, nil)
+		m.metadata.Approvals = records
+		refreshApprovals(m)
+		if len(m.approvals.Entries()) != 1 || !m.approvals.Entries()[0].OutsideWorkdir {
+			t.Fatal("record was not unmatched outside the scan root")
+		}
+		approvalPress(m, tea.KeyDown)
+		approvalPress(m, 'x')
+		completeApprovalCmd(t, m, approvalPress(m, 13))
+		v, err = vault.Load(b.path, []byte("approval-test-password"))
+		must(t, err)
+		records, err = vault.ListApplicationApprovals(v)
+		must(t, err)
+		if b.edits != 2 || len(records) != 0 {
+			t.Fatalf("edits=%d remaining=%v child=%s", b.edits, records, child)
+		}
+	})
+}
+
 func fill(m *Model, texts ...string) {
 	for i, text := range texts {
 		m.form.fields[i].value = []byte(text)

@@ -1,0 +1,573 @@
+package approvals
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
+)
+
+func openTestVault(t *testing.T) (string, *vault.Vault, []byte) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "vault")
+	password := []byte("test-password")
+	v := vault.NewDirectory()
+	if err := vault.CreateWithRecords(context.Background(), path, v, password); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Load(path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, v, password
+}
+
+func controllerFor(t *testing.T, v *vault.Vault) *Controller {
+	t.Helper()
+	root := t.TempDir()
+	putDescriptor(t, root, "svc-a", "service-a")
+	c := New(v, root, nil)
+	c.Refresh()
+	for i, e := range c.Entries() {
+		if e.candidate != nil {
+			c.Select(i)
+			break
+		}
+	}
+	return c
+}
+
+type fakeVaultOps struct {
+	listCalls, approveCalls, revokeCalls int
+	rec                                  vault.Approval
+	records                              []vault.Approval
+	replacesHash                         string
+	approveErr, revokeErr                error
+}
+
+func (f *fakeVaultOps) ListApplicationApprovals() ([]vault.Approval, error) {
+	f.listCalls++
+	return append([]vault.Approval(nil), f.records...), nil
+}
+func (f *fakeVaultOps) ApproveApplication(rec vault.Approval, replacesHash string) error {
+	f.approveCalls++
+	f.rec, f.replacesHash = rec, replacesHash
+	return f.approveErr
+}
+func (f *fakeVaultOps) RevokeApplication(name string) error {
+	f.revokeCalls++
+	for i, record := range f.records {
+		if record.Name == name {
+			f.records = append(f.records[:i], f.records[i+1:]...)
+			break
+		}
+	}
+	return f.revokeErr
+}
+
+func TestVerifiedRevoke(t *testing.T) {
+	t.Run("matching live record revokes", func(t *testing.T) {
+		record := vault.Approval{Name: "service-a", Path: "/work/svc", Hash: strings.Repeat("a", 64)}
+		ops := &fakeVaultOps{records: []vault.Approval{record}}
+		m := Mutation{Kind: "revoke", Name: record.Name, Path: record.Path, Replaces: record.Hash}
+		if err := VerifyRevoke(ops, m); err != nil {
+			t.Fatal(err)
+		}
+		if err := ApplyVerified(ops, m); err != nil || ops.revokeCalls != 1 {
+			t.Fatalf("err=%v calls=%d", err, ops.revokeCalls)
+		}
+	})
+	t.Run("changed live hash refuses without revoke", func(t *testing.T) {
+		record := vault.Approval{Name: "service-a", Path: "/work/svc", Hash: strings.Repeat("a", 64)}
+		ops := &fakeVaultOps{records: []vault.Approval{{Name: record.Name, Path: record.Path, Hash: strings.Repeat("b", 64)}}}
+		m := Mutation{Kind: "revoke", Name: record.Name, Path: record.Path, Replaces: record.Hash}
+		if err := VerifyRevoke(ops, m); err == nil || err.Error() != "revoke_stale" {
+			t.Fatalf("verify err=%v", err)
+		}
+		if err := ApplyVerified(ops, m); err == nil || err.Error() != "revoke_stale" || ops.revokeCalls != 0 {
+			t.Fatalf("apply err=%v calls=%d", err, ops.revokeCalls)
+		}
+	})
+	t.Run("revoke confirmation verifies live record", func(t *testing.T) {
+		root := t.TempDir()
+		record := vault.Approval{Name: "service-a", Path: filepath.Join(root, "missing"), Hash: strings.Repeat("a", 64)}
+		c := New(nil, root, nil)
+		c.SetRecords([]vault.Approval{record})
+		c.Refresh()
+		c.Select(0)
+		c.Revoke()
+		ops := &fakeVaultOps{records: []vault.Approval{{Name: record.Name, Path: record.Path, Hash: strings.Repeat("b", 64)}}}
+		c.vault = ops
+		if err := c.RevokeConfirm(); err == nil || err.Error() != "revoke_stale" || ops.revokeCalls != 0 {
+			t.Fatalf("err=%v calls=%d", err, ops.revokeCalls)
+		}
+	})
+}
+
+func TestPinnedRefreshRelocatesCursor(t *testing.T) {
+	t.Run("renamed pinned candidate remains selected", func(t *testing.T) {
+		root := t.TempDir()
+		first := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-b", "service-b")
+		c := New(nil, root, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		pin, ok := c.Pending()
+		if !ok {
+			t.Fatal("candidate was not armed")
+		}
+		ops := &fakeVaultOps{}
+		c.vault = ops
+		if err := os.Rename(first, filepath.Join(root, "svc-z")); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		entries := c.Entries()
+		selected := entries[c.Cursor()]
+		if selected.candidate == nil || selected.candidate.Name != pin.Name {
+			t.Fatalf("selected=%+v pin=%+v", selected, pin)
+		}
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		if ops.approveCalls != 1 || ops.rec.Name != pin.Name {
+			t.Fatalf("approved=%+v calls=%d", ops.rec, ops.approveCalls)
+		}
+	})
+	t.Run("vanished pinned candidate clears review", func(t *testing.T) {
+		root := t.TempDir()
+		child := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-b", "service-b")
+		c := New(nil, root, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		if err := os.RemoveAll(child); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		if _, ok := c.Pending(); ok || c.Message() != "review_stale" {
+			t.Fatalf("pending=%v message=%q", ok, c.Message())
+		}
+	})
+}
+
+func TestRejectedApprovalStaysApproved(t *testing.T) {
+	t.Run("approval overrides session rejection", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		root := t.TempDir()
+		child := putDescriptor(t, root, "svc-a", "service-a")
+		c := New(v, root, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Reject()
+		if err := c.RejectConfirm(); err != nil {
+			t.Fatal(err)
+		}
+		fingerprint := hex.EncodeToString(discovery.Scan(root).Candidates[0].Fingerprint[:])
+		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: child, Hash: fingerprint}, ""); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		if c.Entries()[0].Status != StatusApproved {
+			t.Fatalf("status=%v", c.Entries()[0].Status)
+		}
+		c.Select(0)
+		c.Revoke()
+		if err := c.RevokeConfirm(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestFailedArmClearsPreviousPin(t *testing.T) {
+	t.Run("failed approve arm clears review", func(t *testing.T) {
+		c := controllerFor(t, nil)
+		c.Arm()
+		c.entries[c.cursor].Status = StatusRejected
+		c.Arm()
+		if _, ok := c.Pending(); ok || c.Message() != "not_approvable" {
+			t.Fatalf("pending=%v message=%q", ok, c.Message())
+		}
+	})
+	t.Run("failed reject arm clears review", func(t *testing.T) {
+		c := controllerFor(t, nil)
+		c.Arm()
+		c.entries[c.cursor].Record = vault.Approval{Name: "service-a"}
+		c.Reject()
+		if _, ok := c.Pending(); ok || c.Message() != "reject_approved" {
+			t.Fatalf("pending=%v message=%q", ok, c.Message())
+		}
+	})
+	t.Run("failed revoke arm clears review", func(t *testing.T) {
+		c := controllerFor(t, nil)
+		c.Arm()
+		c.entries[c.cursor].Record = vault.Approval{Name: "service-a"}
+		c.Revoke()
+		if _, ok := c.Pending(); ok || c.Message() != "not_revokeable" {
+			t.Fatalf("pending=%v message=%q", ok, c.Message())
+		}
+	})
+}
+
+func TestApplyMutationValidationParity(t *testing.T) {
+	check := func(ops vaultOps, mutation Mutation, want string) {
+		err := ApplyMutation(ops, mutation)
+		if err == nil || err.Error() != want {
+			t.Fatalf("error=%v want=%s", err, want)
+		}
+		if f, ok := ops.(*fakeVaultOps); ok && (f.approveCalls != 0 || f.revokeCalls != 0) {
+			t.Fatalf("refusal called ops: %+v", f)
+		}
+	}
+	t.Run("invalid name", func(t *testing.T) {
+		check(&fakeVaultOps{}, Mutation{Kind: "approve", Name: "Bad Name", Path: filepath.Join(t.TempDir(), "x")}, "name_invalid")
+	})
+	t.Run("path too long", func(t *testing.T) {
+		check(&fakeVaultOps{}, Mutation{Kind: "approve", Name: "good", Path: filepath.Join(t.TempDir(), strings.Repeat("x", 600))}, "path_limit_exceeded")
+	})
+	t.Run("path control byte", func(t *testing.T) {
+		check(&fakeVaultOps{}, Mutation{Kind: "approve", Name: "good", Path: filepath.Join(t.TempDir(), "bad\x01")}, "path_invalid")
+	})
+	t.Run("nil approve ops", func(t *testing.T) {
+		check(nil, Mutation{Kind: "approve", Name: "good", Path: filepath.Join(t.TempDir(), "x")}, "vault_unavailable")
+	})
+	t.Run("nil revoke ops", func(t *testing.T) { check(nil, Mutation{Kind: "revoke", Name: "good"}, "revoke_failed") })
+	t.Run("unknown kind", func(t *testing.T) { check(&fakeVaultOps{}, Mutation{Kind: "other"}, "mutation_invalid") })
+}
+
+func TestApproveWritesCandidate(t *testing.T) {
+	t.Run("stores canonical path and fingerprint", func(t *testing.T) {
+		path, v, _ := openTestVault(t)
+		root := t.TempDir()
+		child := putDescriptor(t, root, "svc-a", "service-a")
+		c := New(v, root, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		records, err := vault.ListApplicationApprovals(v)
+		if err != nil || len(records) != 1 {
+			t.Fatalf("records=%v err=%v", records, err)
+		}
+		scan := discovery.Scan(root)
+		want := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+		canonical, err := filepath.EvalSymlinks(child)
+		if err != nil {
+			canonical = child
+		}
+		if records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != want || len(records[0].Hash) != 64 {
+			t.Fatalf("record=%+v want hash=%s vault=%s", records[0], want, path)
+		}
+	})
+}
+
+func TestApproveRefusals(t *testing.T) {
+	t.Run("requires selection and arm and cancel preserves empty vault", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		c.Select(-1)
+		if err := c.ConfirmApprove(); err == nil || err.Error() != "confirmation_required" || c.Message() != "confirmation_required" {
+			t.Fatal("no-selection approval accepted")
+		}
+		c.Select(0)
+		if err := c.ConfirmApprove(); err == nil || err.Error() != "confirmation_required" || c.Message() != "confirmation_required" {
+			t.Fatal("unarmed approval accepted")
+		}
+		c.Arm()
+		c.Cancel()
+		if err := c.Confirm(""); err == nil || c.Message() != "cancelled" {
+			t.Fatal("empty confirmation not cancelled")
+		}
+		records, _ := vault.ListApplicationApprovals(v)
+		if len(records) != 0 {
+			t.Fatalf("unexpected approvals: %v", records)
+		}
+	})
+}
+
+func TestRejectApproved(t *testing.T) {
+	t.Run("approved row cannot be rejected", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		c.Select(0)
+		c.Reject()
+		if c.Message() != "reject_approved" {
+			t.Fatalf("reject message=%q", c.Message())
+		}
+		if _, ok := c.Pending(); ok {
+			t.Fatal("approved entry armed for rejection")
+		}
+		if err := c.RejectConfirm(); err == nil || c.Message() != "confirmation_required" {
+			t.Fatalf("reject confirm err=%v message=%q", err, c.Message())
+		}
+		c.Refresh()
+		if len(c.Entries()) == 0 || c.Entries()[0].Status != StatusApproved {
+			t.Fatal("approved entry changed after rejected reject")
+		}
+	})
+}
+
+func TestRejectIsSessionLocal(t *testing.T) {
+	t.Run("rejects after confirmation without vault write", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		c.Reject()
+		if err := c.RejectConfirm(); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		if len(c.Entries()) == 0 || c.Entries()[0].Status != StatusRejected {
+			t.Fatal("rejection was not retained on refresh")
+		}
+		records, _ := vault.ListApplicationApprovals(v)
+		if len(records) != 0 {
+			t.Fatalf("reject wrote approvals: %v", records)
+		}
+	})
+}
+
+func TestRevokePersistsWithoutApprovalSection(t *testing.T) {
+	t.Run("revoke omits empty approvals section", func(t *testing.T) {
+		path, v, password := openTestVault(t)
+		c := controllerFor(t, v)
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Save(path, v, password); err != nil {
+			t.Fatal(err)
+		}
+		v1, err := vault.Load(path, password)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v1.Approvals == nil || len(v1.Approvals) != 1 {
+			t.Fatalf("approval section missing after approve: %#v", v1.Approvals)
+		}
+		c = New(v1, c.workingDir, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Revoke()
+		if err := c.RevokeConfirm(); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Save(path, v1, password); err != nil {
+			t.Fatal(err)
+		}
+		v2, err := vault.Load(path, password)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v2.Approvals != nil {
+			t.Fatalf("empty approvals section was not omitted: %#v", v2.Approvals)
+		}
+	})
+	t.Run("revoke cancel keeps record", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		c.Select(0)
+		c.Revoke()
+		c.Cancel()
+		if err := c.RevokeConfirm(); err == nil || c.Message() != "confirmation_required" {
+			t.Fatalf("cancelled revoke err=%v message=%q", err, c.Message())
+		}
+		records, err := vault.ListApplicationApprovals(v)
+		if err != nil || len(records) != 1 {
+			t.Fatalf("record lost after cancel: %v err=%v", records, err)
+		}
+	})
+}
+
+func TestChangedReapprovalAndStaleConflict(t *testing.T) {
+	t.Run("replaces old hash and refuses stale approval", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		root := t.TempDir()
+		child := putDescriptor(t, root, "svc-a", "service-a")
+		c := New(v, root, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		old, _ := vault.ListApplicationApprovals(v)
+		desc := filepath.Join(child, application.DescriptorFile)
+		suffix := ""
+		if runtime.GOOS == "windows" {
+			suffix = ".exe"
+		}
+		if err := os.WriteFile(desc, []byte(`{"format":"ssjack-app-v1","name":"service-a","launch":{"executable":"bin/tool2`+suffix+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		c.Select(0)
+		if c.Entries()[0].Status != StatusChanged || c.Entries()[0].HashPrefix != hex.EncodeToString(discovery.Scan(root).Candidates[0].Fingerprint[:])[:12] || c.Entries()[0].ApprovedHashPrefix != old[0].Hash[:12] {
+			t.Fatal("changed approval status/prefix incorrect")
+		}
+		newHash := hex.EncodeToString(discovery.Scan(root).Candidates[0].Fingerprint[:])
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		records, _ := vault.ListApplicationApprovals(v)
+		if len(records) != 1 || records[0].Hash != newHash {
+			t.Fatalf("reapproval=%v", records)
+		}
+		if err := os.WriteFile(desc, []byte(`{"format":"ssjack-app-v1","name":"service-a","launch":{"executable":"bin/tool3`+suffix+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c.Refresh()
+		c.Select(0)
+		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: child, Hash: hex.EncodeToString(make([]byte, 32))}, newHash); err != nil {
+			t.Fatal(err)
+		}
+		c.Arm()
+		if err := c.ConfirmApprove(); err == nil || c.Message() != "approval_changed_retry" {
+			t.Fatalf("stale confirm err=%v message=%q", err, c.Message())
+		}
+		latest, _ := vault.ListApplicationApprovals(v)
+		if len(latest) != 1 || latest[0].Hash != hex.EncodeToString(make([]byte, 32)) {
+			t.Fatal("stale confirmation replaced the concurrent record")
+		}
+	})
+}
+
+func TestApprovalLimitsAndPathValidation(t *testing.T) {
+	t.Run("maps count limit and rejects overlong paths", func(t *testing.T) {
+		if got := mapVaultError(errors.New("too many application approvals")); got != "approval_limit_reached" {
+			t.Fatalf("limit message=%q", got)
+		}
+		if validPath("/"+string([]byte{1})) == nil {
+			t.Fatal("control byte accepted")
+		}
+		base := t.TempDir()
+		padding := strings.Repeat("x", 512-len(base)-1)
+		accept := filepath.Join(base, padding)
+		if len(accept) != 512 {
+			t.Fatalf("test path length=%d", len(accept))
+		}
+		reject := accept + "x"
+		if validPath(accept) != nil {
+			t.Fatal("valid 512-byte absolute path rejected")
+		}
+		if validPath(reject) == nil {
+			t.Fatal("513-byte absolute path accepted")
+		}
+	})
+	t.Run("thirty-third approval is refused", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		root := t.TempDir()
+		names := make([]string, 0, 32)
+		for ch := 'a'; ch <= 'z'; ch++ {
+			names = append(names, string(ch))
+		}
+		for _, name := range []string{"aa", "ab", "ac", "ad", "ae", "af"} {
+			names = append(names, name)
+		}
+		for i, name := range names {
+			rec := vault.Approval{Name: name, Path: filepath.Join(root, name), Hash: strings.Repeat("a", 63) + string("0123456789abcdef"[i%16])}
+			if err := v.ApproveApplication(rec, ""); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+		candidateRoot := t.TempDir()
+		putDescriptor(t, candidateRoot, "svc-a", "service-a")
+		c := New(v, candidateRoot, nil)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		if err := c.ConfirmApprove(); err == nil || c.Message() != "approval_limit_reached" {
+			t.Fatalf("limit err=%v message=%q", err, c.Message())
+		}
+	})
+}
+
+func TestSnapshotGuard(t *testing.T) {
+	t.Run("failed mutation resets snapshot guard", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		calls := 0
+		c.snapshot = func() error { calls++; return nil }
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("first snapshot calls=%d", calls)
+		}
+		c.Select(0)
+		c.Revoke()
+		records, _ := vault.ListApplicationApprovals(v)
+		ops := &fakeVaultOps{records: records, revokeErr: errors.New("failed")}
+		c.vault = ops
+		if err := c.RevokeConfirm(); err == nil || calls != 1 {
+			t.Fatalf("failed revoke err=%v snapshot calls=%d", err, calls)
+		}
+		c.vault = v
+		c.Refresh()
+		c.Select(0)
+		c.Revoke()
+		if err := c.RevokeConfirm(); err != nil || calls != 2 {
+			t.Fatalf("retry err=%v snapshot calls=%d", err, calls)
+		}
+	})
+	t.Run("snapshots once and rejects failed snapshot", func(t *testing.T) {
+		_, v, _ := openTestVault(t)
+		c := controllerFor(t, v)
+		calls := 0
+		c.snapshot = func() error { calls++; return nil }
+		c.Refresh()
+		if calls != 0 {
+			t.Fatalf("refresh snapshotted %d times", calls)
+		}
+		c.Select(0)
+		c.Reject()
+		if err := c.RejectConfirm(); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 0 {
+			t.Fatalf("reject snapshotted %d times", calls)
+		}
+		c = controllerFor(t, v)
+		c.snapshot = func() error { calls++; return nil }
+		c.Arm()
+		if err := c.ConfirmApprove(); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("snapshot calls=%d", calls)
+		}
+		_, v2, _ := openTestVault(t)
+		failing := controllerFor(t, v2)
+		failing.snapshot = func() error { return errors.New("private failure") }
+		failing.Arm()
+		if err := failing.ConfirmApprove(); err == nil || failing.Message() != "snapshot_failed" {
+			t.Fatal("snapshot failure was not fixed")
+		}
+		records, _ := vault.ListApplicationApprovals(v2)
+		if len(records) != 0 {
+			t.Fatalf("snapshot failure mutated vault: %v", records)
+		}
+	})
+}

@@ -27,6 +27,7 @@ const (
 	mcpDirectoryScreen
 	mcpServerScreen
 	mcpAccountScreen
+	approvalsScreen
 )
 
 type location struct {
@@ -99,7 +100,7 @@ func connectionItems(metadata vault.DirectoryMetadata) []item {
 func navigation(at location, metadata vault.DirectoryMetadata) []item {
 	switch at.screen {
 	case databaseScreen:
-		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Remote MCP servers", target: location{screen: mcpDirectoryScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Import credentials and values", action: "import"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Exit", action: "exit"}}...)
+		return append(connectionItems(metadata), []item{{label: "Servers", target: location{screen: serversScreen}}, {label: "Global secrets", target: location{screen: secretsScreen}}, {label: "Remote MCP servers", target: location{screen: mcpDirectoryScreen}}, {label: "Export all credentials and values", action: "export"}, {label: "Import credentials and values", action: "import"}, {label: "Link secret store", action: "link"}, {label: "Pending change", action: "pending"}, {label: "Application approvals", target: location{screen: approvalsScreen}}, {label: "Exit", action: "exit"}}...)
 	case serversScreen:
 		result := []item{{label: "[Add server]", action: "add-server"}}
 		for _, server := range metadata.Servers {
@@ -154,6 +155,9 @@ func navigation(at location, metadata vault.DirectoryMetadata) []item {
 func (m *Model) push(target location) {
 	m.stack = append(m.stack, m.at)
 	m.at, m.cursor, m.message, m.reselect = target, 0, "", false
+	if target.screen == approvalsScreen {
+		m.openApprovals()
+	}
 }
 
 func (m *Model) back() {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownertui/internal/approvals"
 	"github.com/PHPCraftdream/ssjack/internal/stdindrain"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"golang.org/x/term"
@@ -23,6 +24,7 @@ type Backend interface {
 	Metadata() (vault.DirectoryMetadata, error)
 	Status() ownerdb.Status
 	Edit(func(*vault.Vault) error) error
+	SnapshotVault() (string, error)
 	Submit(vault.OwnerChange) error
 	Link(string, []byte) error
 	Reconcile() error
@@ -74,7 +76,9 @@ type Model struct {
 	epoch    uint64
 	imp      ownerdb.ImportStatus // latest import status; metadata only
 	// reselect blocks activation after a refresh changed the focused item.
-	reselect bool
+	reselect    bool
+	approvals   *approvals.Controller
+	approvalCWD string
 
 	// connection is an owner-selected SSH request awaiting TakeConnection.
 	connection *Connection
@@ -250,6 +254,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err == nil {
 			m.applyMetadata(msg.metadata, msg.imports)
+			if m.approvals != nil {
+				m.approvals.SetRecords(m.metadata.Approvals)
+				m.approvals.Refresh()
+			}
 			m.status, m.ready = msg.status, true
 		} else {
 			m.message = "Cannot refresh database metadata."
@@ -260,6 +268,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.working = false
 		if m.command != nil {
 			return m, m.commandDone(msg)
+		}
+		if msg.action == "approvals" {
+			m.approvals.Complete(msg.err)
+			return m, m.refresh()
 		}
 		if strings.HasPrefix(msg.action, "import") {
 			m.importDone(msg.action, msg.err)
@@ -334,6 +346,104 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) openApprovals() {
+	if m.approvalCWD == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			m.message = "scan_unavailable"
+			return
+		}
+		m.approvalCWD = cwd
+	}
+	if m.approvals == nil {
+		m.approvals = approvals.New(nil, m.approvalCWD, func() error {
+			_, err := m.backend.SnapshotVault()
+			return err
+		})
+	}
+	m.approvals.SetRecords(m.metadata.Approvals)
+	m.approvals.Refresh()
+}
+
+func (m *Model) handleApprovalsKey(name string) (tea.Model, tea.Cmd) {
+	if m.approvals == nil {
+		m.message = "scan_unavailable"
+		return m, nil
+	}
+	entries := m.approvals.Entries()
+	switch name {
+	case "esc", "escape", "left":
+		if m.approvals.ArmedAction() != "" {
+			m.approvals.Cancel()
+			m.message = m.approvals.Message()
+			return m, nil
+		}
+		m.approvals.ClearMessage()
+		m.back()
+	case "up":
+		if len(entries) != 0 {
+			i := m.approvals.Cursor() - 1
+			if m.approvals.Cursor() < 0 || i < 0 {
+				i = len(entries) - 1
+			}
+			m.approvals.Select(i)
+		}
+	case "down":
+		if len(entries) != 0 {
+			m.approvals.Select((m.approvals.Cursor() + 1) % len(entries))
+		}
+	case "a":
+		m.approvals.Arm()
+	case "r":
+		m.approvals.Reject()
+	case "x":
+		m.approvals.Revoke()
+	case "n":
+		m.approvals.Cancel()
+	case "enter", "y":
+		switch m.approvals.ArmedAction() {
+		case "approve", "revoke":
+			mut, ok := m.approvals.Pending()
+			if !ok {
+				m.message = m.approvals.Message()
+				if m.message == "" {
+					m.message = "confirmation_required"
+				}
+				return m, nil
+			}
+			if err := m.approvals.SnapshotBeforeFirstWrite(); err != nil {
+				m.message = m.approvals.Message()
+				return m, nil
+			}
+			m.working = true
+			return m, func() tea.Msg {
+				err := m.backend.Edit(func(v *vault.Vault) error { return approvals.ApplyVerified(v, mut) })
+				return operationMsg{action: "approvals", err: err}
+			}
+		case "reject":
+			_ = m.approvals.RejectConfirm()
+			m.message = m.approvals.Message()
+		default:
+			if _, ok := m.approvals.Pending(); !ok {
+				if m.approvals.Message() == "" {
+					m.message = "confirmation_required"
+				} else {
+					m.message = m.approvals.Message()
+				}
+				return m, nil
+			}
+		}
+	default:
+		m.approvals.ClearMessage()
+	}
+	if m.approvals.Message() != "" {
+		m.message = m.approvals.Message()
+	} else {
+		m.message = ""
+	}
+	return m, nil
+}
+
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.working {
 		return m, nil
@@ -379,6 +489,9 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	}
+	if m.at.screen == approvalsScreen {
+		return m.handleApprovalsKey(name)
 	}
 	items := m.items()
 	if len(items) == 0 {
@@ -441,6 +554,42 @@ func (m *Model) View() tea.View {
 			}
 			out.WriteString(marker + label + "\n")
 		}
+	} else if m.at.screen == approvalsScreen {
+		out.WriteString("Application approvals\n")
+		if m.approvals != nil {
+			for i, entry := range m.approvals.Entries() {
+				marker := "  "
+				if m.approvals.Cursor() == i {
+					marker = "> "
+				}
+				status := map[approvals.Status]string{approvals.StatusCandidate: "candidate", approvals.StatusApproved: "approved", approvals.StatusRejected: "rejected", approvals.StatusChanged: "changed", approvals.StatusUnsafe: "unsafe"}[entry.Status]
+				name := entry.Name
+				if !entry.NameSafe {
+					name = "name_unprintable"
+				}
+				path := entry.DisplayPath
+				if entry.OutsideWorkdir {
+					path = "outside_working_folder"
+				} else if !entry.PathSafe {
+					path = "path_unprintable"
+				}
+				line := marker + status + " name=" + name + " path=" + path
+				if entry.DisplayHash != "" {
+					line += " hash=" + entry.DisplayHash
+				}
+				if entry.DisplayApprovedHash != "" {
+					line += " approved_hash=" + entry.DisplayApprovedHash
+				}
+				if entry.Reason != "" {
+					line += " reason=" + entry.Reason
+				}
+				out.WriteString(line + "\n")
+			}
+			if msg := m.approvals.Message(); msg != "" {
+				out.WriteString(msg + "\n")
+			}
+		}
+		out.WriteString("\nUp/Down select · a approve · r reject · x revoke · Enter/y confirm · Esc/n cancel\n")
 	} else {
 		items := m.items()
 		rows := m.height - 12 - strings.Count(description, "\n")

@@ -19,6 +19,32 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
+func TestManagerSnapshotVault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vault")
+	password := []byte("test-password")
+	v := vault.NewDirectory()
+	if err := vault.CreateWithRecords(context.Background(), path, v, password); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(context.Background(), path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Discard()
+	backup, err := m.SnapshotVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := os.ReadFile(backup)
+	if err != nil || !bytes.Equal(copied, current) {
+		t.Fatal("manager snapshot differs from persisted ciphertext")
+	}
+}
+
 func TestCopiedOwnerMaterialIsIndependentlyOwned(t *testing.T) {
 	original := &vault.OwnerStore{Directory: "fixture", StoreID: "fixture", Master: []byte("synthetic master"), Pending: &vault.OwnerIntent{ID: "fixture", Versions: map[string]string{"object": "version"}, Change: vault.OwnerChange{Value: []byte("synthetic pending value")}}}
 	owned := copyLink(original)

@@ -120,6 +120,16 @@ func (m *Manager) ExportAt(expected uint64, request ExportRequest) error {
 
 func (m *Manager) Metadata() (vault.DirectoryMetadata, error) { return m.db.Metadata() }
 
+// SnapshotVault preserves the last persisted ciphertext of this session.
+func (m *Manager) SnapshotVault() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db == nil {
+		return "", errors.New("database session is not open")
+	}
+	return m.db.SnapshotSaved(m.path)
+}
+
 // Edit is a trusted owner form callback, not a public model-facing getter.
 // While an import is applying or partial it is refused: an edit to an imported
 // account or alias between a failure and resume would otherwise go unnoticed.

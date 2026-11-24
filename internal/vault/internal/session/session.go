@@ -375,6 +375,32 @@ func (s *Session) AcceptOwner(ctx context.Context) (ownerlocal.Connection, error
 	return role.Accept(ctx)
 }
 
+// SnapshotSaved preserves the ciphertext this session last persisted,
+// verified against its saved digest, next to the database.
+func (s *Session) SnapshotSaved(path string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.closing || s.state == nil || s.saveErr != nil || s.saved != s.revision || s.savedCipher == ([sha256.Size]byte{}) {
+		return "", errors.New("database snapshot is not fully saved")
+	}
+	encoded, err := store.ReadEncoded(path)
+	if err != nil {
+		return "", err
+	}
+	defer clear(encoded)
+	if sha256.Sum256(encoded) != s.savedCipher {
+		return "", errors.New("vault changed since the last save; reload before snapshotting")
+	}
+	backup, err := store.RecoveryPath(path, "approval-snapshot")
+	if err != nil {
+		return "", err
+	}
+	if err := store.Commit(backup, encoded, nil); err != nil {
+		return "", err
+	}
+	return backup, nil
+}
+
 // SavedCipherDigest identifies a completed encrypted snapshot, not authority.
 // It never returns a plaintext digest, credential, passphrase or master key.
 func (s *Session) SavedCipherDigest() ([sha256.Size]byte, error) {
