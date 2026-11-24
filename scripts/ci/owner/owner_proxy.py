@@ -77,7 +77,7 @@ def main():
     def secret_entry(label, value):
         expect(b"> " + label + b":")
         keys("Enter")
-        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels):")
         paste(value)
         keys("Enter")
         expect(b"<hidden; entered>")

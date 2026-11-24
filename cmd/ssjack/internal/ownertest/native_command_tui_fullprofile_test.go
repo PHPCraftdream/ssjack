@@ -756,7 +756,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, diagnostics *testing.T, ctx cont
 			trace.write(t, "unlock", nativeUnlockInput(password))
 			trace.expectText(t, lifetime, "first-tui-frame", "> Credential: <hidden; empty>", "native owner did not display its focused hidden-empty credential")
 			trace.write(t, "open-credential-secret-prompt", []byte{'\r'})
-			trace.expectText(t, lifetime, "credential-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ", "native owner did not open the hidden credential prompt")
+			trace.expectText(t, lifetime, "credential-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels):", "native owner did not open the hidden credential prompt")
 			if mode == "cancel" {
 				trace.write(t, "cancel-credential-secret-prompt", []byte{'\x1b'})
 			} else {

@@ -104,7 +104,7 @@ def main():
         keys("Tab", "Tab")
         expect("> Credential:")
         keys("Enter")
-        expect("Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        expect("Secret (hidden; Enter submits, Esc/Ctrl+C cancels):")
         paste(b"synthetic-cancelled-private")
         keys("Escape")
         expect("Secret entry cancelled; the value was not changed. Press Enter to retry.")

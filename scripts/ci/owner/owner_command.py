@@ -55,7 +55,7 @@ def main():
         expect(b'"cli-user" (parameter; read-only)')
         expect(b"> " + label.encode() + b":")
         tmux("send-keys", "-t", "owner", "Enter")
-        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels):")
         paste(value)
         tmux("send-keys", "-t", "owner", "Enter")
         expect(b"<hidden; entered>")

@@ -341,7 +341,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 		secretField := step.marker == "Value:" || step.marker == "Archive password:"
 		if secretField {
 			trace.write(t, step.stage+"-open-secret-prompt", []byte{'\r'})
-			trace.expectText(t, lifetime, step.stage+"-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ", "native archive command did not open the hidden secret prompt")
+			trace.expectText(t, lifetime, step.stage+"-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels):", "native archive command did not open the hidden secret prompt")
 			if len(step.value) == 1 && step.value[0] == '\x1b' {
 				trace.write(t, step.stage+"-cancel-secret-prompt", []byte{'\x1b'})
 				continue
