@@ -53,6 +53,12 @@ func (b *Remote) OwnerSnapshot() (vault.DirectoryMetadata, ownerdb.Status, owner
 	return snapshot.Directory, snapshot.Status, snapshot.Import, err
 }
 
+// SnapshotVault refuses: the vault ciphertext and its saved digest live on
+// the keeper side and the owner protocol has no snapshot operation, so the
+// client cannot take a verified snapshot. Approval writes stay unavailable
+// on remote backends instead of faking success.
+func (b *Remote) SnapshotVault() (string, error) { return "", ownerpacket.ErrProtocol }
+
 func (b *Remote) Metadata() (vault.DirectoryMetadata, error) {
 	directory, _, _, err := b.OwnerSnapshot()
 	return directory, err

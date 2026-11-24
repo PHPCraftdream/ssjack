@@ -22,6 +22,13 @@ type recorder struct {
 	snapshots uint64
 }
 
+func (r *recorder) Snapshot() (ownerdb.Snapshot, error) {
+	r.snapshots++
+	return ownerdb.Snapshot{
+		Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Address: "synthetic.invalid:22"}}},
+		Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: r.snapshots}}}, nil
+}
+
 func (r *recorder) record(action string, revision uint64) error {
 	r.action, r.revision = action, revision
 	return refusal
@@ -61,11 +68,25 @@ func (r *recorder) AbortImportPlanAt(revision, plan uint64) error {
 	return r.record("abort-import", revision)
 }
 func (r *recorder) Edit(_ func(*vault.Vault) error) error { return r.record("unscoped-edit", 0) }
-func (r *recorder) Snapshot() (ownerdb.Snapshot, error) {
-	r.snapshots++
-	return ownerdb.Snapshot{
-		Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Address: "synthetic.invalid:22"}}},
-		Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: r.snapshots}}}, nil
+
+type snapshotManager struct {
+	*ownerdb.Manager
+	calls int
+}
+
+func (m *snapshotManager) SnapshotVault() (string, error) {
+	m.calls++
+	return "synthetic-snapshot", nil
+}
+
+func TestLocalSnapshotVaultDelegatesToManager(t *testing.T) {
+	t.Run("snapshot vault delegates to the manager", func(t *testing.T) {
+		manager := &snapshotManager{}
+		path, err := (&Local{manager: manager}).SnapshotVault()
+		if path != "synthetic-snapshot" || err != nil || manager.calls != 1 {
+			t.Fatal("local snapshot vault did not delegate exactly once")
+		}
+	})
 }
 
 func TestEveryScopedMutationUsesThePinnedAdmissionAPI(t *testing.T) {

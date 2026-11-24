@@ -12,6 +12,7 @@ type manager interface {
 	Metadata() (vault.DirectoryMetadata, error)
 	Status() ownerdb.Status
 	Snapshot() (ownerdb.Snapshot, error)
+	SnapshotVault() (string, error)
 	ImportStatus() ownerdb.ImportStatus
 	Edit(func(*vault.Vault) error) error
 	EditAt(uint64, func(*vault.Vault) error) error
@@ -61,6 +62,9 @@ func (b *Local) OwnerSnapshot() (vault.DirectoryMetadata, ownerdb.Status, ownerd
 	snapshot, err := b.manager.Snapshot()
 	return snapshot.Directory, snapshot.Status, snapshot.Import, err
 }
+
+// SnapshotVault preserves the last persisted ciphertext through the manager.
+func (b *Local) SnapshotVault() (string, error)             { return b.manager.SnapshotVault() }
 func (b *Local) Metadata() (vault.DirectoryMetadata, error) { return b.manager.Metadata() }
 func (b *Local) Status() ownerdb.Status                     { return b.manager.Status() }
 func (b *Local) ImportStatus() ownerdb.ImportStatus         { return b.manager.ImportStatus() }

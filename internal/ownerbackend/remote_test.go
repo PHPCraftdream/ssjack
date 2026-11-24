@@ -57,6 +57,17 @@ func (r *remoteRecorder) Execute(ctx context.Context, command ownerpacket.Comman
 	return ownerdb.Snapshot{}, r.failure
 }
 
+func TestRemoteSnapshotVaultRefusesWithoutProtocolTraffic(t *testing.T) {
+	t.Run("snapshot vault refuses without protocol traffic", func(t *testing.T) {
+		r := &remoteRecorder{}
+		b := &Remote{ctx: context.Background(), client: r}
+		path, err := b.SnapshotVault()
+		if path != "" || !errors.Is(err, ownerpacket.ErrProtocol) || r.command.Operation != "" {
+			t.Fatal("remote snapshot vault returned a path or reached the protocol")
+		}
+	})
+}
+
 func TestRemoteMutationsUseClosedCommandsAndImmutableRevision(t *testing.T) {
 	absolute := func(path string) string {
 		result, err := filepath.Abs(path)
