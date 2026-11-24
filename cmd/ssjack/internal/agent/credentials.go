@@ -31,6 +31,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerssh"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/sshlive"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -70,6 +71,20 @@ type Credentials struct {
 // closes everything acquired so far.
 func NewOwnerCredentials(owner OwnerSession) *Credentials {
 	return &Credentials{owner: owner}
+}
+
+// ApplicationApprovals returns owner application approval records from the
+// unlocked directory database. Other owner sessions have no approvals.
+func (credentials *Credentials) ApplicationApprovals() ([]vault.Approval, error) {
+	manager, ok := credentials.owner.(*ownerdb.Manager)
+	if !ok {
+		return nil, nil
+	}
+	metadata, err := manager.Metadata()
+	if err != nil {
+		return nil, err
+	}
+	return metadata.Approvals, nil
 }
 
 // SetService records the started owner service for the text owner path.

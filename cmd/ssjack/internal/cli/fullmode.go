@@ -9,14 +9,17 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/agent"
+	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/discover"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/launchguard"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/transfercmd"
 	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/enrollment"
 	"github.com/PHPCraftdream/ssjack/internal/launch"
 	"github.com/PHPCraftdream/ssjack/internal/mcpbridge"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -30,6 +33,7 @@ type keeperCredentials interface {
 	PrepareRemoteMCPChannels(ctx context.Context, known remote.GuardProvider, ttl time.Duration) (remote.GuardProvider, string, error)
 	Manager(ctx context.Context, targets []string, guard remote.GuardProvider, noOutputFilter bool) *remote.Manager
 	Finish(code *int, result *error)
+	ApplicationApprovals() ([]vault.Approval, error)
 }
 
 // loadKeeperCredentials adapts agent.Load to the keeper interface, normalizing
@@ -64,6 +68,8 @@ type fullModeSession struct {
 // returned cleanup is never nil and must be deferred even when err is set: it
 // releases whatever was acquired so far, in reverse order.
 func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, func(*int, *error), error) {
+	scan := discovery.Scan(".")
+	discover.Report(scan, os.Stderr)
 	var cleanups []func(*int, *error)
 	cleanup := func(code *int, result *error) {
 		for i := len(cleanups) - 1; i >= 0; i-- {
@@ -88,6 +94,30 @@ func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, 
 	}
 	if credentials == nil {
 		return session, cleanup, errors.New("credential session is unavailable")
+	}
+	approvals, approvalErr := credentials.ApplicationApprovals()
+	if approvalErr != nil {
+		return session, cleanup, errors.New("application approval loading failed")
+	}
+	explicitApps := []application.App(nil)
+	if applicationOptions != nil {
+		explicitApps = applicationOptions.Apps
+	}
+	discovered, statuses, err := discover.Approved(scan, approvals, explicitApps)
+	if err != nil {
+		return session, cleanup, err
+	}
+	discover.PostUnlock(statuses, os.Stderr)
+	if applicationOptions == nil {
+		if len(discovered) != 0 {
+			container, user, routeErr := application.ParseRoute(opts.appRoute)
+			if routeErr != nil {
+				return session, cleanup, routeErr
+			}
+			applicationOptions = &application.Options{Apps: discovered, Profile: opts.profile, Container: container, User: user}
+		}
+	} else if len(discovered) != 0 {
+		applicationOptions.Apps = append(applicationOptions.Apps, discovered...)
 	}
 	guard, err := launchguard.Select(credentials.Guard(), opts.noOutputFilter, os.Stderr)
 	if err != nil {

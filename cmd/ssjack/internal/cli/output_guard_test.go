@@ -23,6 +23,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
+	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
@@ -279,6 +280,8 @@ func (s *stubKeeperCredentials) Manager(ctx context.Context, targets []string, g
 }
 
 func (s *stubKeeperCredentials) Finish(*int, *error) {}
+
+func (s *stubKeeperCredentials) ApplicationApprovals() ([]vault.Approval, error) { return nil, nil }
 
 // TestFullStartupRoutingKeepsStubCredentialsGuarded is the complementary
 // cli-package routing check: it proves the full startup still wires the
