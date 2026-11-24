@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
@@ -353,7 +354,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 			continue
 		}
 		if len(step.value) != 0 {
-			trace.write(t, step.stage, step.value)
+			nativeArchiveWriteKeys(t, trace, lifetime, step.stage, step.value)
 		}
 	}
 	if cancelled {
@@ -363,6 +364,23 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 		trace.expectText(t, lifetime, "persistence-receipt", "Owner command completed; encrypted persistence confirmed.", "native archive command omitted its persistence receipt")
 	}
 	return trace
+}
+
+// nativeArchiveWriteKeys delivers one key byte per terminal write and waits
+// for the child's repaint (capture growth) after each key, so the plain-text
+// form input path never receives a burst the vulnerable bubbletea reader can
+// lose or reorder. Stage names carry only static indexes, never key bytes.
+func nativeArchiveWriteKeys(t *testing.T, trace *nativeTerminalTrace, ctx context.Context, stage string, value []byte) {
+	t.Helper()
+	for index, key := range value {
+		keyStage := fmt.Sprintf("%s-key-%d-of-%d", stage, index+1, len(value))
+		offset := 0
+		trace.capture.Inspect(func(data []byte, _ int, _ bool) { offset = len(data) })
+		trace.write(t, keyStage, []byte{key})
+		trace.expect(t, ctx, keyStage, "native archive command did not repaint after the key", func(data []byte) bool {
+			return len(data) > offset
+		})
+	}
 }
 
 func nativeArchiveCheckpoint(t *testing.T, trace *nativeTerminalTrace, stage, failure string, err error) {
@@ -506,6 +524,8 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	importTrace.flow.Complete()
 	readback := filepath.Join(t.TempDir(), "readback.zip")
 	freshMCPServerID, freshMCPAccounts := nativeArchiveMCPSelection(t, destination)
+	// Two TABs: the readback export passes no --mcp-accounts, so its MCP
+	// accounts field is unsupplied and the first TAB lands there, not on Apply.
 	readbackTrace := nativeArchiveCommand(t, ctx, target, "native archive export account plaintext readback", false, []string{"export", "--scope", "account", "--server", "archive-source", "--account", "selected", "--destination", readback, "--format", "plaintext"}, nativeArchiveInput{"export-confirmation", "Confirmation:", []byte("EXPORT PLAINTEXT\t\t\r")})
 	readbackReporter := readbackTrace.report(t)
 	verifyNativeArchive(readbackReporter, ctx, readback, false, server, alias, "", nil)
