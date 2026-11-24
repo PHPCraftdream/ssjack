@@ -623,64 +623,59 @@ func (r *nativeExpectationRecorder) Fatalf(format string, args ...any) {
 func TestNativeExpectationFailureEvidenceDoesNotLeak(t *testing.T) {
 	const secret = "fixture-only-hidden-fragment"
 	const sentinel = "RAW-ONLY-SENTINEL-739"
-	for _, tc := range []struct {
-		stage, matcher string
-		expect         func(nativeExpectationReporter, *nativeTerminalTrace, context.Context)
-	}{
-		{"human-ssh-shell-echo", "ECHO:" + secret, func(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context) {
-			expectNativeHumanSSHEcho(t, trace, ctx, secret)
-		}},
-		{"persistence-receipt", "receipt:" + secret, func(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context) {
-			trace.expectText(t, ctx, "persistence-receipt", "receipt:"+secret, "native owner command lacked a persistence receipt")
-		}},
-	} {
-		t.Run(tc.stage, func(t *testing.T) {
-			ctx := context.Background()
-			const unregistered nativeChildFailure = "not-registered"
-			raw := "\x1b[31m" + secret + "\x1b[0m\r\n" + sentinel + "\r\n" +
-				unregistered.marker() + "\r\n" + applyChildCLIError.marker() + "\r\n" +
-				keeperStdoutBase64.marker() + "\r\n" + keeperStdoutOffset.marker()
-			if strings.Contains(raw, tc.matcher) {
-				t.Fatal("fixture unexpectedly contains the expected matcher")
+	run := func(t *testing.T, stage, matcher string, expect func(nativeExpectationReporter, *nativeTerminalTrace, context.Context)) {
+		t.Helper()
+		ctx := context.Background()
+		const unregistered nativeChildFailure = "not-registered"
+		raw := "\x1b[31m" + secret + "\x1b[0m\r\n" + sentinel + "\r\n" +
+			unregistered.marker() + "\r\n" + applyChildCLIError.marker() + "\r\n" +
+			keeperStdoutBase64.marker() + "\r\n" + keeperStdoutOffset.marker()
+		if strings.Contains(raw, matcher) {
+			t.Fatal("fixture unexpectedly contains the expected matcher")
+		}
+		trace := &nativeTerminalTrace{started: time.Now(), capture: ownerterminal.CaptureOutput(strings.NewReader(raw))}
+		defer trace.capture.Clear()
+		if trace.capture.Join(ctx) != nil {
+			t.Fatal("fixture capture did not finish")
+		}
+		trace.addKeeperHarnessFailureMarkers()
+		trace.addOwnerCommandChildFailureMarkers()
+		reporter := &nativeExpectationRecorder{}
+		expect(reporter, trace, ctx)
+		evidence := trace.failureEvidence("native expectation regression", true)
+		for _, forbidden := range []string{matcher, secret, raw, sentinel, string(unregistered), "[native-child-failure:"} {
+			if strings.Contains(evidence, forbidden) || strings.Contains(reporter.fatalText, forbidden) {
+				t.Error("expectation failure disclosed forbidden fixture text")
 			}
-			trace := &nativeTerminalTrace{started: time.Now(), capture: ownerterminal.CaptureOutput(strings.NewReader(raw))}
-			defer trace.capture.Clear()
-			if trace.capture.Join(ctx) != nil {
-				t.Fatal("fixture capture did not finish")
+		}
+		for _, want := range []string{
+			stage + " expect-failed class=eof-or-read-error",
+			"capture-class=" + string(applyChildCLIError) + "\n",
+			"capture-class=" + string(keeperStdoutBase64) + "\n",
+			"capture-class=" + string(keeperStdoutOffset) + "\n",
+			fmt.Sprintf("capture retained=%d total=%d overflow=false retained-digest=%s\n", len(raw), len(raw), flakediag.Short([]byte(raw))),
+		} {
+			if !strings.Contains(evidence, want) {
+				t.Error("failure evidence lost a required diagnostic")
 			}
-			// These keeper classes are registered beyond the old 16-marker cap.
-			trace.addKeeperHarnessFailureMarkers()
-			trace.addOwnerCommandChildFailureMarkers()
-			reporter := &nativeExpectationRecorder{}
-			tc.expect(reporter, trace, ctx)
-			// Render the same evidence a failing native flow would report.
-			evidence := trace.failureEvidence("native expectation regression", true)
-			for _, forbidden := range []string{
-				tc.matcher, secret, raw, sentinel, string(unregistered), "[native-child-failure:",
-			} {
-				if strings.Contains(evidence, forbidden) || strings.Contains(reporter.fatalText, forbidden) {
-					t.Error("expectation failure disclosed forbidden fixture text")
-				}
-			}
-			for _, want := range []string{
-				tc.stage + " expect-failed class=eof-or-read-error",
-				"capture-class=" + string(applyChildCLIError) + "\n",
-				"capture-class=" + string(keeperStdoutBase64) + "\n",
-				"capture-class=" + string(keeperStdoutOffset) + "\n",
-				fmt.Sprintf("capture retained=%d total=%d overflow=false retained-digest=%s\n", len(raw), len(raw), flakediag.Short([]byte(raw))),
-			} {
-				if !strings.Contains(evidence, want) {
-					t.Error("failure evidence lost a required diagnostic")
-				}
-			}
-			if strings.Count(evidence, "capture-class=") != 3 || strings.Contains(evidence, "expect-matched") {
-				t.Error("failure evidence recorded an unexpected class or match")
-			}
-			if !strings.HasPrefix(reporter.fatalText, tc.stage+": ") || !strings.HasSuffix(reporter.fatalText, "(eof-or-read-error)") {
-				t.Error("expectation did not report the expected fatal stage and class")
-			}
-		})
+		}
+		if strings.Count(evidence, "capture-class=") != 3 || strings.Contains(evidence, "expect-matched") {
+			t.Error("failure evidence recorded an unexpected class or match")
+		}
+		if !strings.HasPrefix(reporter.fatalText, stage+": ") || !strings.HasSuffix(reporter.fatalText, "(eof-or-read-error)") {
+			t.Error("expectation did not report the expected fatal stage and class")
+		}
 	}
+	t.Run("native-human-ssh-shell-echo-failure", func(t *testing.T) {
+		run(t, "human-ssh-shell-echo", "ECHO:"+secret, func(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context) {
+			expectNativeHumanSSHEcho(t, trace, ctx, secret)
+		})
+	})
+	t.Run("native-persistence-receipt-failure", func(t *testing.T) {
+		run(t, "persistence-receipt", "receipt:"+secret, func(t nativeExpectationReporter, trace *nativeTerminalTrace, ctx context.Context) {
+			trace.expectText(t, ctx, "persistence-receipt", "receipt:"+secret, "native owner command lacked a persistence receipt")
+		})
+	})
 }
 
 func nativeUnlockInput(password []byte) []byte {
@@ -759,18 +754,15 @@ func nativeOwnerCommandAcceptance(t *testing.T, diagnostics *testing.T, ctx cont
 			}()
 			trace.expectText(t, lifetime, "vault-prompt", "Vault secret:", "native owner did not request its single vault unlock")
 			trace.write(t, "unlock", nativeUnlockInput(password))
-			screen := newNativeCredentialScreen()
-			trace.expect(t, lifetime, "first-tui-frame", "native owner did not display its focused hidden-empty credential", func(data []byte) bool {
-				return screen.matches(data, "> Credential: <hidden; empty>")
-			})
-			trace.write(t, "credential", bytes.Clone(credential))
-			// A console write can arrive in batches; entered proves nonempty, not complete.
-			trace.expect(t, lifetime, "credential-nonempty", "native owner did not display its focused hidden nonempty credential", func(data []byte) bool {
-				return screen.matches(data, "> Credential: <hidden; entered>")
-			})
+			trace.expectText(t, lifetime, "first-tui-frame", "> Credential: <hidden; empty>", "native owner did not display its focused hidden-empty credential")
+			trace.write(t, "open-credential-secret-prompt", []byte{'\r'})
+			trace.expectText(t, lifetime, "credential-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ", "native owner did not open the hidden credential prompt")
 			if mode == "cancel" {
-				trace.write(t, "cancel", []byte{'\x1b'})
+				trace.write(t, "cancel-credential-secret-prompt", []byte{'\x1b'})
 			} else {
+				credentialInput := append(bytes.Clone(credential), '\r')
+				trace.write(t, "credential-secret-value", credentialInput)
+				trace.expectText(t, lifetime, "credential-nonempty", "> Credential: <hidden; entered>", "native owner did not display its focused hidden nonempty credential")
 				trace.write(t, "apply", []byte{'\t', '\r'})
 			}
 			trace.wait(t, lifetime, "native owner command did not finish its explicit decision")
@@ -886,64 +878,64 @@ func nativeInteractiveAcceptance(t *testing.T, diagnostics *testing.T, ctx conte
 	revision := observer.Backend().Status().Database.Revision
 	const replacement = "127.0.0.1:2"
 	var applyTrace *nativeTerminalTrace
-	for _, mode := range []string{"cancel", "apply"} {
-		t.Run(mode, func(t *testing.T) {
-			lifetime, cancel := context.WithTimeout(ctx, time.Minute)
-			defer cancel()
-			environment := make([]string, 0)
-			for _, entry := range os.Environ() {
-				key, _, _ := strings.Cut(entry, "=")
-				if !strings.HasPrefix(key, "SSJACK_OWNER_") && key != "SSJACK_VAULT_PASSWORD" && key != "TERM" && key != "NO_COLOR" {
-					environment = append(environment, entry)
-				}
+	runInteractiveMode := func(t *testing.T, mode string) {
+		lifetime, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		environment := make([]string, 0)
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if !strings.HasPrefix(key, "SSJACK_OWNER_") && key != "SSJACK_VAULT_PASSWORD" && key != "TERM" && key != "NO_COLOR" {
+				environment = append(environment, entry)
 			}
-			environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1")
-			trace := startNativeTerminal(t, diagnostics, lifetime, "interactive helper "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
-				Args: []string{"-test.run=^TestNativeInteractiveProcessChild$", "--", "--vault", path, "--interactive"}})
-			if mode == "apply" {
-				applyTrace = trace
+		}
+		environment = append(environment, "TERM=xterm-256color", "NO_COLOR=1", "SSJACK_OWNER_NATIVE_TUI_CHILD=1", "SSJACK_OWNER_TUI_CHILD=1")
+		trace := startNativeTerminal(t, diagnostics, lifetime, "interactive helper "+mode, ownerterminal.Command{Executable: executable, UnixBridge: bridge, Directory: t.TempDir(), Environment: environment,
+			Args: []string{"-test.run=^TestNativeInteractiveProcessChild$", "--", "--vault", path, "--interactive"}})
+		if mode == "apply" {
+			applyTrace = trace
+		}
+		trace.addInteractiveTerminalFailureMarkers()
+		trace.addInteractiveCLIFailureMarkers()
+		defer func() {
+			trace.cleanup(t, "", "interactive terminal output did not join")
+			if trace.hiddenInputMatches(password)[0] {
+				trace.report(t).Error("interactive teardown: terminal disclosed the vault password")
 			}
-			trace.addInteractiveTerminalFailureMarkers()
-			trace.addInteractiveCLIFailureMarkers()
-			defer func() {
-				trace.cleanup(t, "", "interactive terminal output did not join")
-				if trace.hiddenInputMatches(password)[0] {
-					trace.report(t).Error("interactive teardown: terminal disclosed the vault password")
-				}
-				if trace.capture.Contains([]byte("SSH connection failed")) {
-					trace.report(t).Error("interactive teardown: unexpected SSH connection marker")
-				}
-			}()
-			trace.expectText(t, lifetime, "vault-prompt", "Vault secret:", "actual interactive navigation did not reach: Vault secret:")
-			trace.write(t, "unlock", nativeUnlockInput(password))
-			trace.expectText(t, lifetime, "first-tui-frame", "Connect:", "actual interactive navigation did not reach: Connect:")
-			trace.write(t, "open-server-list", []byte(strings.Repeat("\x1b[B", connections)+"\r"))
-			trace.expectText(t, lifetime, "server-list", "[Add server]", "actual interactive navigation did not reach: [Add server]")
-			trace.write(t, "select-server", []byte(strings.Repeat("\x1b[B", index+1)+"\r"))
-			trace.expectText(t, lifetime, "server-actions", "[Edit server connection]", "actual interactive navigation did not reach: [Edit server connection]")
-			trace.write(t, "open-connection-editor", []byte("\x1b[B\r"))
-			trace.expectText(t, lifetime, "connection-editor", "Replacement host keys", "actual interactive navigation did not reach: Replacement host keys")
-			trace.write(t, "replace-address", append(bytes.Repeat([]byte{127}, len(oldAddress)), []byte(replacement)...))
-			if mode == "cancel" {
-				trace.write(t, "cancel-and-close", []byte{3, 3})
-			} else {
-				trace.write(t, "apply", []byte{'\t', '\t', '\r'})
-				trace.expectText(t, lifetime, "persistence-receipt", "Change applied. Check persistence status below.", "actual interactive navigation did not reach: Change applied. Check persistence status below.")
-				trace.write(t, "close", []byte{3})
+			if trace.capture.Contains([]byte("SSH connection failed")) {
+				trace.report(t).Error("interactive teardown: unexpected SSH connection marker")
 			}
-			trace.wait(t, lifetime, "actual interactive helper did not finish its close/flush")
-			if mode == "cancel" {
-				after, err := os.ReadFile(path)
-				if err != nil {
-					trace.report(t).Fatal("interactive cancel-read: database ciphertext read failed")
-				}
-				if !bytes.Equal(before, after) {
-					trace.report(t).Fatalf("interactive cancel-read: database ciphertext changed: before-size=%d after-size=%d", len(before), len(after))
-				}
-				trace.flow.Complete()
+		}()
+		trace.expectText(t, lifetime, "vault-prompt", "Vault secret:", "actual interactive navigation did not reach: Vault secret:")
+		trace.write(t, "unlock", nativeUnlockInput(password))
+		trace.expectText(t, lifetime, "first-tui-frame", "Connect:", "actual interactive navigation did not reach: Connect:")
+		trace.write(t, "open-server-list", []byte(strings.Repeat("\x1b[B", connections)+"\r"))
+		trace.expectText(t, lifetime, "server-list", "[Add server]", "actual interactive navigation did not reach: [Add server]")
+		trace.write(t, "select-server", []byte(strings.Repeat("\x1b[B", index+1)+"\r"))
+		trace.expectText(t, lifetime, "server-actions", "[Edit server connection]", "actual interactive navigation did not reach: [Edit server connection]")
+		trace.write(t, "open-connection-editor", []byte("\x1b[B\r"))
+		trace.expectText(t, lifetime, "connection-editor", "Replacement host keys", "actual interactive navigation did not reach: Replacement host keys")
+		trace.write(t, "replace-address", append(bytes.Repeat([]byte{127}, len(oldAddress)), []byte(replacement)...))
+		if mode == "cancel" {
+			trace.write(t, "cancel-and-close", []byte{3, 3})
+		} else {
+			trace.write(t, "apply", []byte{'\t', '\t', '\r'})
+			trace.expectText(t, lifetime, "persistence-receipt", "Change applied. Check persistence status below.", "actual interactive navigation did not reach: Change applied. Check persistence status below.")
+			trace.write(t, "close", []byte{3})
+		}
+		trace.wait(t, lifetime, "actual interactive helper did not finish its close/flush")
+		if mode == "cancel" {
+			after, err := os.ReadFile(path)
+			if err != nil {
+				trace.report(t).Fatal("interactive cancel-read: database ciphertext read failed")
 			}
-		})
+			if !bytes.Equal(before, after) {
+				trace.report(t).Fatalf("interactive cancel-read: database ciphertext changed: before-size=%d after-size=%d", len(before), len(after))
+			}
+			trace.flow.Complete()
+		}
 	}
+	t.Run("native-interactive-cancel", func(t *testing.T) { runInteractiveMode(t, "cancel") })
+	t.Run("native-interactive-apply", func(t *testing.T) { runInteractiveMode(t, "apply") })
 	report := applyTrace.report(t)
 	metadata, err = observer.Backend().Metadata()
 	if err != nil {

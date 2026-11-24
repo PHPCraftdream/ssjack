@@ -51,6 +51,15 @@ def main():
         tmux("load-buffer", "-", data=value)
         tmux("paste-buffer", "-d", "-t", "owner")
 
+    def secret_entry(label, value):
+        expect(b'"cli-user" (parameter; read-only)')
+        expect(b"> " + label.encode() + b":")
+        tmux("send-keys", "-t", "owner", "Enter")
+        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        paste(value)
+        tmux("send-keys", "-t", "owner", "Enter")
+        expect(b"<hidden; entered>")
+
     def close_control():
         nonlocal control
         if control is None:
@@ -86,10 +95,7 @@ def main():
         output = shared.TerminalOutput(control.stdout)
         expect(b"Vault secret:")
         paste(password + b"\n")
-        expect(b"> Credential:")
-        expect(b"parameter; read-only")
-        paste(credential)
-        expect(b"<hidden; entered>")
+        secret_entry("Credential", credential)
         if mode == "cancel":
             tmux("send-keys", "-t", "owner", "Escape")
         else:

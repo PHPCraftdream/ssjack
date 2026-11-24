@@ -16,18 +16,22 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
 )
 
 const (
@@ -410,9 +414,8 @@ const (
 )
 
 // importDriver feeds Bubble Tea messages straight into the owner model's
-// Update (a message-level model driver). There is no tea.Program and no
-// terminal here; the real terminal is covered by owner_import.py. Tick
-// commands are never executed, so the model only changes through this driver.
+// Update, except secret entry which runs the same model in a short-lived Program.
+// Tick commands are never executed, so the model only changes through this driver.
 type importDriver struct {
 	t     *testing.T
 	model *ownertui.Model
@@ -435,6 +438,76 @@ func (d *importDriver) send(msg tea.Msg) tea.Cmd {
 }
 func (d *importDriver) key(code rune) tea.Cmd { return d.send(tea.KeyPressMsg{Code: code}) }
 func (d *importDriver) view() string          { return d.model.View().Content }
+
+func (d *importDriver) secret(value []byte) {
+	d.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output := &terminalmodel.Output{}
+	release := make(chan struct{})
+	d.model.SetSecretReader(func(int) ([]byte, error) {
+		<-release
+		return append([]byte(nil), value...), nil
+	})
+	p := tea.NewProgram(terminalmodel.Capture(d.model, output), tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output), tea.WithWindowSize(200, 100), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	done := make(chan error, 1)
+	go func() { _, err := p.Run(); done <- err }()
+	stop := func() {
+		p.Quit()
+		if flakediag.WaitFor(d.t, "temporary import secret-entry Program to stop", 3*time.Second, func() (string, bool) {
+			select {
+			case err := <-done:
+				if err != nil {
+					d.t.Errorf("temporary import secret-entry Program returned an error")
+				}
+				return "stopped", true
+			default:
+				select {
+				case <-ctx.Done():
+					return "timeout", true
+				default:
+					return "running", false
+				}
+			}
+		}) != "stopped" {
+			d.t.Fatal("temporary import secret-entry Program did not stop")
+		}
+	}
+	p.Send(tea.KeyPressMsg{Code: importKeyEnter})
+	if flakediag.WaitFor(d.t, "import password prompt marker", 3*time.Second, func() (string, bool) {
+		matched := strings.Contains(output.Raw(), "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+		return "matched=" + strconv.FormatBool(matched), matched
+	}) != "matched=true" {
+		close(release)
+		p.Quit()
+		if flakediag.WaitFor(d.t, "temporary import secret-entry Program to stop", 3*time.Second, func() (string, bool) {
+			select {
+			case err := <-done:
+				if err != nil {
+					d.t.Errorf("temporary import secret-entry Program returned an error")
+				}
+				return "stopped", true
+			default:
+				if ctx.Err() != nil {
+					return "timeout", true
+				}
+				return "running", false
+			}
+		}) != "stopped" {
+			d.t.Fatal("temporary import secret-entry Program did not stop")
+		}
+		d.t.Fatal("temporary import secret-entry Program did not render the prompt marker")
+	}
+	close(release)
+	if flakediag.WaitFor(d.t, "import password to render masked completion", 3*time.Second, func() (string, bool) {
+		matched := strings.Contains(output.String(), "<hidden; entered>")
+		return "masked=" + strconv.FormatBool(matched), matched
+	}) != "masked=true" {
+		stop()
+		d.t.Fatal("temporary import secret-entry Program did not complete")
+	}
+	stop()
+}
 
 // require names only fixed, non-secret fragments, so it may print them.
 func (d *importDriver) require(texts ...string) {
@@ -480,7 +553,13 @@ func (d *importDriver) openImport() {
 func (d *importDriver) submit(texts ...string) {
 	d.t.Helper()
 	for _, text := range texts {
-		d.send(tea.PasteMsg{Content: text})
+		if strings.Contains(d.view(), "> Archive password:") {
+			value := []byte(text)
+			d.secret(value)
+			clear(value)
+		} else {
+			d.send(tea.PasteMsg{Content: text})
+		}
 		d.key(importKeyTab)
 	}
 	cmd := d.key(importKeyEnter)

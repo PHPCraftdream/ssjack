@@ -338,6 +338,20 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 	trace.write(t, "vault-unlock", append([]byte(nativeArchivePassword), ending))
 	for _, step := range steps {
 		trace.expectText(t, lifetime, step.stage, step.marker, "native archive command missed terminal barrier")
+		secretField := step.marker == "Value:" || step.marker == "Archive password:"
+		if secretField {
+			trace.write(t, step.stage+"-open-secret-prompt", []byte{'\r'})
+			trace.expectText(t, lifetime, step.stage+"-secret-prompt", "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ", "native archive command did not open the hidden secret prompt")
+			if len(step.value) == 1 && step.value[0] == '\x1b' {
+				trace.write(t, step.stage+"-cancel-secret-prompt", []byte{'\x1b'})
+				continue
+			}
+			input := append(bytes.Clone(step.value), '\r')
+			trace.write(t, step.stage+"-secret-value", input)
+			trace.expectText(t, lifetime, step.stage+"-secret-entered", step.marker+" <hidden; entered>", "native archive command did not display the entered secret field")
+			trace.write(t, step.stage+"-apply-secret", []byte{'\t', '\r'})
+			continue
+		}
 		if len(step.value) != 0 {
 			trace.write(t, step.stage, step.value)
 		}
@@ -381,9 +395,9 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 		cancelReporter.Fatal("cancelled native value form changed ciphertext")
 	}
 	cancelTrace.flow.Complete()
-	serverApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add server value apply", false, secretArgs, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveValue)})
+	serverApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add server value apply", false, secretArgs, nativeArchiveInput{"value-form", "Value:", []byte(nativeArchiveValue)})
 	serverApplyTrace.flow.Complete()
-	globalApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add global value apply", false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"value-form", "Value:", nativeArchiveApply(nativeArchiveExcluded)})
+	globalApplyTrace := nativeArchiveCommand(t, ctx, database, "native archive add global value apply", false, []string{"add-secret", "--scope", "global", "--name", "excluded-value"}, nativeArchiveInput{"value-form", "Value:", []byte(nativeArchiveExcluded)})
 	globalApplyTrace.flow.Complete()
 	applyReporter := serverApplyTrace.report(t)
 	valueVerifyTrace := newNativeTerminalTrace(t, "shared native archive value verification")
@@ -454,7 +468,7 @@ func TestVaultOwnerArchiveFullProfile(t *testing.T) {
 	exportVerifyTrace.flow.Complete()
 	destination, target, _ := nativeArchiveDatabase(t, ctx, store, id, false)
 	importTrace := nativeArchiveCommand(t, ctx, target, "native archive import encrypted apply", false, []string{"import", "--file", archives["encrypted"]},
-		nativeArchiveInput{"archive-unlock", "Archive password:", nativeArchiveApply(nativeArchivePassword)},
+		nativeArchiveInput{"archive-unlock", "Archive password:", []byte(nativeArchivePassword)},
 		nativeArchiveInput{"import-preview-server", "MCP server \"archive-mcp\"", nil},
 		nativeArchiveInput{"import-preview-account", "MCP account \"basic\"", nil},
 		nativeArchiveInput{"import-confirm-action", "[Confirm import", []byte("\r")},

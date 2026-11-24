@@ -77,8 +77,16 @@ command meanwhile, the final bounded close below still runs.
 
 Use arrows to navigate, Enter to select, Tab/Shift+Tab to focus fields or buttons,
 and Escape to cancel or go back. Apply transfers owned input to a Bubble Tea
-command; Cancel clears it without calling the backend. Editing an account with a
-blank credential keeps its current credential only when the selected authentication
+command; Cancel clears it without calling the backend. For a secret field, the first
+Enter opens the hidden prompt; Enter again submits the entered value, including a
+blank value. Esc or Ctrl+C cancels without changing the stored value. The prompt
+uses a raw terminal reader because Ultraviolet hands out a slice into an internal
+reused buffer; a later batch may overwrite unread bytes (upstream #241). If a
+bounded input drain cannot complete, the model requests quit; this does not guarantee
+that all queued tail bytes are discarded. Focused secret-field Bubble Tea key and
+paste events are ignored, so those events cannot populate or alter the field.
+Editing an account with a blank
+credential keeps its current credential only when the selected authentication
 kind matches. New key authentication imports a bounded existing private-key file;
 it does not create plaintext staging. Server creation requires independently
 verified bare OpenSSH host keys separated by `|`. No scan or SSH connection is

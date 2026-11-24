@@ -115,6 +115,14 @@ def main():
         needle = text.encode()
         return wait_until(lambda content: needle in content, text)
 
+    def secret_entry(label, value):
+        expect("> " + label + ":")
+        keys("Enter")
+        expect("Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        paste(value)
+        keys("Enter")
+        expect("<hidden; entered>")
+
     def paste(value):
         tmux("load-buffer", "-", data=value)
         tmux("paste-buffer", "-d", "-t", "owner")
@@ -140,8 +148,7 @@ def main():
         # Form focus: 0 path, 1 password, 2 [Apply]; Tab moves forward.
         paste(archive.encode())
         keys("Tab")
-        paste(password)
-        expect("<hidden; entered>")
+        secret_entry("Archive password", password)
         keys("Tab")
         expect("> [Apply]")
         keys("Enter")

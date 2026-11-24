@@ -74,6 +74,14 @@ def main():
                     transcript.extend(re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m.group(1), 8)]), fields[2]))
         private(transcript)
 
+    def secret_entry(label, value):
+        expect(b"> " + label + b":")
+        keys("Enter")
+        expect(b"Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+        paste(value)
+        keys("Enter")
+        expect(b"<hidden; entered>")
+
     def close_control():
         if control is None:
             return
@@ -141,8 +149,7 @@ def main():
         keys("Tab")
         paste(b"proxy-operator")
         keys("Tab")
-        paste(proxy_password)
-        expect(b"<hidden; entered>")
+        secret_entry(b"Proxy password", proxy_password)
         keys("Tab", "Enter")
         expect(b"Change applied.")
         keys("Escape")

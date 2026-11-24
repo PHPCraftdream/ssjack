@@ -5,12 +5,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
 )
 
 func TestExportFormScopeAndSecretFieldMaskingAndBounds(t *testing.T) {
@@ -171,26 +173,74 @@ func TestImportModelFlowsPreviewsPhasesConfirmationAndFixedMessages(t *testing.T
 	openImport(m)
 	check(t, m.form == nil || m.form.action != "import" || len(m.form.fields) != 2 || m.form.fields[0].secret || !m.form.fields[1].secret, "import form lacks its file field or masked password")
 	paste(m, "archive.zip")
+	pathOwned := m.form.fields[0].value
+	pathOwnedLen := len(pathOwned)
 	press(m, 9)
-	paste(m, "synthetic-archive-password")
 	owned := m.form.fields[1].value
+	check(t, len(owned) != 0 || !strings.Contains(m.View().Content, "Archive password"), "blank password field was not available")
+	release := make(chan struct{})
+	var secretOwned []byte
+	secretOwnedLen := 0
+	m.SetSecretReader(func(int) ([]byte, error) {
+		<-release
+		secretOwned = []byte("synthetic-archive-password")
+		secretOwnedLen = len(secretOwned)
+		return secretOwned, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out := &terminalmodel.Output{}
+	program := tea.NewProgram(terminalmodel.Capture(m, out), tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(out), tea.WithWindowSize(100, 30), tea.WithEnvironment([]string{"TERM=dumb"}), tea.WithoutSignalHandler())
+	done := make(chan error, 1)
+	go func() { _, err := program.Run(); done <- err }()
+	joined := false
+	join := func() {
+		if joined {
+			return
+		}
+		joined = true
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatal("import Program did not stop")
+		}
+	}
+	defer func() {
+		if !joined {
+			program.Quit()
+			join()
+		}
+	}()
+	program.Send(tea.KeyPressMsg{Code: 13})
+	waitRawOutput(t, out, "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+	close(release)
+	waitOutput(t, out, "<hidden; entered>")
+	check(t, string(secretOwned) != "synthetic-archive-password" || len(secretOwned) != secretOwnedLen, "secret reader did not return the captured password")
+	program.Send(tea.KeyPressMsg{Code: 9})
+	waitOutput(t, out, "> [Apply]")
+	program.Send(tea.KeyPressMsg{Code: 13})
+	waitOutput(t, out, "Import preview")
+	program.Quit()
+	join()
+	check(t, strings.Join(b.args, "|") != "archive.zip|synthetic-archive-password", "inspect did not receive the exact path/password")
+	check(t, len(pathOwned) != pathOwnedLen || len(secretOwned) != secretOwnedLen, "import changed original path/password buffer lengths")
+	check(t, !zeroed(pathOwned) || !zeroed(secretOwned), "import retained original path/password bytes")
+	check(t, strings.Join(b.calls, ",") != "inspect" || strings.Join(b.args, "|") != "archive.zip|synthetic-archive-password", "import did not inspect the exact path/password")
 	view := m.View().Content
-	check(t, strings.Contains(view, "synthetic-archive-password") || !strings.Contains(view, "<hidden; entered>") || !strings.Contains(view, "Archive password"), "password was shown")
-	press(m, 9)
-	cmd := press(m, 13)
-	check(t, cmd == nil || len(b.calls) != 0, "Apply inspected synchronously")
-	m.Update(cmd())
-	check(t, strings.Join(b.calls, ",") != "inspect" || strings.Join(b.args, "|") != "archive.zip|synthetic-archive-password" || !zeroed(owned) || m.at.screen != importScreen || m.working || m.form != nil, "inspection lost input or kept the password buffer, or staged status did not open the preview")
-	view = m.View().Content
 	for _, want := range []string{"Import preview — nothing is applied until you confirm", "[Confirm import…]", "[Cancel import]", "Archive: encrypted — 1 servers, 1 accounts, 1 secrets (values hidden)", `Server "prod\x1b" / "h:22" / host key "SHA256:fp"`, `Account "main" / login "u" / "key" / usage "both"`, `Secret "token" / scope: server "prod" / 7 bytes`} {
 		check(t, !strings.Contains(view, want), "preview omitted "+want)
+	}
+	b.on = map[string]func(*fakeBackend){
+		"confirm": func(f *fakeBackend) {
+			f.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
+		},
 	}
 	check(t, strings.Contains(view, "synthetic-archive-password"), "preview exposed the archive password")
 	press(m, 13)
 	check(t, m.form == nil || m.form.action != "import-confirm", "Confirm did not open its form")
 	paste(m, "IMPORT")
 	press(m, 13)
-	cmd = press(m, 13)
+	cmd := press(m, 13)
 	check(t, cmd == nil || len(b.calls) != 1, "confirmation executed synchronously")
 	m.Update(cmd())
 	check(t, strings.Join(b.calls, ",") != "inspect,confirm" || m.at.screen != databaseScreen || len(m.stack) != 0 || m.form != nil || m.working, "confirmation did not queue once and return to the root")

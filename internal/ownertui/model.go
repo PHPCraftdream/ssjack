@@ -2,14 +2,21 @@ package ownertui
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/stdindrain"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
+	"golang.org/x/term"
 )
 
 type Backend interface {
@@ -71,6 +78,7 @@ type Model struct {
 
 	// connection is an owner-selected SSH request awaiting TakeConnection.
 	connection *Connection
+	readSecret func(int) ([]byte, error)
 }
 
 func New(ctx context.Context, manager backend) *Model {
@@ -78,6 +86,139 @@ func New(ctx context.Context, manager backend) *Model {
 }
 
 func (m *Model) Init() tea.Cmd { return m.refresh() }
+
+func (m *Model) SetSecretReader(read func(int) ([]byte, error)) { m.readSecret = read }
+
+var (
+	errSecretCancelled   = errors.New("secret entry cancelled")
+	errSecretDrainFailed = errors.New("failed to drain terminal input")
+)
+
+type secretReadMsg struct {
+	form  *form
+	index int
+	value []byte
+	err   error
+}
+type secretExec struct {
+	prompt string
+	limit  int
+	read   func(int) ([]byte, error)
+	stderr io.Writer
+	value  []byte
+}
+
+func (c *secretExec) SetStdin(io.Reader)    {}
+func (c *secretExec) SetStdout(io.Writer)   {}
+func (c *secretExec) SetStderr(w io.Writer) { c.stderr = w }
+func (c *secretExec) Run() error {
+	if c.stderr == nil {
+		c.stderr = os.Stderr
+	}
+	read := c.read
+	if read == nil {
+		fd := int(os.Stdin.Fd())
+		state, err := term.MakeRaw(fd)
+		if err != nil {
+			return errors.New("failed to read secret")
+		}
+		defer term.Restore(fd, state)
+		read = readHiddenLineRaw
+	}
+	if _, err := fmt.Fprint(c.stderr, c.prompt); err != nil {
+		return errors.New("failed to read secret")
+	}
+	value, err := read(c.limit)
+	if _, writeErr := fmt.Fprintln(c.stderr); err == nil {
+		err = writeErr
+	}
+	if err != nil {
+		clear(value)
+		return err
+	}
+	if len(value) > c.limit {
+		clear(value)
+		return errors.New("secret exceeds field limit")
+	}
+	c.value = value
+	return nil
+}
+func readHiddenLine(limit int) ([]byte, error) {
+	if limit < 0 {
+		return nil, errors.New("invalid secret limit")
+	}
+	fd := int(os.Stdin.Fd())
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, errors.New("failed to read secret")
+	}
+	defer term.Restore(fd, state)
+	return readHiddenLineRaw(limit)
+}
+func readHiddenLineRaw(limit int) ([]byte, error) {
+	if limit < 0 {
+		return nil, errors.New("invalid secret limit")
+	}
+	value := make([]byte, 0, limit)
+	var one [1]byte
+	defer clear(one[:])
+	for {
+		if _, err := io.ReadFull(os.Stdin, one[:]); err != nil {
+			clear(value)
+			return nil, errors.New("failed to read secret")
+		}
+		switch one[0] {
+		case '\r', '\n':
+			if !utf8.Valid(value) {
+				clear(value)
+				return failSecretDrain()
+			}
+			return value, nil
+		case 0x1b, 0x03:
+			clear(value)
+			return failSecretDrain()
+		case 0x08, 0x7f:
+			if len(value) > 0 {
+				_, size := utf8.DecodeLastRune(value)
+				start := len(value) - size
+				clear(value[start:])
+				value = value[:start]
+			}
+		default:
+			if one[0] < 0x20 || one[0] == 0x7f {
+				clear(value)
+				return failSecretDrain()
+			}
+			if len(value) == limit {
+				clear(value)
+				return failSecretDrain()
+			}
+			value = append(value, one[0])
+		}
+	}
+}
+func failSecretDrain() ([]byte, error) {
+	if err := stdindrain.DrainStdin(); err != nil {
+		return nil, errSecretDrainFailed
+	}
+	return nil, errSecretCancelled
+}
+
+func ReadHiddenLine(limit int) ([]byte, error) { return readHiddenLine(limit) }
+func secretReadCommand(form *form, index, limit int, read func(int) ([]byte, error)) tea.Cmd {
+	c := &secretExec{prompt: "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ", limit: limit, read: read}
+	return tea.Exec(c, func(err error) tea.Msg {
+		if err != nil {
+			clear(c.value)
+			return secretReadMsg{form: form, index: index, err: err}
+		}
+		value := c.value
+		c.value = nil
+		return secretReadMsg{form: form, index: index, value: value}
+	})
+}
+
+var _ tea.ExecCommand = (*secretExec)(nil)
 
 func nextTick() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(at time.Time) tea.Msg { return tickMsg(at) })
@@ -139,8 +280,46 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.message = "Exit stopped: save or reconcile pending changes, then retry."
 		return m, nil
+	case secretReadMsg:
+		if errors.Is(msg.err, errSecretDrainFailed) {
+			clear(msg.value)
+			if m.form != nil {
+				m.back()
+			}
+			m.message = "Secret input could not be safely drained; exiting."
+			if m.command != nil {
+				m.command.Err = ownercommand.ErrOperation
+			}
+			return m, tea.Quit
+		}
+		if m.form == nil || msg.form != m.form || msg.index < 0 || msg.index >= len(m.form.fields) || !m.form.fields[msg.index].secret {
+			clear(msg.value)
+			return m, nil
+		}
+		if msg.err == nil {
+			clear(m.form.fields[msg.index].value)
+			m.form.fields[msg.index].value = msg.value
+		} else if errors.Is(msg.err, errSecretCancelled) {
+			clear(msg.value)
+			if m.command != nil {
+				m.back()
+				m.command.Err = ownercommand.ErrCancelled
+				return m, tea.Quit
+			}
+			m.message = "Secret entry cancelled; the value was not changed. Press Enter to retry."
+		} else {
+			clear(msg.value)
+			m.message = "Secret entry could not be read; the stored value was not changed."
+		}
+		return m, nil
 	case tea.PasteMsg:
-		if !m.working && m.form != nil {
+		if m.working {
+			return m, nil
+		}
+		if m.form != nil && m.form.focus < len(m.form.fields) && m.form.fields[m.form.focus].secret {
+			return m, nil
+		}
+		if m.form != nil {
 			m.form.insert(msg.Content)
 		}
 		return m, nil
@@ -176,17 +355,23 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "shift+tab", "up":
 			m.form.move(-1)
 		case "backspace":
-			m.form.backspace()
+			if m.form.focus >= len(m.form.fields) || !m.form.fields[m.form.focus].secret {
+				m.form.backspace()
+			}
 		case "enter":
 			if m.form.focus == len(m.form.fields)+1 {
 				m.back()
 			} else if m.form.focus == len(m.form.fields) {
 				return m, m.applyForm()
+			} else if m.form.fields[m.form.focus].secret {
+				return m, secretReadCommand(m.form, m.form.focus, m.form.fields[m.form.focus].limit, m.readSecret)
 			} else {
 				m.form.move(1)
 			}
 		default:
-			m.form.insert(key.Text)
+			if m.form.focus >= len(m.form.fields) || !m.form.fields[m.form.focus].secret {
+				m.form.insert(key.Text)
+			}
 		}
 		return m, nil
 	}

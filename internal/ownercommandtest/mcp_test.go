@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -27,9 +26,9 @@ func TestMCPCommandAndMenuCancelNeverApplyPrivateInput(t *testing.T) {
 		if !strings.HasPrefix(selected(m), "MCP credential: ") {
 			t.Fatal("private credential field is unreachable")
 		}
-		m.Update(tea.PasteMsg{Content: "synthetic-input-secret"})
-		if strings.Contains(m.View().Content, "synthetic-input-secret") {
-			t.Fatal("MCP credential appeared in the terminal")
+		secretEntry(t, m, "synthetic-input-secret")
+		if !strings.Contains(m.View().Content, "<hidden; entered>") || strings.Contains(m.View().Content, "synthetic-input-secret") {
+			t.Fatal("MCP credential was not masked in the terminal")
 		}
 		drain(m, key(m, 27))
 		if !reflect.DeepEqual(before, remoteEffects(b.state)) || len(b.calls) != 0 {
