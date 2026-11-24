@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
+	confirm "github.com/PHPCraftdream/ssjack/internal/bridge/internal/confirm"
 	tasks "github.com/PHPCraftdream/ssjack/internal/bridge/internal/tasks"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
@@ -165,6 +166,14 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 // NewFullServerWithClock is NewFullServer with the task retention clock
 // replaced (nil is the real clock), for the in-process acceptance tests.
 func NewFullServerWithClock(client *broker.Client, now func() time.Time) *mcp.Server {
+	return NewFullServerWithClockAndConfirm(client, now, nil)
+}
+
+// NewFullServerWithClockAndConfirm is NewFullServerWithClock with the
+// elicitation confirmation manager installed. A nil manager, and a disabled
+// one, changes nothing: no middleware is added and no handler of this server
+// returns input requests, so the SDK's legacy auto-elicitation cannot fire.
+func NewFullServerWithClockAndConfirm(client *broker.Client, now func() time.Time, confirmMgr *confirm.Manager) *mcp.Server {
 	capabilities := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}
 	capabilities.AddExtension(tasks.Extension, map[string]any{})
 	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, &mcp.ServerOptions{Capabilities: capabilities})
@@ -172,6 +181,11 @@ func NewFullServerWithClock(client *broker.Client, now func() time.Time) *mcp.Se
 		// The three task method names are fixed and none of them shadows a
 		// standard method, so registering them cannot fail.
 		panic(err)
+	}
+	if confirmMgr != nil && confirmMgr.Enabled() {
+		// After the tasks install, so the gate wraps outside both the tasks
+		// interception and the SDK multi-round-trip middleware.
+		server.AddReceivingMiddleware(confirmMgr.Middleware)
 	}
 
 	addTextTool(server, &mcp.Tool{Name: "remote_targets", Description: "List approved SSH targets without exposing addresses or keys. Returns plain text: a count line, then one '- name' line per target."},

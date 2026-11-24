@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	confirm "github.com/PHPCraftdream/ssjack/internal/bridge/internal/confirm"
 )
 
 // Every tool of this package answers with exactly one plain-text content
@@ -25,6 +27,12 @@ const noText = "tool call failed"
 // produces the text of one successful call.
 func addTextTool[In any](server *mcp.Server, tool *mcp.Tool, handle func(ctx context.Context, input In) (string, error)) {
 	mcp.AddTool[In, any](server, tool, func(ctx context.Context, _ *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
+		// The confirmation gate hands an eligible call its input_required
+		// answer through the context: only a result returned here passes the
+		// SDK's multi-round-trip shaping.
+		if pending := confirm.PendingResult(ctx); pending != nil {
+			return pending, nil, nil
+		}
 		text, err := handle(ctx, input)
 		return textResult(text, err), nil, nil
 	})
