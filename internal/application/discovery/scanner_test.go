@@ -582,7 +582,7 @@ func TestScanRootSymlinkResolved(t *testing.T) {
 			t.Skip("symlink_unavailable")
 		}
 		got := Scan(link)
-		if !reflect.DeepEqual(paths(got.Candidates), []string{".", "real"}) {
+		if !reflect.DeepEqual(paths(got.Candidates), []string{"real"}) {
 			t.Fatalf("candidate_count=%d", len(got.Candidates))
 		}
 		count := 0

@@ -59,7 +59,7 @@ func Scan(rootPath string) Result {
 		return result
 	}
 	rootPath = filepath.Clean(abs)
-	resolved, err := filepath.EvalSymlinks(rootPath)
+	resolved, err := resolveRoot(rootPath)
 	if err != nil {
 		addDiagnostic(&result, ".", "root_inaccessible")
 		finish(&result)

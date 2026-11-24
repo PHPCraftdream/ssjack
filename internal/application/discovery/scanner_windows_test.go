@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -58,8 +59,8 @@ func TestScanRootJunctionResolved(t *testing.T) {
 			t.Fatal("fixture_resolve_failed")
 		}
 		actual := got.Candidates[0].CanonicalPath
-		if filepath.Clean(actual) != filepath.Clean(want) {
-			t.Fatalf("canonical_path_matches=%t", filepath.Clean(actual) == filepath.Clean(want))
+		if !strings.EqualFold(filepath.Clean(actual), filepath.Clean(want)) {
+			t.Fatal("canonical_path_mismatch")
 		}
 	})
 }
