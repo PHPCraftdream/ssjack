@@ -137,6 +137,19 @@ func readDescriptor(path string) ([]byte, error) {
 	return data, nil
 }
 
+// ValidateDiscoveryDescriptor validates bounded descriptor bytes without resolving
+// launch paths or inspecting executable/workdir state. It returns only the safe name.
+func ValidateDiscoveryDescriptor(data []byte) (string, error) {
+	if len(data) > maxDescriptorSize {
+		return "", errors.New("application descriptor is too large")
+	}
+	parsed, err := parseDescriptor(data)
+	if err != nil {
+		return "", errors.New("invalid application descriptor")
+	}
+	return parsed.name, nil
+}
+
 // exactObject splits one JSON object, refusing unknown, duplicate and
 // differently cased keys, trailing data and any non-object value.
 func exactObject(raw []byte, allowed ...string) (map[string]json.RawMessage, error) {
