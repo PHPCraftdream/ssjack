@@ -85,8 +85,9 @@ func TestRawStateLifecycleRefusals(t *testing.T) {
 		if ops := keeper.recorded(); len(ops) != 0 {
 			t.Fatal("the keeper saw operations for a gated download")
 		}
+		beforeOps := len(keeper.recorded())
 		retry := client.callToolName(t, ctx, "remote_download", rawMetaModern, rawResponses("accept"), state)
-		requireDispatchFrame(t, retry, "3", "transfer_download", keeper)
+		requireDispatchFrame(t, beforeOps, retry, "3", "transfer_download", keeper)
 	})
 
 	// A tombstone PAST the tombstone window is forgotten: the retry gets the
@@ -153,11 +154,12 @@ func TestRawStateLifecycleRefusals(t *testing.T) {
 		server := newRawBridge(t, ctx, keeper, nil, confirm.NewManager(nil, nil))
 		client := connectRawClient(t, ctx, server, true)
 		state := requireInputRequiredFrame(t, client.call(t, ctx, rawMetaModern, "", ""), "2")
+		beforeOps := len(keeper.recorded())
 		retry := client.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-		requireDispatchFrame(t, retry, "3", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, retry, "3", "transfer_upload", keeper)
 		replay := client.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
 		requireRefusalFrame(t, replay, rawInvalidText, "4")
-		if ops := keeper.recorded(); len(ops) != 1 {
+		if ops := keeper.recorded(); len(ops) != beforeOps+1 {
 			t.Fatalf("the keeper saw %d operations, want exactly one", len(ops))
 		}
 	})
@@ -195,8 +197,9 @@ func TestRawPendingCapFailsClosed(t *testing.T) {
 	}
 	// First, last and middle tokens remain answerable; each dispatches once.
 	for _, i := range []int{0, 64, 127} {
+		beforeOps := len(keeper.recorded())
 		retry := client.call(t, ctx, rawMetaModern, rawResponses("accept"), tokens[i])
-		requireDispatchFrame(t, retry, fmt.Sprint(client.lastID), "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, retry, fmt.Sprint(client.lastID), "transfer_upload", keeper)
 	}
 	if ops := keeper.recorded(); len(ops) != 3 {
 		t.Fatalf("the keeper saw %d operations, want exactly 3", len(ops))
@@ -281,7 +284,9 @@ func TestRawExpiredTombstoneForeignSession(t *testing.T) {
 	foreignRetry := foreign.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
 	requireRefusalFrame(t, foreignRetry, rawInvalidText, "2")
 	ownerRetry := owner.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-	requireRefusalFrame(t, ownerRetry, "operation was not started: confirmation timed out", "3")
+	// The owner's ids so far: initialize=1, gated call=2, fresh gated
+	// mint=3, this retry=4 (each callPayload increments nextID).
+	requireRefusalFrame(t, ownerRetry, "operation was not started: confirmation timed out", "4")
 	if ops := keeper.recorded(); len(ops) != 0 {
 		t.Fatal("an expired retry dispatched anyway")
 	}

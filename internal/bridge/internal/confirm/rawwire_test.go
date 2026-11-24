@@ -360,11 +360,12 @@ func requireRefusalFrame(t *testing.T, frameBytes []byte, wantText, wantID strin
 // requireDispatchFrame asserts a successful dispatch on the raw wire: one text
 // block starting with the start text, no elicitation markers, and exactly one
 // keeper operation of the given kind.
-func requireDispatchFrame(t *testing.T, frameBytes []byte, wantID, operation string, keeper *fakeKeeper) {
+func requireDispatchFrame(t *testing.T, beforeOps int, frameBytes []byte, wantID, operation string, keeper *fakeKeeper) {
 	t.Helper()
-	// Delta marker: everything the keeper recorded before this response
-	// arrived predates the dispatch under test.
-	before := len(keeper.recorded())
+	// beforeOps is the keeper baseline captured by the caller BEFORE the
+	// request was sent: the keeper call happens while the request is being
+	// served, so any baseline taken after the response already arrived would
+	// count the operation under test and the delta below would read zero.
 	frame := decodeRawFrame(t, frameBytes)
 	if frame.Error != nil {
 		t.Fatalf("the dispatch answered a JSON-RPC error, code %d", frame.Error.Code)
@@ -399,8 +400,8 @@ func requireDispatchFrame(t *testing.T, frameBytes []byte, wantID, operation str
 	// kind. This keeps the helper usable when the keeper already recorded
 	// earlier operations in the same test.
 	ops := keeper.recorded()
-	if len(ops) != before+1 || ops[before] != operation {
-		t.Fatalf("the keeper saw %d new operations, want exactly one %s", len(ops)-before, operation)
+	if len(ops) != beforeOps+1 || ops[beforeOps] != operation {
+		t.Fatalf("the keeper saw %d new operations, want exactly one %s", len(ops)-beforeOps, operation)
 	}
 }
 
@@ -424,6 +425,19 @@ func TestRawWireGateAndRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Harness sanity FIRST: with the feature OFF, a plain tools/call
+	// dispatches and the keeper records exactly one operation for it, proving
+	// the dispatch delta bookkeeping (baseline taken before the request is
+	// sent).
+	t.Run("sanity_plain_dispatch_records_operation", func(t *testing.T) {
+		keeper := &fakeKeeper{}
+		server := newRawBridge(t, ctx, keeper, nil, nil)
+		client := connectRawClient(t, ctx, server, true)
+		beforeOps := len(keeper.recorded())
+		frame := client.call(t, ctx, "", "", "")
+		requireDispatchFrame(t, beforeOps, frame, "2", "transfer_upload", keeper)
+	})
+
 	// The full input_required shape, elicited by the per-request `_meta` of a
 	// client that declared NO elicitation capability at initialize: the gate
 	// must not require initialize to enable the modern path.
@@ -445,16 +459,18 @@ func TestRawWireGateAndRetries(t *testing.T) {
 		keeper := &fakeKeeper{}
 		server := newRawBridge(t, ctx, keeper, nil, confirm.NewManager(nil, nil))
 		client := connectRawClient(t, ctx, server, true)
+		beforeOps := len(keeper.recorded())
 		frame := client.call(t, ctx, rawMetaFormNoVersion, "", "")
-		requireDispatchFrame(t, frame, "2", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, frame, "2", "transfer_upload", keeper)
 	})
 
 	t.Run("legacy_version_with_form_passthrough", func(t *testing.T) {
 		keeper := &fakeKeeper{}
 		server := newRawBridge(t, ctx, keeper, nil, confirm.NewManager(nil, nil))
 		client := connectRawClient(t, ctx, server, true)
+		beforeOps := len(keeper.recorded())
 		frame := client.call(t, ctx, rawMetaLegacyForm, "", "")
-		requireDispatchFrame(t, frame, "2", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, frame, "2", "transfer_upload", keeper)
 	})
 
 	// A retry with a DIFFERENT literal id than the initial call must dispatch
@@ -466,8 +482,9 @@ func TestRawWireGateAndRetries(t *testing.T) {
 		client.nextID = 17
 		frame := client.call(t, ctx, rawMetaModern, "", "")
 		state := requireInputRequiredFrame(t, frame, "17")
+		beforeOps := len(keeper.recorded())
 		retry := client.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-		requireDispatchFrame(t, retry, "18", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, retry, "18", "transfer_upload", keeper)
 	})
 
 	t.Run("decline_retry_fixed_text", func(t *testing.T) {
@@ -547,8 +564,9 @@ func TestRawWireGateAndRetries(t *testing.T) {
 		if ops := keeper.recorded(); len(ops) != 0 {
 			t.Fatal("a meta-less retry dispatched anyway")
 		}
+		beforeOps := len(keeper.recorded())
 		proper := client.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-		requireDispatchFrame(t, proper, "4", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, proper, "4", "transfer_upload", keeper)
 	})
 
 	// Malformed inputResponses is rejected by the SDK BEFORE the receiving
@@ -583,8 +601,9 @@ func TestRawWireGateAndRetries(t *testing.T) {
 		keeper := &fakeKeeper{}
 		server := newRawBridge(t, ctx, keeper, nil, confirm.NewManager(nil, nil))
 		client := connectRawClientVersion(t, ctx, server, true, "2025-11-25")
+		beforeOps := len(keeper.recorded())
 		frame := client.call(t, ctx, rawMetaModern, "", "")
-		requireDispatchFrame(t, frame, "2", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, frame, "2", "transfer_upload", keeper)
 		if client.elicitCount != 0 {
 			t.Fatal("the gate elicited on a legacy-initialized session")
 		}
@@ -611,8 +630,9 @@ func TestRawWireGateAndRetries(t *testing.T) {
 			t.Fatal("a legacy-session retry dispatched anyway")
 		}
 		// The refusal consumed nothing: the rightful modern retry dispatches.
+		beforeOps := len(keeper.recorded())
 		proper := modern.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-		requireDispatchFrame(t, proper, "3", "transfer_upload", keeper)
+		requireDispatchFrame(t, beforeOps, proper, "3", "transfer_upload", keeper)
 	})
 
 	// Gate-ELIGIBLE call whose arguments exceed canonicaljson.MaxInput: the
@@ -677,21 +697,62 @@ func TestRawWireGateAndRetries(t *testing.T) {
 	})
 
 	// Gate-shaped modern request whose arguments are not canonicalizable
-	// JSON: the server decodes tools/call params into CallToolParamsRaw
+	// The server decodes tools/call params into CallToolParamsRaw
 	// (Arguments json.RawMessage, requests.go:10), so ANY JSON arguments
-	// value passes unmarshalParams and reaches the middleware, where
-	// canonicalization fails closed (gate.go: match, fail-closed branch).
-	t.Run("canonicalization_fail_closed", func(t *testing.T) {
+	// value passes unmarshalParams and reaches the middleware.
+	// An arguments value that is a JSON STRING (not an object) fails the
+	// gate's eligibility peek (gate.go: json.Unmarshal of the overwrite
+	// struct errors → INELIGIBLE), so the gate passes the call through
+	// untouched and the SDK's typed tool validation answers its own error
+	// (validating "arguments"): NOT the confirm refusal. The real
+	// fail-closed case is canonicalization_fail_closed_oversized above.
+	t.Run("ineligible_shape_arguments_pass_through", func(t *testing.T) {
 		keeper := &fakeKeeper{}
 		server := newRawBridge(t, ctx, keeper, nil, confirm.NewManager(nil, nil))
 		client := connectRawClient(t, ctx, server, true)
 		params := `{"name":"remote_upload","arguments":"oops","_meta":` + rawMetaModern + `}`
-		frame := client.rawCall(t, ctx, params)
-		requireRefusalFrame(t, frame, rawInvalidText, "2")
+		frameBytes := client.rawCall(t, ctx, params)
+		frame := decodeRawFrame(t, frameBytes)
+		if frame.Error != nil {
+			t.Fatalf("the pass-through call answered a JSON-RPC error, code %d", frame.Error.Code)
+		}
+		if frame.ID.String() != "2" {
+			t.Fatalf("the response id is %s, want 2", frame.ID.String())
+		}
+		if frame.Result == nil {
+			t.Fatal("the pass-through call answered without a result")
+		}
+		if !frame.Result.IsError {
+			t.Fatal("the SDK tool validation did not answer a tool-level error")
+		}
+		if frame.Result.ResultType != "" && frame.Result.ResultType != "complete" {
+			t.Fatalf("the resultType is %q, want absent or complete", frame.Result.ResultType)
+		}
+		// The tool-level error text is the SDK's own validation message. It is
+		// never printed; only compared against the confirm refusal texts.
+		refusals := []string{confirm.Invalid, confirm.Declined, confirm.Cancelled, confirm.TimedOut, rawInvalidText}
+		var content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(frame.Result.Content, &content) != nil || len(content) != 1 || content[0].Type != "text" {
+			t.Fatal("the error result is not one text block")
+		}
+		for _, refusalText := range refusals {
+			if content[0].Text == refusalText {
+				t.Fatal("the gate refused an ineligible call that should have passed through")
+			}
+		}
+		// The keeper was never reached: the SDK's typed tool validation
+		// rejected the arguments before any tool handler ran.
 		if ops := keeper.recorded(); len(ops) != 0 {
-			t.Fatal("a non-canonicalizable call dispatched anyway")
+			t.Fatal("an ineligible call dispatched anyway")
+		}
+		if client.elicitCount != 0 {
+			t.Fatal("an ineligible call elicited")
 		}
 	})
+
 }
 
 // quoteState embeds a state token as a JSON string literal.
@@ -737,8 +798,9 @@ func TestRawSessionBinding(t *testing.T) {
 		t.Fatal("a foreign session dispatched anyway")
 	}
 	// The record was NOT consumed: client A's proper retry still dispatches.
+	beforeOps := len(keeper.recorded())
 	proper := clientA.call(t, ctx, rawMetaModern, rawResponses("accept"), state)
-	requireDispatchFrame(t, proper, "3", "transfer_upload", keeper)
+	requireDispatchFrame(t, beforeOps, proper, "3", "transfer_upload", keeper)
 }
 
 // A wired-but-disabled manager must be byte-identical on the wire to a server
@@ -752,7 +814,9 @@ func TestRawOffByteIdentity(t *testing.T) {
 	keeperOff := &fakeKeeper{}
 	off := connectRawClient(t, ctx, newRawBridge(t, ctx, keeperOff, nil, confirm.NewManagerOff(nil, nil)), true)
 	params := `{"name":"remote_upload","arguments":` + rawUploadArguments + `,"_meta":` + rawMetaModern + `}`
+	beforeOpsPlain := len(keeperPlain.recorded())
 	framePlain := plain.rawCall(t, ctx, params)
+	beforeOpsOff := len(keeperOff.recorded())
 	frameOff := off.rawCall(t, ctx, params)
 	if string(framePlain) != string(frameOff) {
 		t.Fatal("the disabled wiring changed the raw response bytes")
@@ -762,8 +826,8 @@ func TestRawOffByteIdentity(t *testing.T) {
 			t.Fatalf("the unwired answer contains the marker %q", needle)
 		}
 	}
-	requireDispatchFrame(t, framePlain, "2", "transfer_upload", keeperPlain)
-	requireDispatchFrame(t, frameOff, "2", "transfer_upload", keeperOff)
+	requireDispatchFrame(t, beforeOpsPlain, framePlain, "2", "transfer_upload", keeperPlain)
+	requireDispatchFrame(t, beforeOpsOff, frameOff, "2", "transfer_upload", keeperOff)
 
 	// The same byte-identity proof for LEGACY-initialized clients that DO
 	// declare the form capability at initialize: the session revision gate
@@ -779,7 +843,9 @@ func TestRawOffByteIdentity(t *testing.T) {
 			"legacy_form_meta": `{"name":"remote_upload","arguments":` + rawUploadArguments + `,"_meta":` + rawMetaLegacyForm + `}`,
 			"plain":            `{"name":"remote_upload","arguments":` + rawUploadArguments + `}`,
 		} {
+			beforeOpsPlain := len(keeperPlain.recorded())
 			framePlain := plain.rawCall(t, ctx, params)
+			beforeOpsOff := len(keeperOff.recorded())
 			frameOff := off.rawCall(t, ctx, params)
 			if string(framePlain) != string(frameOff) {
 				t.Fatalf("%s: the disabled wiring changed the raw response bytes", name)
@@ -787,8 +853,8 @@ func TestRawOffByteIdentity(t *testing.T) {
 			if plain.elicitCount != 0 || off.elicitCount != 0 {
 				t.Fatalf("%s: an elicitation attempt was observed", name)
 			}
-			requireDispatchFrame(t, framePlain, frameIDOf(t, framePlain), "transfer_upload", keeperPlain)
-			requireDispatchFrame(t, frameOff, frameIDOf(t, frameOff), "transfer_upload", keeperOff)
+			requireDispatchFrame(t, beforeOpsPlain, framePlain, frameIDOf(t, framePlain), "transfer_upload", keeperPlain)
+			requireDispatchFrame(t, beforeOpsOff, frameOff, frameIDOf(t, frameOff), "transfer_upload", keeperOff)
 		}
 	})
 }

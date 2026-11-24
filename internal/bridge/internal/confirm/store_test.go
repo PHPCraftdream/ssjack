@@ -63,7 +63,12 @@ func TestCreateTokensAreDeterministicAndBounded(t *testing.T) {
 
 func TestExpiryMovesToTombstoneAndThenForgets(t *testing.T) {
 	clock := &stepClock{at: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)}
-	m := NewManager(clock.Now, constantReader{b: 1})
+	// DISTINCT nonces are required: this test creates more than one token and
+	// relies on per-token identity. With the constant-byte reader every
+	// create minted the SAME nonce, so the sweeping create re-created the
+	// pending entry the sweep had just tombstoned under the same key and the
+	// later validate hit the LIVE entry instead of the tombstone.
+	m := NewManager(clock.Now, &counterReader{})
 	token, ok := m.create("remote_upload", "d", KindTransfer, "s1")
 	if !ok {
 		t.Fatal("create failed")
@@ -72,6 +77,8 @@ func TestExpiryMovesToTombstoneAndThenForgets(t *testing.T) {
 	if got := m.validate(token, "remote_upload", "d", "accept", "s1"); got != outcomeAccepted {
 		t.Fatalf("a call one second before expiry answered %v", got)
 	}
+	// The first token was consumed by the accepted validate, so it yields no
+	// tombstone below.
 	t.Run("expired within the window", func(t *testing.T) {
 		token, _ := m.create("remote_upload", "d", KindTransfer, "s1")
 		clock.at = clock.at.Add(activeTTL + time.Second)
@@ -95,11 +102,20 @@ func TestExpiryMovesToTombstoneAndThenForgets(t *testing.T) {
 			t.Fatal("create failed")
 		}
 		clock.at = clock.at.Add(activeTTL + time.Second)
-		// Move the expired entry into the tombstone map first (the sweep runs
-		// on every create); only then does the session-identity branch decide
-		// between generic invalid and timed out.
+		// The token is now expired but still in the pending map: only a
+		// create's sweep moves it into the tombstone map, where the
+		// session-identity branch decides between generic invalid (foreign
+		// session) and timed out (originating session). The sweeping create
+		// mints a DISTINCT token (counterReader), so it does not collide
+		// with the tombstoned key.
 		if _, ok := m.create("remote_upload", "d", KindTransfer, "s1"); !ok {
 			t.Fatal("the sweeping create failed")
+		}
+		// Two expired tokens are tombstoned: this subtest's (swept above) and
+		// the previous subtest's (tombstoned by its first expired validate);
+		// the consumed first token yielded none.
+		if len(m.tombstones) != 2 {
+			t.Fatalf("%d tombstones, want 2", len(m.tombstones))
 		}
 		if got := m.validate(token, "remote_upload", "d", "accept", "s2"); got != outcomeInvalid {
 			t.Fatalf("a foreign session answered %v, want invalid", got)
@@ -130,7 +146,13 @@ func TestTombstoneCapEvictsOldestFirst(t *testing.T) {
 			t.Fatalf("create %d failed", i)
 		}
 		tokens[i] = token
-		clock.at = clock.at.Add(time.Second)
+		// 500 ms steps: all 128 creates must be expired by LESS than the
+		// 2-minute tombstone window when the validation loop runs, or the
+		// oldest tokens would already be past-window (generic invalid) instead
+		// of timed out. Total drift is 64 s, so each create's predecessors are
+		// far from the 5-minute active TTL and no create's sweep tombstones
+		// anything during the loop.
+		clock.at = clock.at.Add(500 * time.Millisecond)
 	}
 	// All tokens must be distinct: with the old constant-byte reader every
 	// create minted the SAME nonce, so all tokens collapsed onto one map key
@@ -155,7 +177,9 @@ func TestTombstoneCapEvictsOldestFirst(t *testing.T) {
 	if !ok {
 		t.Fatal("create failed")
 	}
-	clock.at = clock.at.Add(activeTTL + time.Second)
+	// Match the 500 ms per-create step so the extra token is expired by less
+	// than the tombstone window when validated.
+	clock.at = clock.at.Add(activeTTL + 500*time.Millisecond)
 	if got := m.validate(extra, "remote_upload", "d", "accept", "s1"); got != outcomeTimedOut {
 		t.Fatalf("the overflowing state answered %v, want timed out", got)
 	}
