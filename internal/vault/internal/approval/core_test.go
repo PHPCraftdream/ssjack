@@ -31,16 +31,17 @@ func onlyKey(m map[string]any) string {
 	return ""
 }
 
-// addMCP attaches six 8KiB bearer secrets: bulk material that alone stays
-// under the plaintext limit but crosses it once an approvals section lands.
-func addMCP(t *testing.T, v *core.Vault) {
+// addMCP attaches count 8KiB bearer secrets: bulk material sized by the caller
+// so that it alone stays under the plaintext limit.
+func addMCP(t *testing.T, v *core.Vault, count int) {
 	t.Helper()
 	v.RemoteMCP = mcpdirectory.New()
 	server, err := v.RemoteMCP.AddServer("docs", "https://docs.invalid/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"one", "two", "three", "four", "five", "six"} {
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("acct-%02d", i)
 		secret := bytes.Repeat([]byte("s"), 8192)
 		_, err = v.RemoteMCP.AddAccount(mcpdirectory.Account{ServerID: server, Name: name, Enabled: true, Auth: mcpdirectory.Authentication{Kind: "bearer", Secret: secret}})
 		clear(secret)
@@ -390,15 +391,6 @@ func TestVaultApplicationApprovalLifecycle(t *testing.T) {
 		path := func(i int) string {
 			return prefix + strings.Repeat("a", 512-len(prefix)-4) + fmt.Sprintf("%04d", i)
 		}
-		// Without approvals the same bulk MCP material still marshals: only
-		// the approval set pushes the payload past the plaintext limit.
-		clean, _ := vaulttest.DirectoryFixture(t)
-		addMCP(t, clean)
-		if encoded, err := core.Marshal(clean); err != nil {
-			t.Fatalf("vault without approvals was refused: %v", err)
-		} else {
-			clear(encoded)
-		}
 		v, _ := vaulttest.DirectoryFixture(t)
 		first := approval.Record{
 			Name: "app-00", Path: path(0), Hash: strings.Repeat("ab", 32),
@@ -415,7 +407,32 @@ func TestVaultApplicationApprovalLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		addMCP(t, v)
+		// Size the bulk MCP material from measured encodings: the smallest
+		// account count whose vault still marshals without approvals but
+		// crosses the plaintext limit once the approval section is added.
+		const plaintextLimit = 64 << 10
+		sized := func(vault *core.Vault) int {
+			encoded, err := core.Marshal(vault)
+			if err != nil {
+				t.Fatalf("sizing marshal refused: %v", err)
+			}
+			defer clear(encoded)
+			return len(encoded)
+		}
+		base, _ := vaulttest.DirectoryFixture(t)
+		delta := sized(v) - sized(base)
+		count := 0
+		for n := 1; n <= 16 && count == 0; n++ {
+			clean, _ := vaulttest.DirectoryFixture(t)
+			addMCP(t, clean, n)
+			if sized(clean)+delta > plaintextLimit {
+				count = n
+			}
+		}
+		if count == 0 {
+			t.Fatal("no bulk size crosses the plaintext limit")
+		}
+		addMCP(t, v, count)
 		if _, err := core.Marshal(v); err == nil || !strings.Contains(err.Error(), "64 KiB") {
 			t.Fatalf("oversized vault marshal error = %v, want the plaintext limit", err)
 		}
