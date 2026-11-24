@@ -104,17 +104,15 @@ type secretExec struct {
 	prompt string
 	limit  int
 	read   func(int) ([]byte, error)
+	stdout io.Writer
 	stderr io.Writer
 	value  []byte
 }
 
 func (c *secretExec) SetStdin(io.Reader)    {}
-func (c *secretExec) SetStdout(io.Writer)   {}
+func (c *secretExec) SetStdout(w io.Writer) { c.stdout = w }
 func (c *secretExec) SetStderr(w io.Writer) { c.stderr = w }
 func (c *secretExec) Run() error {
-	if c.stderr == nil {
-		c.stderr = os.Stderr
-	}
 	read := c.read
 	if read == nil {
 		fd := int(os.Stdin.Fd())
@@ -125,11 +123,18 @@ func (c *secretExec) Run() error {
 		defer term.Restore(fd, state)
 		read = readHiddenLineRaw
 	}
-	if _, err := fmt.Fprint(c.stderr, c.prompt); err != nil {
+	output := c.stdout
+	if output == nil {
+		output = c.stderr
+	}
+	if output == nil {
+		output = os.Stderr
+	}
+	if _, err := fmt.Fprint(output, c.prompt); err != nil {
 		return errors.New("failed to read secret")
 	}
 	value, err := read(c.limit)
-	if _, writeErr := fmt.Fprintln(c.stderr); err == nil {
+	if _, writeErr := fmt.Fprintln(output); err == nil {
 		err = writeErr
 	}
 	if err != nil {

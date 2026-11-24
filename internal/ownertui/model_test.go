@@ -264,11 +264,11 @@ func downTo(p *tea.Program, b *fakeBackend, action string) {
 func TestBubbleTeaProgramNavigatesCancelsClosesAndKeepsSingleConnection(t *testing.T) {
 	backend := &fakeBackend{}
 	model, program, out, wait, release := startProgram(t, backend, "synthetic-terminal-private")
-	send(program, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: 13}, tea.KeyPressMsg{Code: 13}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
+	send(program, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: 13}, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "token"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
 	waitRawOutput(t, out, "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
 	release()
 	waitOutput(t, out, "<hidden; entered>")
-	send(program, tea.PasteMsg{Content: "token"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13}, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 27})
+	send(program, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 27})
 	downTo(program, backend, "exit")
 	program.Send(tea.KeyPressMsg{Code: 13})
 	transcript := wait()
@@ -403,16 +403,23 @@ func TestSecretDrainFailureRequestsQuit(t *testing.T) {
 }
 
 func TestSecretExecRunAcceptsEmptyValue(t *testing.T) {
-	var output bytes.Buffer
+	var output, stderr bytes.Buffer
 	command := &secretExec{prompt: "hidden: ", limit: 8, read: func(int) ([]byte, error) { return []byte{}, nil }}
-	command.SetStderr(&output)
+	command.SetStdout(&output)
+	command.SetStderr(&stderr)
 	if err := command.Run(); err != nil {
 		t.Fatal("empty secret was rejected")
 	}
 	if command.value == nil || len(command.value) != 0 {
 		t.Fatal("empty secret was not retained as a successful value")
 	}
-	if strings.Contains(output.String(), "synthetic") {
+	if output.String() != "hidden: \n" {
+		t.Fatalf("captured stdout did not receive prompt marker and closing newline (length=%d)", output.Len())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("configured stderr received output despite captured stdout (length=%d)", stderr.Len())
+	}
+	if strings.Contains(output.String(), "synthetic") || strings.Contains(stderr.String(), "synthetic") {
 		t.Fatal("secret output contained private data")
 	}
 }
