@@ -25,7 +25,7 @@ func writeDescriptor(t *testing.T, dir, name, content string) {
 	if err := os.WriteFile(filepath.Join(dir, application.DescriptorFile), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, name), []byte("not executed"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, name), []byte("not executed"), 0700); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -77,7 +77,7 @@ func TestApprovedIntegration(t *testing.T) {
 		candidate.Fingerprint[0]++
 		scan.Candidates = []discovery.Candidate{candidate}
 		apps, statuses, err := Approved(scan, []vault.Approval{record}, nil)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "changed" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "changed" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
@@ -99,21 +99,21 @@ func TestApprovedIntegration(t *testing.T) {
 		scan.Candidates = []discovery.Candidate{candidate}
 		record := vault.Approval{Name: candidate.Name, Path: dirB, Hash: hex.EncodeToString(candidate.Fingerprint[:])}
 		apps, statuses, err := Approved(scan, []vault.Approval{record}, nil)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "changed" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "changed" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
 	t.Run("overflow_activates_nothing", func(t *testing.T) {
 		_, _, _, record := fixtureScan(t, "appsvc")
 		apps, statuses, err := Approved(discovery.Result{Overflow: true, OverflowReason: "entry_cap_overflow"}, []vault.Approval{record}, nil)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "overflow" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "overflow" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
 	t.Run("overflow_with_zero_approvals_keeps_explicit_start", func(t *testing.T) {
 		explicit := []application.App{{Name: "explicit-00", Directory: filepath.Join(t.TempDir(), "exp00")}}
 		apps, statuses, err := Approved(discovery.Result{Overflow: true, OverflowReason: "candidate_cap_overflow"}, nil, explicit)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "overflow" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "overflow" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
@@ -133,7 +133,7 @@ func TestApprovedIntegration(t *testing.T) {
 			explicit[i] = application.App{Name: fmt.Sprintf("explicit-%02d", i), Directory: filepath.Join(root, fmt.Sprintf("exp%02d", i))}
 		}
 		apps, statuses, err := Approved(scan, approvals, explicit)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "cap_overflow_refused" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "cap_overflow_refused" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
@@ -141,7 +141,7 @@ func TestApprovedIntegration(t *testing.T) {
 		_, scan, _, record := fixtureScan(t, "appsvc")
 		explicit := []application.App{{Name: "appsvc", Directory: filepath.Join(t.TempDir(), "other")}}
 		apps, statuses, err := Approved(scan, []vault.Approval{record}, explicit)
-		if err != nil || apps != nil || len(statuses) != 1 || statuses[0].Kind != "collision_refused" || statuses[0].Name != "appsvc" {
+		if err != nil || len(apps) != 0 || len(statuses) != 1 || statuses[0].Kind != "collision_refused" || statuses[0].Name != "appsvc" {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 	})
@@ -151,7 +151,7 @@ func TestApprovedIntegration(t *testing.T) {
 		duplicate.Path = "other"
 		scan.Candidates = []discovery.Candidate{candidate, duplicate}
 		apps, statuses, err := Approved(scan, []vault.Approval{record}, nil)
-		if err != nil || apps != nil || len(statuses) != 2 {
+		if err != nil || len(apps) != 0 || len(statuses) != 2 {
 			t.Fatalf("got apps=%v statuses=%v err=%v", apps, statuses, err)
 		}
 		for _, status := range statuses {
