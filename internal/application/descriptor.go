@@ -81,6 +81,16 @@ func LoadDescriptor(directory string) (App, error) {
 	if err != nil {
 		return zero, err
 	}
+	return ParseDescriptorBuffer(data, root)
+}
+
+// ParseDescriptorBuffer validates bounded descriptor bytes already read from
+// disk and resolves the launch to absolute paths relative to root.
+func ParseDescriptorBuffer(data []byte, root string) (App, error) {
+	var zero App
+	if len(data) > maxDescriptorSize {
+		return zero, errors.New("application descriptor is too large")
+	}
 	parsed, err := parseDescriptor(data)
 	if err != nil {
 		return zero, err
@@ -93,15 +103,7 @@ func LoadDescriptor(directory string) (App, error) {
 	if err != nil {
 		return zero, err
 	}
-	return App{
-		Name:          parsed.name,
-		Directory:     root,
-		Workdir:       workdir,
-		Executable:    executable,
-		Args:          parsed.args,
-		Observational: parsed.observational,
-		Refused:       parsed.refused,
-	}, nil
+	return App{Name: parsed.name, Directory: filepath.Clean(root), Workdir: workdir, Executable: executable, Args: parsed.args, Observational: parsed.observational, Refused: parsed.refused}, nil
 }
 
 func readDescriptor(path string) ([]byte, error) {

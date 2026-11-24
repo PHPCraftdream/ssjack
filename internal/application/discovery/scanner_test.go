@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 )
 
 func TestScanRootAndImmediateChildren(t *testing.T) {
@@ -270,8 +274,8 @@ func TestCanonicalDirectoryIdentity(t *testing.T) {
 		}
 		seen := []directoryIdentity{}
 		result := Result{Candidates: []Candidate{}, Diagnostics: []Diagnostic{}}
-		addCandidateFromRoot(&result, firstRoot, firstIdentity, "first", &seen, nil)
-		addCandidateFromRoot(&result, secondRoot, secondIdentity, "duplicate", &seen, nil)
+		addCandidateFromRoot(&result, path, firstRoot, firstIdentity, "first", &seen, nil)
+		addCandidateFromRoot(&result, path, secondRoot, secondIdentity, "duplicate", &seen, nil)
 		if len(result.Candidates) != 1 {
 			t.Fatalf("candidate_count=%d", len(result.Candidates))
 		}
@@ -444,6 +448,151 @@ func TestScanRejectsLinksAndBoundsDescriptor(t *testing.T) {
 		got := Scan(root)
 		if !hasReason(got, "descriptor_oversize") {
 			t.Fatal("reason=descriptor_oversize_missing")
+		}
+	})
+}
+
+func TestCandidateFingerprintAndBuffer(t *testing.T) {
+	t.Run("buffer hash and parse from one read", func(t *testing.T) {
+		root := t.TempDir()
+		child := filepath.Join(root, "probe")
+		if err := os.Mkdir(child, 0700); err != nil {
+			t.Fatal("fixture_mkdir_failed")
+		}
+		original := []byte(fmt.Sprintf(`{"format":"ssjack-app-v1","name":"probe","launch":{"executable":%q}}`, os.Args[0]))
+		descriptor := filepath.Join(child, "ssjack-app.json")
+		if err := os.WriteFile(descriptor, original, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		got := Scan(root)
+		if len(got.Candidates) != 1 || got.Candidates[0].Path != "probe" {
+			t.Fatalf("candidate_count=%d", len(got.Candidates))
+		}
+		candidate := got.Candidates[0]
+		changed := []byte(fmt.Sprintf(`{"format":"ssjack-app-v1","name":"changed","launch":{"executable":%q}}`, os.Args[0]))
+		if err := os.WriteFile(descriptor, changed, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		if !bytes.Equal(candidate.Buffer, original) {
+			t.Fatal("candidate_buffer_mismatch")
+		}
+		fingerprint, ok := descriptorFingerprint(original)
+		if !ok || candidate.Fingerprint != fingerprint {
+			t.Fatal("candidate_fingerprint_mismatch")
+		}
+		app, err := application.ParseDescriptorBuffer(candidate.Buffer, candidate.CanonicalPath)
+		if err != nil || app.Name != "probe" || app.Directory != candidate.CanonicalPath {
+			t.Fatalf("buffer_parse_failed: name=%q directory_matches=%t err=%v", app.Name, app.Directory == candidate.CanonicalPath, err)
+		}
+	})
+	t.Run("autocrlf style change keeps fingerprint", func(t *testing.T) {
+		root := t.TempDir()
+		plain := []byte(`{"format":"ssjack-app-v1","name":"same","launch":{"executable":"/not-run"}}`)
+		crlf := []byte("{\r\n  \"format\" : \"ssjack-app-v1\",\r\n  \"name\" : \"same\",\r\n  \"launch\" : {\"executable\":\"/not-run\"}\r\n}")
+		for name, data := range map[string][]byte{"plain": plain, "crlf": crlf} {
+			dir := filepath.Join(root, name)
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal("fixture_mkdir_failed")
+			}
+			if err := os.WriteFile(filepath.Join(dir, "ssjack-app.json"), data, 0600); err != nil {
+				t.Fatal("fixture_write_failed")
+			}
+		}
+		got := Scan(root)
+		if len(got.Candidates) != 2 || got.Candidates[0].Fingerprint != got.Candidates[1].Fingerprint || bytes.Equal(got.Candidates[0].Buffer, got.Candidates[1].Buffer) {
+			t.Fatal("canonical_fingerprint_mismatch")
+		}
+	})
+	t.Run("meaningful byte change changes fingerprint", func(t *testing.T) {
+		plain := []byte(`{"format":"ssjack-app-v1","name":"same","launch":{"executable":"/not-run"}}`)
+		changed := []byte(`{"format":"ssjack-app-v1","name":"other","launch":{"executable":"/not-run"}}`)
+		plainFingerprint, plainOK := descriptorFingerprint(plain)
+		changedFingerprint, changedOK := descriptorFingerprint(changed)
+		if !plainOK || !changedOK || plainFingerprint == changedFingerprint {
+			t.Fatal("meaningful_change_fingerprint_unchanged")
+		}
+	})
+	t.Run("duplicate keys rejected through scan validation", func(t *testing.T) {
+		data := []byte(`{"format":"ssjack-app-v1","name":"dup","name":"dup","launch":{"executable":"/not-run"}}`)
+		if _, err := canonicaljson.Canonicalize(data); err == nil {
+			t.Fatal("duplicate_keys_canonicalized")
+		}
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "ssjack-app.json"), data, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		got := Scan(root)
+		if len(got.Candidates) != 0 || !hasReason(got, "descriptor_invalid") {
+			t.Fatal("duplicate_descriptor_not_rejected")
+		}
+	})
+	t.Run("non canonicalizable descriptor is rejected", func(t *testing.T) {
+		data := []byte(`{"format":"ssjack-app-v1","name":"decomposed","launch":{"executable":"/not-run","args":["cafe\u0301"]}}`)
+		if _, err := application.ValidateDiscoveryDescriptor(data); err != nil {
+			t.Skip("fixture_not_valid_per_descriptor_validator")
+		}
+		if _, err := canonicaljson.Canonicalize(data); err == nil {
+			t.Skip("canonicalizer_accepts_fixture")
+		}
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "ssjack-app.json"), data, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		got := Scan(root)
+		if len(got.Candidates) != 0 || !hasReason(got, "fingerprint_unavailable") {
+			t.Fatalf("candidate_count=%d fingerprint_unavailable_present=%t", len(got.Candidates), hasReason(got, "fingerprint_unavailable"))
+		}
+		if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != "." {
+			t.Fatalf("diagnostic_count=%d root_path_present=%t", len(got.Diagnostics), len(got.Diagnostics) == 1 && got.Diagnostics[0].Path == ".")
+		}
+	})
+}
+
+func TestScanRootSymlinkResolved(t *testing.T) {
+	t.Run("symlink root is resolved and scanned", func(t *testing.T) {
+		parent := t.TempDir()
+		real := filepath.Join(parent, "ordinary")
+		writeDescriptor(t, real, "realroot")
+		link := filepath.Join(parent, "linkroot")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		got := Scan(link)
+		if hasReason(got, "root_unsafe") || len(got.Candidates) != 1 || got.Candidates[0].Path != "." {
+			t.Fatalf("candidate_count=%d root_unsafe=%t", len(got.Candidates), hasReason(got, "root_unsafe"))
+		}
+		want, err := filepath.EvalSymlinks(real)
+		if err != nil {
+			t.Fatal("fixture_resolve_failed")
+		}
+		actual := got.Candidates[0].CanonicalPath
+		if filepath.Clean(actual) != filepath.Clean(want) {
+			t.Fatalf("canonical_path_matches=%t", filepath.Clean(actual) == filepath.Clean(want))
+		}
+	})
+	t.Run("links among children of a resolved root still rejected", func(t *testing.T) {
+		parent := t.TempDir()
+		real := filepath.Join(parent, "ordinary")
+		writeDescriptor(t, filepath.Join(real, "real"), "real")
+		link := filepath.Join(parent, "linkroot")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		if err := os.Symlink(filepath.Join(real, "real"), filepath.Join(real, "linked")); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		got := Scan(link)
+		if !reflect.DeepEqual(paths(got.Candidates), []string{".", "real"}) {
+			t.Fatalf("candidate_count=%d", len(got.Candidates))
+		}
+		count := 0
+		for _, diagnostic := range got.Diagnostics {
+			if diagnostic.Path == "linked" && diagnostic.Reason == "entry_unsafe" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("linked_entry_unsafe_count=%d", count)
 		}
 	})
 }

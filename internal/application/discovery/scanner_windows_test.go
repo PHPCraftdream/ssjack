@@ -40,6 +40,30 @@ func TestScanRejectsDirectoryReparseSymlink(t *testing.T) {
 	})
 }
 
+func TestScanRootJunctionResolved(t *testing.T) {
+	t.Run("junction root is resolved and scanned", func(t *testing.T) {
+		parent := t.TempDir()
+		target := filepath.Join(parent, "ordinary")
+		writeDescriptor(t, target, "realroot")
+		junction := filepath.Join(parent, "junctionroot")
+		if err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).Run(); err != nil {
+			t.Skip("directory junction fixture unavailable")
+		}
+		got := Scan(junction)
+		if hasReason(got, "root_unsafe") || len(got.Candidates) != 1 || got.Candidates[0].Path != "." {
+			t.Fatalf("candidate_count=%d root_unsafe=%t", len(got.Candidates), hasReason(got, "root_unsafe"))
+		}
+		want, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal("fixture_resolve_failed")
+		}
+		actual := got.Candidates[0].CanonicalPath
+		if filepath.Clean(actual) != filepath.Clean(want) {
+			t.Fatalf("canonical_path_matches=%t", filepath.Clean(actual) == filepath.Clean(want))
+		}
+	})
+}
+
 func TestScanRejectsDirectoryJunction(t *testing.T) {
 	t.Run("directory junction", func(t *testing.T) {
 		root := t.TempDir()

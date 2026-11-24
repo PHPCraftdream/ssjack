@@ -22,9 +22,13 @@ const (
 )
 
 type Candidate struct {
-	Path      string
-	Name      string
-	Collision bool
+	Path          string
+	Name          string
+	Collision     bool
+	Buffer        []byte
+	Fingerprint   [32]byte
+	CanonicalPath string
+	Identity      os.FileInfo
 }
 
 type Diagnostic struct {
@@ -55,6 +59,13 @@ func Scan(rootPath string) Result {
 		return result
 	}
 	rootPath = filepath.Clean(abs)
+	resolved, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		addDiagnostic(&result, ".", "root_inaccessible")
+		finish(&result)
+		return result
+	}
+	rootPath = filepath.Clean(resolved)
 	initial, err := os.Lstat(rootPath)
 	if err != nil || !initial.IsDir() || isReparse(initial) {
 		addDiagnostic(&result, ".", "root_unsafe")
@@ -82,7 +93,7 @@ func Scan(rootPath string) Result {
 		return result
 	}
 	seen := []directoryIdentity{}
-	addCandidateFromRoot(&result, root, rootInfo, ".", &seen, nil)
+	addCandidateFromRoot(&result, rootPath, root, rootInfo, ".", &seen, nil)
 
 	entries, fallbackDescriptor, overflow, readErr := readEntries(root, rootDir)
 	if overflow {
@@ -139,7 +150,7 @@ func Scan(rootPath string) Result {
 			addDiagnostic(&result, rel, "entry_unsafe")
 			continue
 		}
-		addCandidateFromRoot(&result, childRoot, identity, rel, &seen, func() bool {
+		addCandidateFromRoot(&result, rootPath, childRoot, identity, rel, &seen, func() bool {
 			current, currentErr := root.Lstat(base)
 			return currentErr == nil && current.IsDir() && !isReparse(current) && os.SameFile(identity, current)
 		})
@@ -227,7 +238,7 @@ type directoryIdentity struct {
 	info os.FileInfo
 }
 
-func addCandidateFromRoot(result *Result, directory *os.Root, identity os.FileInfo, rel string, seen *[]directoryIdentity, validate func() bool) {
+func addCandidateFromRoot(result *Result, canonicalRoot string, directory *os.Root, identity os.FileInfo, rel string, seen *[]directoryIdentity, validate func() bool) {
 	data, reason := readBoundedDescriptor(directory)
 	if reason != "" {
 		addDiagnostic(result, rel, reason)
@@ -236,6 +247,11 @@ func addCandidateFromRoot(result *Result, directory *os.Root, identity os.FileIn
 	name, err := application.ValidateDiscoveryDescriptor(data)
 	if err != nil {
 		addDiagnostic(result, rel, "descriptor_invalid")
+		return
+	}
+	digest, hashable := descriptorFingerprint(data)
+	if !hashable {
+		addDiagnostic(result, rel, "fingerprint_unavailable")
 		return
 	}
 	if validate != nil && !validate() {
@@ -253,7 +269,14 @@ func addCandidateFromRoot(result *Result, directory *os.Root, identity os.FileIn
 		return
 	}
 	*seen = append(*seen, directoryIdentity{info: identity})
-	result.Candidates = append(result.Candidates, Candidate{Path: normalizedDiagnosticPath(rel), Name: name})
+	result.Candidates = append(result.Candidates, Candidate{Path: normalizedDiagnosticPath(rel), Name: name, Buffer: data, Fingerprint: digest, CanonicalPath: canonicalCandidatePath(canonicalRoot, rel), Identity: identity})
+}
+
+func canonicalCandidatePath(root, rel string) string {
+	if rel == "." {
+		return filepath.Clean(root)
+	}
+	return filepath.Join(root, filepath.FromSlash(rel))
 }
 
 func readBoundedDescriptor(root *os.Root) ([]byte, string) {

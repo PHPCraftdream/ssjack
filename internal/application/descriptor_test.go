@@ -267,3 +267,52 @@ func TestDescriptorExecutableAbsoluteAndPathLookup(t *testing.T) {
 	}
 	expectRefusal(t, descriptorDir(t, launchDescriptor(`{"executable":"absent-tool"}`)), "not found on PATH")
 }
+
+func TestParseDescriptorBuffer(t *testing.T) {
+	t.Run("ParseDescriptorBuffer matches LoadDescriptor", func(t *testing.T) {
+		dir := descriptorDir(t, validDescriptor(`,"workdir":"work","commands":{"observational":["status"],"refused":["serve"]}`))
+		app1, err := LoadDescriptor(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, DescriptorFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		app2, err := ParseDescriptorBuffer(data, canonical(t, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(app1, app2) {
+			t.Fatalf("buffer parse differs: %+v != %+v", app2, app1)
+		}
+	})
+	t.Run("ParseDescriptorBuffer rejects oversize and invalid", func(t *testing.T) {
+		dir := descriptorDir(t, validDescriptor(""))
+		root := canonical(t, dir)
+		valid := launchDescriptor(`{"executable":` + quoteJSON(t, mustExecutable(t)) + `}`)
+		oversize := []byte(valid[:len(valid)-1] + strings.Repeat(" ", 16*1024+1-len(valid)) + "}")
+		if len(oversize) != 16*1024+1 {
+			t.Fatal("oversize_fixture_wrong_length")
+		}
+		if _, err := ParseDescriptorBuffer(oversize, root); err == nil || !strings.Contains(err.Error(), "too large") {
+			t.Fatalf("oversize_buffer_error=%v", err)
+		}
+		if _, err := ParseDescriptorBuffer([]byte("not json"), root); err == nil {
+			t.Fatal("invalid_buffer_accepted")
+		}
+		data := []byte(launchDescriptor(`{"executable":` + quoteJSON(t, mustExecutable(t)) + `}`))
+		if _, err := ParseDescriptorBuffer(data, root); err != nil {
+			t.Fatalf("valid_buffer_refused: %v", err)
+		}
+	})
+}
+
+func mustExecutable(t *testing.T) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
