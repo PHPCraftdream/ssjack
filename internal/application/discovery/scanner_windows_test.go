@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -54,14 +53,7 @@ func TestScanRootJunctionResolved(t *testing.T) {
 		if hasReason(got, "root_unsafe") || len(got.Candidates) != 1 || got.Candidates[0].Path != "." {
 			t.Fatalf("candidate_count=%d root_unsafe=%t", len(got.Candidates), hasReason(got, "root_unsafe"))
 		}
-		want, err := filepath.EvalSymlinks(target)
-		if err != nil {
-			t.Fatal("fixture_resolve_failed")
-		}
-		actual := got.Candidates[0].CanonicalPath
-		if !strings.EqualFold(filepath.Clean(actual), filepath.Clean(want)) {
-			t.Fatal("canonical_path_mismatch")
-		}
+		requireResolvedTo(t, got.Candidates[0].CanonicalPath, target)
 	})
 }
 

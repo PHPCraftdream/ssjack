@@ -561,14 +561,7 @@ func TestScanRootSymlinkResolved(t *testing.T) {
 		if hasReason(got, "root_unsafe") || len(got.Candidates) != 1 || got.Candidates[0].Path != "." {
 			t.Fatalf("candidate_count=%d root_unsafe=%t", len(got.Candidates), hasReason(got, "root_unsafe"))
 		}
-		want, err := filepath.EvalSymlinks(real)
-		if err != nil {
-			t.Fatal("fixture_resolve_failed")
-		}
-		actual := got.Candidates[0].CanonicalPath
-		if filepath.Clean(actual) != filepath.Clean(want) {
-			t.Fatalf("canonical_path_matches=%t", filepath.Clean(actual) == filepath.Clean(want))
-		}
+		requireResolvedTo(t, got.Candidates[0].CanonicalPath, real)
 	})
 	t.Run("links among children of a resolved root still rejected", func(t *testing.T) {
 		parent := t.TempDir()
@@ -637,4 +630,24 @@ func hasReason(r Result, reason string) bool {
 		}
 	}
 	return false
+}
+
+// requireResolvedTo checks that the reported path names the real directory by
+// identity (short 8.3 names differ textually) and not the link that led to it.
+func requireResolvedTo(t *testing.T, actual, real string) {
+	t.Helper()
+	actualInfo, err := os.Stat(actual)
+	if err != nil {
+		t.Fatal("canonical_path_unreadable")
+	}
+	realInfo, err := os.Stat(real)
+	if err != nil {
+		t.Fatal("fixture_stat_failed")
+	}
+	if !os.SameFile(actualInfo, realInfo) {
+		t.Fatal("canonical_path_is_another_directory")
+	}
+	if filepath.Base(actual) != filepath.Base(real) {
+		t.Fatalf("canonical_path_base=%t", filepath.Base(actual) == filepath.Base(real))
+	}
 }
