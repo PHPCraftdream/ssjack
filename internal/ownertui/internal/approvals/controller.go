@@ -37,7 +37,11 @@ type Controller struct {
 }
 
 func New(v *vault.Vault, workingDir string, snapshot func() error) *Controller {
-	return &Controller{cursor: -1, rejections: make(map[string]bool), vault: v, workingDir: workingDir, snapshot: snapshot}
+	c := &Controller{cursor: -1, rejections: make(map[string]bool), workingDir: workingDir, snapshot: snapshot}
+	if v != nil {
+		c.vault = v
+	}
+	return c
 }
 
 func (c *Controller) Entries() []Entry { return append([]Entry(nil), c.entries...) }
