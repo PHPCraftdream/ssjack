@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/core"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/recovery"
@@ -19,6 +20,15 @@ func New() *Vault { return core.New() }
 func NewDirectory() *Vault { return core.NewDirectory() }
 
 func ValidateName(name string) error { return record.ValidateName(name) }
+
+// MaxApplicationApprovals bounds one vault's application approval set.
+const MaxApplicationApprovals = approval.MaxApprovals
+
+// ValidateApprovalName applies the descriptor application-name rule.
+func ValidateApprovalName(name string) error { return approval.ValidateName(name) }
+
+// ListApplicationApprovals returns owner application approvals sorted by name.
+func ListApplicationApprovals(v *Vault) ([]Approval, error) { return v.ListApplicationApprovals() }
 
 func ParseHostKey(data []byte) (ssh.PublicKey, error) { return record.ParseHostKey(data) }
 

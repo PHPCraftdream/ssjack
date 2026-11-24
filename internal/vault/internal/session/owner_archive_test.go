@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -18,10 +19,66 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/core"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/vaulttest"
+	"github.com/ktav-lang/golang/pure"
 )
+
+func TestOwnerArchiveDropsApprovals(t *testing.T) {
+	t.Run("export of a vault with approvals imports cleanly", func(t *testing.T) {
+		v, server := vaulttest.DirectoryFixture(t)
+		rec := approval.Record{Name: "tool", Path: approvalPath(t, "tool"), Hash: strings.Repeat("ab", 32)}
+		if err := v.ApproveApplication(rec, ""); err != nil {
+			t.Fatal(err)
+		}
+		s := newSession(v, func(context.Context, []byte) error { return nil }, func() {})
+		t.Cleanup(s.Discard)
+		plan, err := s.PrepareOwnerExport(ExportSelection{Servers: map[string][]string{server: {"main"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer plan.Close()
+		path := filepath.Join(t.TempDir(), "with-approvals.zip")
+		if err := plan.WritePlaintext(context.Background(), path, "EXPORT PLAINTEXT"); err != nil {
+			t.Fatal(err)
+		}
+		opened, err := ownerarchive.ReadFile(context.Background(), path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer opened.Close()
+		imported, err := ParseOwnerImport(opened)
+		if err != nil {
+			t.Fatalf("export of an approving vault did not parse: %v", err)
+		}
+		imported.Close()
+	})
+	t.Run("archive boundary blocks applications before ParseOwnerImport", func(t *testing.T) {
+		// No session-level test can hand ParseOwnerImport an Opened whose
+		// database carries an applications section: ownerarchive.New and
+		// ReadFile both run parseDatabase first, whose root-field allowlist
+		// ({version, targets, servers, secrets, remote_mcp}) rejects the
+		// section with ErrArchive before any Opened is returned, and Opened's
+		// fields are unexported in another package, so even a hand-built zip
+		// with matching manifest digests cannot smuggle the section through
+		// ReadFile. This subtest pins that archive boundary; the parsed
+		// Approvals != nil clause inside ParseOwnerImport is therefore
+		// defense-in-depth that no reachable input from this package can
+		// exercise, and no test here can fail if that clause were removed.
+		encoded, err := pure.EmitCanonical(map[string]any{
+			"version": 2, "targets": map[string]any{}, "servers": map[string]any{}, "secrets": map[string]any{},
+			"applications": map[string]any{"tool": map[string]any{"path": approvalPath(t, "tool"), "hash": strings.Repeat("ab", 32)}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ownerarchive.New([]byte(encoded)); err == nil {
+			t.Fatal("archive accepted a database carrying an applications section")
+		}
+	})
+}
 
 func TestOwnerExportSelectsAccountsAndExplicitSecretScopes(t *testing.T) {
 	v, first := vaulttest.DirectoryFixture(t)

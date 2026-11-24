@@ -4,6 +4,7 @@
 package vault
 
 import (
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/core"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/recovery"
@@ -14,6 +15,7 @@ import (
 type (
 	Target          = record.Target
 	SSHPolicy       = record.SSHPolicy
+	Approval        = approval.Record
 	Server          = record.Server
 	SecretBinding   = record.SecretBinding
 	Vault           = core.Vault

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"sort"
 
 	"github.com/PHPCraftdream/ssjack/internal/appstoreplaceholder"
@@ -13,6 +14,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 )
 
@@ -111,7 +113,7 @@ func (v *Vault) InitializeDirectory(name string, target Target) error {
 	if err := v.validate(); err != nil {
 		return err
 	}
-	if len(v.Targets) != 0 || len(v.Servers) != 0 || len(v.Secrets) != 0 || v.OwnerStore != nil || v.RemoteMCP != nil {
+	if len(v.Targets) != 0 || len(v.Servers) != 0 || len(v.Secrets) != 0 || v.OwnerStore != nil || v.RemoteMCP != nil || v.Approvals != nil {
 		return errors.New("directory initialization requires an empty database")
 	}
 	id, err := directoryID()
@@ -196,6 +198,12 @@ func (v *Vault) directoryCopy() (*Vault, error) {
 	for id, secret := range v.Secrets {
 		copy.Secrets[id] = secret
 	}
+	if len(v.Approvals) != 0 {
+		copy.Approvals = make(map[string]approval.Record, len(v.Approvals))
+		for name, record := range v.Approvals {
+			copy.Approvals[name] = record
+		}
+	}
 	return copy, nil
 }
 
@@ -204,6 +212,7 @@ func (v *Vault) applyDirectory(copy *Vault) error {
 		return err
 	}
 	v.Targets, v.Servers, v.Secrets = copy.Targets, copy.Servers, copy.Secrets
+	v.Approvals = copy.Approvals
 	return nil
 }
 
@@ -405,6 +414,83 @@ func (v *Vault) SuggestedRemoteMCP(serverID, account string) ([]mcpdirectory.Bin
 		return nil, err
 	}
 	return v.RemoteMCP.Suggested(profile), nil
+}
+
+// ListApplicationApprovals returns approval records sorted by name; the
+// internal map itself is never exposed mutably.
+func (v *Vault) ListApplicationApprovals() ([]approval.Record, error) {
+	if err := v.validate(); err != nil {
+		return nil, err
+	}
+	records := make([]approval.Record, 0, len(v.Approvals))
+	for _, name := range approval.SortedNames(v.Approvals) {
+		records = append(records, v.Approvals[name])
+	}
+	return records, nil
+}
+
+// ApproveApplication stores or explicitly replaces one approval record using
+// the directory copy/apply pattern so the payload-hash discipline holds.
+// replacesHash == "" adds a new record and refuses an existing name;
+// otherwise it must equal the stored descriptor hash the owner last
+// reviewed, so a stale or unreviewed replacement is refused.
+func (v *Vault) ApproveApplication(rec approval.Record, replacesHash string) error {
+	if err := v.validate(); err != nil {
+		return err
+	}
+	if err := rec.Validate(); err != nil {
+		return err
+	}
+	previous, exists := v.Approvals[rec.Name]
+	if replacesHash == "" {
+		if exists {
+			return errors.New("application approval already exists; pass the reviewed descriptor hash to replace it")
+		}
+	} else {
+		if !exists {
+			return errors.New("application approval does not exist")
+		}
+		if replacesHash != previous.Hash {
+			return errors.New("replaced approval does not match the reviewed descriptor hash")
+		}
+		if previous == rec {
+			return errors.New("approval is unchanged")
+		}
+	}
+	if !exists && len(v.Approvals) >= approval.MaxApprovals {
+		return errors.New("too many application approvals")
+	}
+	for name, existing := range v.Approvals {
+		if name != rec.Name && filepath.Clean(existing.Path) == filepath.Clean(rec.Path) {
+			return errors.New("another approved application already uses this path")
+		}
+	}
+	copy, err := v.directoryCopy()
+	if err != nil {
+		return err
+	}
+	if copy.Approvals == nil {
+		copy.Approvals = make(map[string]approval.Record, 1)
+	}
+	copy.Approvals[rec.Name] = rec
+	return v.applyDirectory(copy)
+}
+
+// RevokeApplication removes one approval; zero remaining records are fine
+// because Marshal then omits the section entirely.
+func (v *Vault) RevokeApplication(name string) error {
+	if err := v.validate(); err != nil {
+		return err
+	}
+	if _, exists := v.Approvals[name]; !exists {
+		return errors.New("application approval does not exist")
+	}
+	copy, err := v.directoryCopy()
+	if err != nil {
+		return err
+	}
+	delete(copy.Approvals, name)
+	return v.applyDirectory(copy)
 }
 
 // RemoteMCPCapture privately captures enabled owner-confirmed MCP records from

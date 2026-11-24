@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/core"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/vaulttest"
@@ -681,4 +684,45 @@ func TestVerifyOwnerImportDirectoryDetectsLaterEdits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSessionMetadataListsSortedApprovalsNotAliased(t *testing.T) {
+	v, _ := vaulttest.OwnerStoreFixture(t)
+	for _, name := range []string{"beta", "alpha"} {
+		rec := approval.Record{Name: name, Path: approvalPath(t, name), Hash: strings.Repeat("ab", 32)}
+		if err := v.ApproveApplication(rec, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := newSession(v, func(context.Context, []byte) error { return nil }, func() {})
+	defer s.Discard()
+	t.Run("metadata lists approvals sorted by name", func(t *testing.T) {
+		metadata, err := s.Metadata()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(metadata.Approvals) != 2 || metadata.Approvals[0].Name != "alpha" || metadata.Approvals[1].Name != "beta" {
+			t.Fatal("session metadata did not list approvals sorted by name")
+		}
+	})
+	t.Run("caller mutation cannot alias the live approval set", func(t *testing.T) {
+		metadata, err := s.Metadata()
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata.Approvals[0].Name = "caller-mutated"
+		metadata.Approvals[0].Path = "caller-mutated"
+		again, err := s.Metadata()
+		if err != nil || again.Approvals[0].Name != "alpha" || again.Approvals[0].Path == "caller-mutated" {
+			t.Fatal("approval metadata was aliased to the live approval set")
+		}
+		if s.state.Approvals["alpha"].Name != "alpha" {
+			t.Fatal("caller mutation reached the live approval set")
+		}
+	})
+}
+
+func approvalPath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 )
 
 func Marshal(v *Vault) ([]byte, error) {
@@ -50,6 +51,9 @@ func Marshal(v *Vault) ([]byte, error) {
 		if v.Rotation != nil {
 			root["rotation"] = rotationRecord(v.Rotation)
 		}
+		if len(v.Approvals) > 0 {
+			root["applications"] = approval.RecordMap(v.Approvals)
+		}
 	}
 	body, err := pure.EmitCanonical(root)
 	if err != nil {
@@ -70,7 +74,7 @@ func Unmarshal(data []byte) (*Vault, error) {
 		return nil, errors.New("invalid vault Ktav")
 	}
 	root, ok := value.(map[string]any)
-	if !ok || (len(root) != 2 && len(root) != 4 && len(root) != 5 && len(root) != 6 && len(root) != 7) || root["version"] == nil {
+	if !ok || (len(root) != 2 && len(root) != 4 && len(root) != 5 && len(root) != 6 && len(root) != 7 && len(root) != 8) || root["version"] == nil {
 		return nil, errors.New("invalid vault fields")
 	}
 	if err := validateDirectoryFields(root); err != nil {
@@ -123,6 +127,12 @@ func Unmarshal(data []byte) (*Vault, error) {
 	if err := pure.LoadsInto(string(data), &v); err != nil {
 		v.Close()
 		return nil, errors.New("invalid vault values")
+	}
+	// The wire form carries the record name only as the map key; backfill it
+	// before validation requires the key to equal the record name.
+	for name, rec := range v.Approvals {
+		rec.Name = name
+		v.Approvals[name] = rec
 	}
 	if err := v.validate(); err != nil {
 		v.Close()
@@ -349,7 +359,7 @@ func rotationStringArrayValue(value any) bool {
 func validateDirectoryFields(root map[string]any) error {
 	for key := range root {
 		switch key {
-		case "version", "targets", "servers", "secrets", "owner_store", "remote_mcp", "rotation":
+		case "version", "targets", "servers", "secrets", "owner_store", "remote_mcp", "rotation", "applications":
 		default:
 			return errors.New("unknown vault field")
 		}
@@ -366,6 +376,11 @@ func validateDirectoryFields(root map[string]any) error {
 	}
 	if value, exists := root["rotation"]; exists {
 		if err := validateRotationRecord(value); err != nil {
+			return err
+		}
+	}
+	if value, exists := root["applications"]; exists {
+		if err := approval.ValidateFields(value); err != nil {
 			return err
 		}
 	}

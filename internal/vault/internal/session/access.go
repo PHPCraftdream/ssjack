@@ -21,6 +21,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerpublication"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
 	"github.com/PHPCraftdream/ssjack/internal/sshstatus"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/core"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/store"
@@ -456,6 +457,8 @@ type DirectoryMetadata struct {
 	Secrets    map[string]SecretBinding
 	OwnerStore *OwnerStoreMetadata
 	RemoteMCP  mcpdirectory.Metadata
+	// Approvals lists owner application approvals sorted by name.
+	Approvals []approval.Record
 }
 
 // Metadata returns owned display data, never credentials or pending values.
@@ -526,6 +529,10 @@ func (s *Session) metadata() (DirectoryMetadata, error) {
 	for id, secret := range s.state.Secrets {
 		result.Secrets[id] = secret
 	}
+	for _, record := range s.state.Approvals {
+		result.Approvals = append(result.Approvals, record)
+	}
+	sort.Slice(result.Approvals, func(i, j int) bool { return result.Approvals[i].Name < result.Approvals[j].Name })
 	if owner := s.state.OwnerStore; owner != nil {
 		result.OwnerStore = &OwnerStoreMetadata{Directory: owner.Directory, StoreID: owner.StoreID}
 		if owner.Pending != nil {

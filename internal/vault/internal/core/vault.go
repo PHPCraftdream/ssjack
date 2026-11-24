@@ -16,6 +16,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/canonicaljson"
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/store"
 )
@@ -28,13 +29,14 @@ type (
 )
 
 type Vault struct {
-	Version     int                      `json:"version"`
-	Targets     map[string]Target        `json:"targets"`
-	Servers     map[string]Server        `json:"servers,omitempty"`
-	Secrets     map[string]SecretBinding `json:"secrets,omitempty"`
-	OwnerStore  *OwnerStore              `json:"owner_store,omitempty"`
-	RemoteMCP   *mcpdirectory.Directory  `json:"remote_mcp,omitempty"`
-	Rotation    *RotationJournal         `json:"rotation,omitempty"`
+	Version     int                        `json:"version"`
+	Targets     map[string]Target          `json:"targets"`
+	Servers     map[string]Server          `json:"servers,omitempty"`
+	Secrets     map[string]SecretBinding   `json:"secrets,omitempty"`
+	OwnerStore  *OwnerStore                `json:"owner_store,omitempty"`
+	RemoteMCP   *mcpdirectory.Directory    `json:"remote_mcp,omitempty"`
+	Rotation    *RotationJournal           `json:"rotation,omitempty"`
+	Approvals   map[string]approval.Record `json:"applications,omitempty"`
 	revision    [sha256.Size]byte
 	payloadHash [sha256.Size]byte
 	format      int
@@ -61,6 +63,7 @@ func (v *Vault) Close() {
 	v.OwnerStore = nil
 	v.RemoteMCP.Clear()
 	v.RemoteMCP = nil
+	v.Approvals = nil
 	if v.Rotation != nil {
 		ClearJournal(v.Rotation)
 	}
@@ -108,7 +111,7 @@ func (v *Vault) validate() error {
 	if (v.Version != 1 && v.Version != 2) || v.Targets == nil || len(v.Targets) > 64 {
 		return errors.New("unsupported vault version or target count")
 	}
-	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil || v.Rotation != nil) {
+	if v.Version == 1 && (v.Servers != nil || v.Secrets != nil || v.OwnerStore != nil || v.RemoteMCP != nil || v.Rotation != nil || v.Approvals != nil) {
 		return errors.New("version 1 cannot contain directory metadata")
 	}
 	if v.Version == 2 {
@@ -122,6 +125,9 @@ func (v *Vault) validate() error {
 			return err
 		}
 		if err := ValidateRotation(v); err != nil {
+			return err
+		}
+		if err := approval.ValidateSet(v.Approvals); err != nil {
 			return err
 		}
 	}

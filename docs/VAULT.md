@@ -29,6 +29,32 @@ pre-release directory converter has been removed.
 
 For non-menu connections use `--server production --account operator ssh`, `check`, `rotate` or full-mode `run HARNESS`. An omitted account is inferred only for an explicitly selected server with one account; multiple accounts refuse. `--server` conflicts with `-p`, and `--account` requires `--server`. See [named startup](application-store/NAMED-STARTUP.md).
 
+## Application approvals
+
+An optional encrypted `applications` section stores owner-side application
+approval records: a validated name, a canonical absolute path, the exact
+SHA-256 hash of the application descriptor, and an optional `incus:CONTAINER:USER`
+route. New readers accept the section; older strict readers reject the file as
+an unknown field until ssjack is upgraded. Approving a name that already has a
+record is an explicit replacement: the caller must pass the descriptor hash
+that was previously reviewed and stored; a mismatch refuses and the old
+approval stays in place until the owner explicitly re-reviews. Duplicate
+detection compares paths after canonicalization but does not fold letter case:
+case-insensitive path aliases are deliberately NOT folded, because startup
+matching compares the scanner's canonical real path exactly, so an alias fails
+to match, keeps needing review, and never grants approval by itself. Callers
+and implementers must create an encrypted snapshot (the existing
+Snapshot/backup mechanism) before the first save that introduces the
+`applications` section. Approvals are neither exported into owner archives nor
+imported from them; the owner re-approves on a new vault. Revoking all
+approvals restores the canonical plaintext payload to the form without the
+section, so old binaries can read the database again; the encrypted file is
+resealed with fresh nonce material on save and its ciphertext differs. Keep an
+encrypted backup before adopting new metadata (`vault backup` or a snapshot).
+Approval records never contain secret
+values; they are written only through explicit owner approve actions and never
+read the filesystem.
+
 ## Discover commands
 
 ```text

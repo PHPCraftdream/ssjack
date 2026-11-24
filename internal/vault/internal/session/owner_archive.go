@@ -359,7 +359,7 @@ func ParseOwnerImport(opened *ownerarchive.Opened) (*OwnerImport, error) {
 	}
 	defer parsed.Close()
 	ids := opened.SecretIDs()
-	if parsed.Version != 2 || parsed.OwnerStore != nil || len(ids) != len(parsed.Secrets) {
+	if parsed.Version != 2 || parsed.OwnerStore != nil || parsed.Approvals != nil || len(ids) != len(parsed.Secrets) {
 		return nil, ErrImportInvalid
 	}
 	seen := make(map[string]bool, len(ids))

@@ -25,6 +25,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/mcpgrant"
 	"github.com/PHPCraftdream/ssjack/internal/outputguard"
 	"github.com/PHPCraftdream/ssjack/internal/sshproxy"
+	"github.com/PHPCraftdream/ssjack/internal/vault/internal/approval"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/record"
 	"github.com/PHPCraftdream/ssjack/internal/vault/internal/store"
 	"github.com/ktav-lang/golang/pure"
@@ -883,3 +884,37 @@ func ForgeAuthenticated(t *testing.T, v *Vault) {
 }
 
 func ForgeRevision(v *Vault, revision [sha256.Size]byte) { v.revision = revision }
+func approvalRecord(t *testing.T, name string) approval.Record {
+	t.Helper()
+	return approval.Record{Name: name, Path: filepath.Join(t.TempDir(), name), Hash: strings.Repeat("ab", 32)}
+}
+
+// The copy seam is unexported, so this lifecycle subtest stays in the core
+// package; every assertion otherwise goes through the exported API, reading
+// the live set via ListApplicationApprovals instead of the raw map.
+func TestVaultApplicationApprovalCopyKeepsIndependentApprovals(t *testing.T) {
+	v, _ := directoryFixture(t)
+	rec := approvalRecord(t, "tool")
+	if err := v.ApproveApplication(rec, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.InitializeDirectory("again", record.OwnTarget(v.Targets["production"])); err == nil {
+		t.Fatal("initialization was accepted on a vault with approvals")
+	}
+	copy, err := v.directoryCopy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy.Approvals["extra"] = approvalRecord(t, "extra")
+	if list, err := v.ListApplicationApprovals(); err != nil || len(list) != 1 {
+		t.Fatal("mutating the copy changed the original approval set")
+	}
+	target := record.OwnTarget(v.Targets["production"])
+	defer clear(target.PrivateKey)
+	if _, err := v.AddServer("another", "main", target); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := v.ListApplicationApprovals(); err != nil || len(list) != 1 || list[0] != rec {
+		t.Fatal("directory edit lost the approval set")
+	}
+}
