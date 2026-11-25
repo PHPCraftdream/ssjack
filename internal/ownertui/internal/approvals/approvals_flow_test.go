@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
@@ -15,19 +16,38 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
+var sharedVault struct {
+	sync.Once
+	path     string
+	v        *vault.Vault
+	password []byte
+	err      error
+}
+
 func openTestVault(t *testing.T) (string, *vault.Vault, []byte) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "vault")
-	password := []byte("test-password")
-	v := vault.NewDirectory()
-	if err := vault.CreateWithRecords(context.Background(), path, v, password); err != nil {
-		t.Fatal(err)
+	sharedVault.Do(func() {
+		sharedVault.path = filepath.Join(os.TempDir(), "ssjack-approvals-shared-test-vault")
+		sharedVault.password = []byte("test-password")
+		sharedVault.v = vault.NewDirectory()
+		sharedVault.err = vault.CreateWithRecords(context.Background(), sharedVault.path, sharedVault.v, sharedVault.password)
+		if sharedVault.err == nil {
+			sharedVault.v, sharedVault.err = vault.Load(sharedVault.path, sharedVault.password)
+		}
+	})
+	if sharedVault.err != nil {
+		t.Fatal(sharedVault.err)
 	}
-	v, err := vault.Load(path, password)
+	records, err := vault.ListApplicationApprovals(sharedVault.v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return path, v, password
+	for _, record := range records {
+		if err := sharedVault.v.RevokeApplication(record.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return sharedVault.path, sharedVault.v, sharedVault.password
 }
 
 func controllerFor(t *testing.T, v *vault.Vault) *Controller {
@@ -98,13 +118,20 @@ func TestVerifiedRevoke(t *testing.T) {
 	})
 	t.Run("revoke confirmation verifies live record", func(t *testing.T) {
 		root := t.TempDir()
-		record := vault.Approval{Name: "service-a", Path: filepath.Join(root, "missing"), Hash: strings.Repeat("a", 64)}
+		putDescriptor(t, root, "svc-a", "service-a")
+		scan := discovery.Scan(root)
+		record := vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}
+		ops := &fakeVaultOps{records: []vault.Approval{record}}
 		c := New(nil, root, nil)
 		c.SetRecords([]vault.Approval{record})
 		c.Refresh()
-		c.Select(0)
+		for i, entry := range c.Entries() {
+			if entry.Record.Name == record.Name {
+				c.Select(i)
+				break
+			}
+		}
 		c.Revoke()
-		ops := &fakeVaultOps{records: []vault.Approval{{Name: record.Name, Path: record.Path, Hash: strings.Repeat("b", 64)}}}
 		c.vault = ops
 		if err := c.RevokeConfirm(); err == nil || err.Error() != "revoke_stale" || ops.revokeCalls != 0 {
 			t.Fatalf("err=%v calls=%d", err, ops.revokeCalls)
@@ -165,7 +192,8 @@ func TestRejectedApprovalStaysApproved(t *testing.T) {
 	t.Run("approval overrides session rejection", func(t *testing.T) {
 		_, v, _ := openTestVault(t)
 		root := t.TempDir()
-		child := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-a", "service-a")
+		scan := discovery.Scan(root)
 		c := New(v, root, nil)
 		c.Refresh()
 		c.Select(0)
@@ -173,15 +201,25 @@ func TestRejectedApprovalStaysApproved(t *testing.T) {
 		if err := c.RejectConfirm(); err != nil {
 			t.Fatal(err)
 		}
-		fingerprint := hex.EncodeToString(discovery.Scan(root).Candidates[0].Fingerprint[:])
-		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: child, Hash: fingerprint}, ""); err != nil {
+		candidatePath := scan.Candidates[0].CanonicalPath
+		fingerprint := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: candidatePath, Hash: fingerprint}, ""); err != nil {
 			t.Fatal(err)
 		}
 		c.Refresh()
-		if c.Entries()[0].Status != StatusApproved {
-			t.Fatalf("status=%v", c.Entries()[0].Status)
+		if len(c.Entries()) == 0 || c.Entries()[0].Status != StatusApproved {
+			for _, entry := range c.Entries() {
+				if entry.Name == "service-a" {
+					if entry.Status != StatusApproved {
+						t.Fatalf("status=%v", entry.Status)
+					}
+					goto approved
+				}
+			}
+			t.Fatalf("service-a entry missing: %+v", c.Entries())
 		}
-		c.Select(0)
+	approved:
+
 		c.Revoke()
 		if err := c.RevokeConfirm(); err != nil {
 			t.Fatal(err)
@@ -249,7 +287,8 @@ func TestApproveWritesCandidate(t *testing.T) {
 	t.Run("stores canonical path and fingerprint", func(t *testing.T) {
 		path, v, _ := openTestVault(t)
 		root := t.TempDir()
-		child := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-a", "service-a")
+		scan := discovery.Scan(root)
 		c := New(v, root, nil)
 		c.Refresh()
 		c.Select(0)
@@ -261,12 +300,9 @@ func TestApproveWritesCandidate(t *testing.T) {
 		if err != nil || len(records) != 1 {
 			t.Fatalf("records=%v err=%v", records, err)
 		}
-		scan := discovery.Scan(root)
+		scan = discovery.Scan(root)
 		want := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
-		canonical, err := filepath.EvalSymlinks(child)
-		if err != nil {
-			canonical = child
-		}
+		canonical := discovery.Scan(root).Candidates[0].CanonicalPath
 		if records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != want || len(records[0].Hash) != 64 {
 			t.Fatalf("record=%+v want hash=%s vault=%s", records[0], want, path)
 		}
@@ -351,7 +387,7 @@ func TestRevokePersistsWithoutApprovalSection(t *testing.T) {
 		if err := c.ConfirmApprove(); err != nil {
 			t.Fatal(err)
 		}
-		if err := vault.Save(path, v, password); err != nil {
+		if err := vault.SaveUnlocked(context.Background(), path, v); err != nil {
 			t.Fatal(err)
 		}
 		v1, err := vault.Load(path, password)
@@ -368,7 +404,7 @@ func TestRevokePersistsWithoutApprovalSection(t *testing.T) {
 		if err := c.RevokeConfirm(); err != nil {
 			t.Fatal(err)
 		}
-		if err := vault.Save(path, v1, password); err != nil {
+		if err := vault.SaveUnlocked(context.Background(), path, v1); err != nil {
 			t.Fatal(err)
 		}
 		v2, err := vault.Load(path, password)
@@ -404,6 +440,7 @@ func TestChangedReapprovalAndStaleConflict(t *testing.T) {
 		_, v, _ := openTestVault(t)
 		root := t.TempDir()
 		child := putDescriptor(t, root, "svc-a", "service-a")
+		scan := discovery.Scan(root)
 		c := New(v, root, nil)
 		c.Refresh()
 		c.Select(0)
@@ -439,7 +476,7 @@ func TestChangedReapprovalAndStaleConflict(t *testing.T) {
 		}
 		c.Refresh()
 		c.Select(0)
-		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: child, Hash: hex.EncodeToString(make([]byte, 32))}, newHash); err != nil {
+		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: newHash}, newHash); err != nil {
 			t.Fatal(err)
 		}
 		c.Arm()

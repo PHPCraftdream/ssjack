@@ -78,7 +78,11 @@ func (c *Controller) Refresh() {
 	}
 	c.entries = List(c.workingDir, records)
 	for i := range c.entries {
-		if c.entries[i].Record.Name == "" && c.entries[i].candidate != nil && c.rejections[filepath.Clean(c.entries[i].candidate.CanonicalPath)] {
+		if c.entries[i].Record.Name != "" {
+			delete(c.rejections, filepath.Clean(c.entries[i].Record.Path))
+			continue
+		}
+		if c.entries[i].candidate != nil && c.rejections[filepath.Clean(c.entries[i].candidate.CanonicalPath)] {
 			c.entries[i].Status = StatusRejected
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
@@ -30,6 +31,7 @@ type fakeBackend struct {
 	path                                string
 	vaultFile                           string
 	editFn                              func(func(*vault.Vault) error) error
+	approvalVault                       *vault.Vault
 	status                              ownerdb.Status
 	closeErr                            error
 	snapshotErr                         error
@@ -170,12 +172,10 @@ func realApprovalBackend(t *testing.T, metadata vault.DirectoryMetadata) *fakeBa
 	password := []byte("approval-test-password")
 	v := vault.NewDirectory()
 	must(t, vault.CreateWithRecords(context.Background(), path, v, password))
-	b := &fakeBackend{metadata: metadata, path: path, vaultFile: path}
+	v, err := vault.Load(path, password)
+	must(t, err)
+	b := &fakeBackend{metadata: metadata, path: path, vaultFile: path, approvalVault: v}
 	b.editFn = func(edit func(*vault.Vault) error) error {
-		v, err := vault.Load(path, password)
-		if err != nil {
-			return err
-		}
 		if b.edits == 1 && b.snapshots > 0 {
 			before, readErr := os.ReadFile(path)
 			if readErr != nil {
@@ -185,10 +185,10 @@ func realApprovalBackend(t *testing.T, metadata vault.DirectoryMetadata) *fakeBa
 				return errors.New("snapshot did not match pre-edit ciphertext")
 			}
 		}
-		if err := edit(v); err != nil {
+		if err := edit(b.approvalVault); err != nil {
 			return err
 		}
-		if err := vault.Save(path, v, password); err != nil {
+		if err := vault.SaveUnlocked(context.Background(), path, b.approvalVault); err != nil {
 			return err
 		}
 		b.metadata.Approvals, err = vault.ListApplicationApprovals(v)
@@ -224,6 +224,17 @@ func refreshApprovals(m *Model) {
 }
 
 func TestApprovalsModelFlows(t *testing.T) {
+	sharedBackend := realApprovalBackend(t, vault.DirectoryMetadata{})
+	resetShared := func() *fakeBackend {
+		for _, record := range sharedBackend.approvalVault.Approvals {
+			_ = sharedBackend.approvalVault.RevokeApplication(record.Name)
+		}
+		sharedBackend.metadata.Approvals = nil
+		sharedBackend.edits, sharedBackend.snapshots = 0, 0
+		sharedBackend.snapshotBytes = nil
+		sharedBackend.snapshotErr = nil
+		return sharedBackend
+	}
 	t.Run("renders candidates without default selection", func(t *testing.T) {
 		m, _ := approvalFixture(t, &fakeBackend{}, true)
 		view := m.View().Content
@@ -232,7 +243,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("approve writes and snapshots only once", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
@@ -244,14 +255,11 @@ func TestApprovalsModelFlows(t *testing.T) {
 		if len(paths) != 0 || b.snapshots != 1 {
 			t.Fatalf("snapshot count=%d files=%v", b.snapshots, paths)
 		}
-		v, err := vault.Load(b.path, []byte("approval-test-password"))
-		must(t, err)
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
-		canonical, err := filepath.EvalSymlinks(child)
-		if err != nil {
-			canonical = child
-		}
+		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
 		if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
 			t.Fatalf("approval record=%+v", records)
 		}
@@ -269,7 +277,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		if got := approvalSnapshots(t, b.path); len(got) != 0 || b.snapshots != 1 {
 			t.Fatalf("revoke created extra snapshot: files=%v snapshots=%d", got, b.snapshots)
 		}
-		v, err = vault.Load(b.path, []byte("approval-test-password"))
+		v = b.approvalVault
 		must(t, err)
 		records, err = vault.ListApplicationApprovals(v)
 		must(t, err)
@@ -291,14 +299,14 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("requires explicit selection", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, _ := approvalFixture(t, b, false)
 		approvalPress(m, 'a')
 		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || len(approvalSnapshots(t, b.path)) != 0 {
 			t.Fatal("unselected approve caused backend or snapshot effects")
 		}
-		v, err := vault.Load(b.path, []byte("approval-test-password"))
-		must(t, err)
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
 		if len(records) != 0 {
@@ -306,7 +314,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("cancel clears armed approval", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, _ := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
@@ -316,7 +324,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("snapshot failure blocks approve edit", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		b.snapshotErr = errors.New("snapshot unavailable")
 		m, _ := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
@@ -335,7 +343,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("arm then changed scan refuses confirmation", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
@@ -345,8 +353,8 @@ func TestApprovalsModelFlows(t *testing.T) {
 		if cmd := approvalPress(m, 13); cmd != nil || b.edits != 0 || m.approvals.Message() != "review_stale" {
 			t.Fatalf("cmd=%v edits=%d message=%q", cmd != nil, b.edits, m.approvals.Message())
 		}
-		v, err := vault.Load(b.path, []byte("approval-test-password"))
-		must(t, err)
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
 		if len(records) != 0 {
@@ -354,7 +362,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("arm then changed stored hash refuses", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
@@ -371,20 +379,17 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("arm unchanged refresh stays confirmable", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
 		refreshApprovals(m)
 		completeApprovalCmd(t, m, approvalPress(m, 13))
-		v, err := vault.Load(b.path, []byte("approval-test-password"))
-		must(t, err)
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
-		canonical, err := filepath.EvalSymlinks(child)
-		if err != nil {
-			canonical = child
-		}
+		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
 		if b.edits != 1 || len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
 			t.Fatalf("edits=%d records=%+v", b.edits, records)
 		}
@@ -393,7 +398,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("snapshot precedes edit and matches pre-edit bytes", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, _ := approvalFixture(t, b, false)
 		b.editFn = func(edit func(*vault.Vault) error) error {
 			if b.edits == 1 {
@@ -408,14 +413,15 @@ func TestApprovalsModelFlows(t *testing.T) {
 					return errors.New("snapshot differs from pre-edit ciphertext")
 				}
 			}
-			v, err := vault.Load(b.path, []byte("approval-test-password"))
+			v := b.approvalVault
+			err := error(nil)
 			if err != nil {
 				return err
 			}
 			if err := edit(v); err != nil {
 				return err
 			}
-			if err := vault.Save(b.path, v, []byte("approval-test-password")); err != nil {
+			if err := vault.SaveUnlocked(context.Background(), b.path, v); err != nil {
 				return err
 			}
 			b.metadata.Approvals, err = vault.ListApplicationApprovals(v)
@@ -439,7 +445,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("reordered armed candidate stays pinned through confirm", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, first := approvalFixture(t, b, false)
 		root := filepath.Dir(first)
 		second := filepath.Join(root, "svc-b")
@@ -474,12 +480,10 @@ func TestApprovalsModelFlows(t *testing.T) {
 		if cursor < 0 || cursor >= len(entries) || entries[cursor].Name != "service-a" || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
 			t.Fatalf("reviewed row not selected after reordering: cursor=%d entries=%+v view=%q", cursor, entries, m.View().Content)
 		}
-		canonical, err := filepath.EvalSymlinks(renamed)
-		if err != nil {
-			canonical = renamed
-		}
+		canonical := discovery.Scan(root).Candidates[0].CanonicalPath
 		b.editFn = func(edit func(*vault.Vault) error) error {
-			v, err := vault.Load(b.path, []byte("approval-test-password"))
+			v := b.approvalVault
+			err := error(nil)
 			if err != nil {
 				return err
 			}
@@ -493,7 +497,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 			if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != reviewedHash {
 				return fmt.Errorf("approved record=%+v", records)
 			}
-			if err := vault.Save(b.path, v, []byte("approval-test-password")); err != nil {
+			if err := vault.SaveUnlocked(context.Background(), b.path, v); err != nil {
 				return err
 			}
 			b.metadata.Approvals = records
@@ -534,13 +538,13 @@ func TestApprovalsModelFlows(t *testing.T) {
 		}
 	})
 	t.Run("revoke of an outside record works", func(t *testing.T) {
-		b := realApprovalBackend(t, vault.DirectoryMetadata{})
+		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'a')
 		completeApprovalCmd(t, m, approvalPress(m, 13))
-		v, err := vault.Load(b.path, []byte("approval-test-password"))
-		must(t, err)
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
 		root := t.TempDir()
@@ -554,7 +558,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		approvalPress(m, tea.KeyDown)
 		approvalPress(m, 'x')
 		completeApprovalCmd(t, m, approvalPress(m, 13))
-		v, err = vault.Load(b.path, []byte("approval-test-password"))
+		v = b.approvalVault
 		must(t, err)
 		records, err = vault.ListApplicationApprovals(v)
 		must(t, err)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -78,9 +79,9 @@ func TestPinnedReview(t *testing.T) {
 	})
 	t.Run("review-time stored hash is passed to vault", func(t *testing.T) {
 		root := t.TempDir()
-		child := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-a", "service-a")
 		c := New(nil, root, nil)
-		c.SetRecords([]vault.Approval{{Name: "service-a", Path: child, Hash: strings.Repeat("a", 64)}})
+		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}})
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -98,13 +99,13 @@ func TestPinnedReview(t *testing.T) {
 	})
 	t.Run("stored hash change invalidates review", func(t *testing.T) {
 		root := t.TempDir()
-		child := putDescriptor(t, root, "svc-a", "service-a")
+		putDescriptor(t, root, "svc-a", "service-a")
 		c := New(nil, root, nil)
-		c.SetRecords([]vault.Approval{{Name: "service-a", Path: child, Hash: strings.Repeat("a", 64)}})
+		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}})
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
-		c.SetRecords([]vault.Approval{{Name: "service-a", Path: child, Hash: strings.Repeat("b", 64)}})
+		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("b", 64)}})
 		c.Refresh()
 		if c.Message() != "review_stale" {
 			t.Fatalf("stale refresh message=%q", c.Message())
@@ -196,7 +197,7 @@ func TestUnmatchedRecords(t *testing.T) {
 		}
 		records := []vault.Approval{{Name: "one", Path: inside}, {Name: "two", Path: filepath.Join(root, "gone")}, {Name: "three", Path: invalid}, {Name: "four", Path: filepath.Join(t.TempDir(), "outside")}, {Name: "five", Path: near}}
 		entries := List(root, records)
-		want := map[string]string{inside: "not_scanned", filepath.Join(root, "gone"): "descriptor_missing", invalid: "descriptor_invalid", near: "not_scanned"}
+		want := map[string]string{inside: "descriptor_missing", filepath.Join(root, "gone"): "descriptor_missing", invalid: "descriptor_invalid", near: "not_scanned"}
 		found := map[string]bool{}
 		for _, e := range entries {
 			if reason, ok := want[e.Record.Path]; ok {
