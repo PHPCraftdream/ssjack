@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -134,8 +135,22 @@ func NewManagerOff(now func() time.Time, random io.Reader) *Manager {
 // Enabled reports whether the middleware is installed at all.
 func (m *Manager) Enabled() bool { return m.enabled }
 
-// SetClassify installs the app_exec classification seam.
-func (m *Manager) SetClassify(classify Classify) { m.classify = classify }
+// SetClassify installs the app_exec classification seam. An untyped nil clears
+// it; a typed-nil pointer is refused as an enabling classifier. No
+// side-effect-free classification exists in this tree (see
+// internal/application), so the wiring leaves it nil and app_exec is never
+// elicited.
+func (m *Manager) SetClassify(classify Classify) {
+	if classify == nil {
+		// An untyped nil clears the seam: app_exec is never elicited.
+		m.classify = nil
+		return
+	}
+	if value := reflect.ValueOf(classify); value.Kind() == reflect.Pointer && value.IsNil() {
+		return
+	}
+	m.classify = classify
+}
 
 // SetDebug installs a failure-only diagnostic hook. The hook never receives
 // argument contents.

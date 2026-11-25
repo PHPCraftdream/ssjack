@@ -279,6 +279,70 @@ func TestApplicationTimeout(t *testing.T) {
 	}
 }
 
+func TestApplicationClassifyIsSideEffectFree(t *testing.T) {
+	t.Run("observational_command", func(t *testing.T) {
+		classifyCase(t, Input{Application: fixtureName, Arguments: []string{"inspect"}}, false, false)
+	})
+	t.Run("non_observational_command", func(t *testing.T) {
+		classifyCase(t, Input{Application: fixtureName, Arguments: []string{"apply"}}, true, false)
+	})
+	t.Run("unknown_application", func(t *testing.T) {
+		classifyCase(t, Input{Application: "missing", Arguments: []string{"inspect"}}, false, true)
+	})
+	t.Run("refused_command", func(t *testing.T) {
+		classifyCase(t, Input{Application: fixtureName, Arguments: []string{"serve"}}, false, true)
+	})
+}
+
+func classifyCase(t *testing.T, input Input, wantClass, wantError bool) {
+	t.Helper()
+	var runnerCalls int
+	app := fixtureApp(t, fixtureName)
+	manager, err := New(context.Background(), &Options{
+		Apps: []App{app}, Profile: "fixed", Runner: func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) {
+			runnerCalls++
+			t.Errorf("runner invoked during classification")
+			return 0, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	retainedBefore := manager.jobs.RetainedJobs()
+	var before, after ListOutput
+	applicationCall(t, context.Background(), manager, "app_list", struct{}{}, &before)
+	reply := applicationCall(t, context.Background(), manager, "app_classify", input, nil)
+	if wantError {
+		if reply.OK {
+			t.Fatal("invalid classification accepted")
+		}
+	} else {
+		var out ClassifyOutput
+		if !reply.OK || wire.Decode(reply.Data, &out) != nil {
+			t.Fatalf("classification failed: %s", reply.Error)
+		}
+		if out.NonObservational != wantClass {
+			t.Fatalf("non_observational = %v, want %v", out.NonObservational, wantClass)
+		}
+	}
+	applicationCall(t, context.Background(), manager, "app_list", struct{}{}, &after)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("app_list changed: before %+v after %+v", before, after)
+	}
+	if retainedAfter := manager.jobs.RetainedJobs(); retainedAfter != retainedBefore {
+		t.Fatalf("retained jobs changed: before %d after %d", retainedBefore, retainedAfter)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("runner called %d times", runnerCalls)
+	}
+	read := applicationCall(t, context.Background(), manager, "app_read", remote.ReadInput{JobID: "fabricated-job"}, nil)
+	if read.OK {
+		t.Fatal("classification started a readable job")
+	}
+}
+
 func TestFixedIncusRoute(t *testing.T) {
 	for _, route := range [][2]string{{"guest", ""}, {"", "user"}, {"guest;id", "user"}, {"guest", "--root"}} {
 		if ValidateRoute(route[0], route[1]) == nil {

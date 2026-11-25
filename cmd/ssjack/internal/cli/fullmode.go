@@ -57,7 +57,15 @@ type fullModeOptions struct {
 	transferMaxBytes      int64
 	transferMaxEntries    int
 	noOutputFilter, named bool
+	confirmElicitation    bool
 	ttl                   time.Duration
+}
+
+// confirmConfigOutput answers the bridge MCP process's startup question about
+// elicitation. It travels only over the authenticated keeper wire channel;
+// tool arguments and agent-writable files can never set it.
+type confirmConfigOutput struct {
+	ConfirmElicitation bool `json:"confirm_elicitation"`
 }
 
 type fullModeSession struct {
@@ -175,6 +183,9 @@ func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, 
 	}
 	cleanups = append(cleanups, func(*int, *error) { transferManager.Close() })
 	session.handler = func(ctx context.Context, request wire.Request) wire.Reply {
+		if request.Operation == "confirm_config" {
+			return broker.Result(confirmConfigOutput{ConfirmElicitation: opts.confirmElicitation}, nil)
+		}
 		if reply, handled := applicationManager.Handle(ctx, request); handled {
 			return reply
 		}

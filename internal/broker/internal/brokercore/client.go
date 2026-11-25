@@ -193,6 +193,62 @@ func (c *Client) CallWait(ctx context.Context, operation string, input, output a
 	}
 }
 
+// acquire waits for the connection lock bounded by ctx, so a caller with a
+// short deadline neither queues unbounded behind a long keeper call nor
+// disturbs the current holder. When ctx ends first, a waiter goroutine hands
+// the lock back, keeping the mutex state exact.
+func (c *Client) acquire(ctx context.Context) error {
+	locked := make(chan struct{})
+	go func() {
+		c.mu.Lock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-locked
+			c.mu.Unlock()
+		}()
+		return ctx.Err()
+	}
+}
+
+// CallDetached is Call for best-effort pre-acceptance requests: ctx only
+// bounds waiting for the connection and gates issuing, and a context
+// deadline or cancellation never closes the shared connection the ordinary
+// dispatch uses. Once issued, the exchange runs under the normal IPC
+// deadline; a real transport failure still closes the connection, as in
+// Call, because it is then unusable for everyone.
+func (c *Client) CallDetached(ctx context.Context, operation string, input, output any) error {
+	data, err := wire.Encode(input)
+	if err != nil {
+		return err
+	}
+	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	defer c.mu.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	c.conn.SetDeadline(time.Now().Add(30 * time.Second))
+	var reply wire.Reply
+	if !c.exchange(operation, data, &reply) {
+		c.conn.Close()
+		return ErrSessionClosed
+	}
+	c.conn.SetDeadline(time.Time{})
+	if !reply.OK {
+		return errors.New(reply.Error)
+	}
+	if output != nil {
+		return wire.Decode(reply.Data, output)
+	}
+	return nil
+}
+
 func Result(value any, err error) wire.Reply {
 	if err != nil {
 		return wire.Reply{Error: err.Error()}

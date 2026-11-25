@@ -98,6 +98,14 @@ func NewManager(parent context.Context, targets []string, runner Runner) *Manage
 	return m
 }
 
+// RetainedJobs reports how many job records the manager holds. It exists so
+// tests and diagnostics can observe reservation without knowing a job id.
+func (m *Manager) RetainedJobs() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.jobs)
+}
+
 func (m *Manager) Close() {
 	m.mu.Lock()
 	m.closed = true

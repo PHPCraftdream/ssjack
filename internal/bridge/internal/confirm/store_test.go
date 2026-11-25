@@ -36,6 +36,39 @@ func (r *counterReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
+type nilClassify struct{}
+
+func (nilClassify) IsNonObservational(string, []byte) (bool, error) { return true, nil }
+
+func TestSetClassifyRejectsNilValues(t *testing.T) {
+	t.Run("clears_installed_classifier", func(t *testing.T) {
+		m := NewManager(nil, nil)
+		m.SetClassify(nilClassify{})
+		if m.classify == nil {
+			t.Fatal("non-nil classifier was not installed")
+		}
+		m.SetClassify(nil)
+		if m.classify != nil {
+			t.Fatal("untyped nil did not clear the classifier")
+		}
+	})
+	t.Run("typed_nil_pointer", func(t *testing.T) {
+		m := NewManager(nil, nil)
+		var classify *nilClassify
+		m.SetClassify(classify)
+		if m.classify != nil {
+			t.Fatal("typed-nil classifier was installed")
+		}
+	})
+	t.Run("nil_interface", func(t *testing.T) {
+		m := NewManager(nil, nil)
+		m.SetClassify(nil)
+		if m.classify != nil {
+			t.Fatal("nil classifier was installed")
+		}
+	})
+}
+
 func TestCreateTokensAreDeterministicAndBounded(t *testing.T) {
 	clock := &stepClock{at: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)}
 	first := NewManager(clock.Now, constantReader{b: 7})

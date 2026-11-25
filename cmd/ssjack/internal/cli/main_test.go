@@ -596,6 +596,7 @@ func TestApplicationFlagsRefusedOutsideFullMode(t *testing.T) {
 	for _, args := range [][]string{
 		{"--mode", "declarative", "--app", syntheticApp(t, "ok"), "--vault", vault, "run", "driver"},
 		{"--mode", "declarative", "--app-route", "incus:guest:operator", "--vault", vault, "run", "driver"},
+		{"--mode", "declarative", "--confirm-elicitation", "--vault", vault, "run", "driver"},
 	} {
 		code, err := Run(context.Background(), args)
 		if code == 0 || err == nil || !strings.Contains(err.Error(), "only available in full mode") {

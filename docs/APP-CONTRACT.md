@@ -23,6 +23,7 @@ ssjack -p lab --app ./first --app ./second --app-route incus:lab-guest:operator 
 - `--app-route incus:CONTAINER:USER` is optional and applies to every registered application. Without `--app` it is refused.
 - `--app-route-for APP=incus:CONTAINER:USER` is repeatable for different applications and overrides the route of one application for this invocation only. Route precedence: `--app-route-for`, then the per-app route stored in the encrypted vault, then the global `--app-route`, then no route.
 - Registration is available in full mode only. No application is enabled implicitly. Startup also scans the working folder and its immediate subfolders for candidate descriptors (default, see `docs/APP-DISCOVERY.md`): a candidate is reported, never enabled, until the owner approves it in `--interactive`; a changed descriptor needs re-approval. PATH is never scanned; only a bare `launch.executable` name is looked up on PATH, once, at startup.
+- `--confirm-elicitation` enables the optional confirmation prompt for eligible MCP operations. It is OFF by default, available in full mode only, and set at keeper startup; agents cannot enable it through tool arguments, environment, or agent-writable files.
 
 ## Descriptor: `ssjack-app.json`
 

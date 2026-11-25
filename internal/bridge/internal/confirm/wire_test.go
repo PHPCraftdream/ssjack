@@ -23,6 +23,10 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
+type nilClassifier struct{}
+
+func (*nilClassifier) IsNonObservational(string, []byte) (bool, error) { return true, nil }
+
 // fakeKeeper answers the keeper operations of the transfer and exec tools
 // and records every operation it saw.
 type fakeKeeper struct {
@@ -348,10 +352,29 @@ func TestConfirmGateEligibility(t *testing.T) {
 	})
 	t.Run("app_exec_no_elicitation_without_classification", func(t *testing.T) {
 		keeper := &fakeKeeper{}
-		session, _ := newConfirmBridge(t, ctx, keeper, nil, newManager(nil), revision2026)
+		manager := newManager(nil)
+		manager.SetClassify(nil)
+		session, _ := newConfirmBridge(t, ctx, keeper, nil, manager, revision2026)
 		result := callTool(t, ctx, session, "app_exec", callOptions{meta: formMeta()})
 		if result.RequestState != "" || len(result.InputRequests) != 0 || result.IsError {
 			t.Fatalf("app_exec was elicited without a classifier: %+v", result)
+		}
+		if text := answerText(t, result); !strings.HasPrefix(text, "Started job ") {
+			t.Fatalf("app_exec answered %q", text)
+		}
+		if ops := keeper.recorded(); len(ops) != 1 || ops[0] != "app_start" {
+			t.Fatalf("the keeper saw %v, want one app_start", ops)
+		}
+	})
+	t.Run("app_exec_typed_nil_classifier_passthrough", func(t *testing.T) {
+		keeper := &fakeKeeper{}
+		manager := newManager(nil)
+		var classifier *nilClassifier
+		manager.SetClassify(classifier)
+		session, _ := newConfirmBridge(t, ctx, keeper, nil, manager, revision2026)
+		result := callTool(t, ctx, session, "app_exec", callOptions{meta: formMeta()})
+		if result.RequestState != "" || len(result.InputRequests) != 0 || result.IsError {
+			t.Fatalf("app_exec was elicited with a typed-nil classifier: %+v", result)
 		}
 		if text := answerText(t, result); !strings.HasPrefix(text, "Started job ") {
 			t.Fatalf("app_exec answered %q", text)

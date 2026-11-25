@@ -357,6 +357,35 @@ func TestFullStartupRoutingKeepsStubCredentialsGuarded(t *testing.T) {
 	}
 }
 
+func TestConfirmElicitationStartupWireConfig(t *testing.T) {
+	oldLoad, oldLaunch := cliLoadAgentCredentials, cliLaunchRun
+	t.Cleanup(func() { cliLoadAgentCredentials, cliLaunchRun = oldLoad, oldLaunch })
+	snapshot := outputguardSnapshot(t)
+	cliLoadAgentCredentials = func(context.Context, string, string) (keeperCredentials, error) {
+		return &stubKeeperCredentials{guard: agent.FixedOutputGuard(snapshot)}, nil
+	}
+	assertStartupWireConfig := func(t *testing.T, flag, want bool) {
+		t.Helper()
+		cliLaunchRun = func(ctx context.Context, options launch.Options) (int, error) {
+			var output confirmConfigOutput
+			guardedHandlerCall(t, ctx, options.Handler, "confirm_config", struct{}{}, &output)
+			if output.ConfirmElicitation != want {
+				t.Fatal("confirm_config returned an unexpected elicitation preference")
+			}
+			return 0, nil
+		}
+		args := []string{"run", "synthetic-harness"}
+		if flag {
+			args = append([]string{"--confirm-elicitation"}, args...)
+		}
+		if code, err := Run(context.Background(), args); code != 0 || err != nil {
+			t.Fatalf("full-mode startup failed: %d %v", code, err)
+		}
+	}
+	t.Run("default_off", func(t *testing.T) { assertStartupWireConfig(t, false, false) })
+	t.Run("explicitly_on", func(t *testing.T) { assertStartupWireConfig(t, true, true) })
+}
+
 func TestMCPBootstrapOutputSetupRefusesRuntimeAfterKeeperAdmission(t *testing.T) {
 	runtime := bridgeRuntimeFixture(t, func(context.Context) error { return nil })
 	known := outputguardSnapshot(t)

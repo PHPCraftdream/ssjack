@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/PHPCraftdream/ssjack/internal/bridge"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 	"github.com/PHPCraftdream/ssjack/internal/buildinfo"
 	"github.com/PHPCraftdream/ssjack/internal/lifelog"
@@ -151,12 +152,12 @@ func TestRunMCPBootstrapProtocolDiscoverKeepsKeeperAttachment(t *testing.T) {
 	default:
 		t.Fatal("bootstrap did not attach before discovery")
 	}
-	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 0)
+	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 0, 1)
 
 	writeMCPFrame(t, clientIn, `{"jsonrpc":"2.0","id":2,"method":"server/discover","params":{`+meta+`}}`)
 	secondDiscover := sdkCallResults(t, readMCPLine(t, clientOut), false, 2)[2]
 	assertBootstrapProtocolDiscover(t, secondDiscover)
-	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 0)
+	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 0, 1)
 	select {
 	case <-keeper.Attached():
 	default:
@@ -199,7 +200,7 @@ func TestRunMCPBootstrapProtocolDiscoverKeepsKeeperAttachment(t *testing.T) {
 	if _, structured := called["structuredContent"]; structured || called["isError"] == true || !ok || len(content) != 1 || text != "1 approved target:\n- synthetic-target" {
 		t.Fatal("remote_targets did not return the attached keeper result")
 	}
-	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 1)
+	assertBootstrapKeeperCounts(t, &countsMu, counts, &attachedEvents, 1, 1, 1)
 
 	if err := clientIn.Close(); err != nil {
 		t.Fatal("could not send clean stdio EOF")
@@ -286,7 +287,7 @@ func assertBootstrapProtocolDiscover(t *testing.T, result map[string]any) {
 	}
 }
 
-func assertBootstrapKeeperCounts(t *testing.T, mu *sync.Mutex, counts map[string]int, attachedEvents *int, describes, targets int) {
+func assertBootstrapKeeperCounts(t *testing.T, mu *sync.Mutex, counts map[string]int, attachedEvents *int, describes, targets, confirms int) {
 	t.Helper()
 	mu.Lock()
 	wantOperations := 0
@@ -296,7 +297,10 @@ func assertBootstrapKeeperCounts(t *testing.T, mu *sync.Mutex, counts map[string
 	if targets != 0 {
 		wantOperations++
 	}
-	if counts["session.describe"] != describes || counts["targets"] != targets || len(counts) != wantOperations || *attachedEvents != 1 {
+	if confirms != 0 {
+		wantOperations++
+	}
+	if counts["session.describe"] != describes || counts["targets"] != targets || counts["confirm_config"] != confirms || len(counts) != wantOperations || *attachedEvents != 1 {
 		mu.Unlock()
 		t.Fatal("discovery caused an unexpected keeper operation")
 	}
@@ -848,5 +852,146 @@ func TestMCPStdioConnectionBuffersIncompleteBatchUnderClose(t *testing.T) {
 	connection.batchMu.Unlock()
 	if tracked != 1 {
 		t.Fatalf("incomplete buffered batch was dropped after close: %d entries", tracked)
+	}
+}
+
+func TestResolveConfirmManagerUsesKeeperConfiguration(t *testing.T) {
+	t.Run("enabled", func(t *testing.T) {
+		got, _, _, _, _ := resolveConfirmManagerScenario(t, true, false)
+		if got == nil {
+			t.Fatal("manager is nil for enabled configuration")
+		}
+	})
+	t.Run("disabled", func(t *testing.T) {
+		got, operations, ctx, client, cancel := resolveConfirmManagerScenario(t, false, false)
+		defer cancel()
+		if got != nil {
+			t.Fatal("manager is present for disabled configuration")
+		}
+		assertConfirmOffDispatch(t, ctx, client, operations)
+	})
+	t.Run("unavailable", func(t *testing.T) {
+		got, operations, ctx, client, cancel := resolveConfirmManagerScenario(t, false, true)
+		defer cancel()
+		if got != nil {
+			t.Fatal("manager is present for unavailable configuration")
+		}
+		assertConfirmOffDispatch(t, ctx, client, operations)
+	})
+}
+
+func resolveConfirmManagerScenario(t *testing.T, enabled, callError bool) (*bridge.ConfirmManager, func() []string, context.Context, *broker.Client, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	session, token := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	var operationsMu sync.Mutex
+	var operations []string
+	keeper, err := broker.Listen(ctx, session, token, time.Minute, func(_ context.Context, request wire.Request) wire.Reply {
+		operationsMu.Lock()
+		operations = append(operations, request.Operation)
+		operationsMu.Unlock()
+		switch request.Operation {
+		case "confirm_config":
+			if callError {
+				return wire.Reply{Error: "configuration unavailable"}
+			}
+			return broker.Result(map[string]bool{"confirm_elicitation": enabled}, nil)
+		case "transfer_upload":
+			return broker.Result(remote.StartOutput{JobID: strings.Repeat("a", 64)}, nil)
+		default:
+			return wire.Reply{Error: "unexpected operation"}
+		}
+	})
+	if err != nil {
+		cancel()
+		t.Fatal("could not start synthetic keeper")
+	}
+	t.Cleanup(keeper.Close)
+	client, err := broker.Connect(ctx, keeper.Endpoint(), keeper.Pin(), wire.Auth{Version: 2, Session: session, Token: token})
+	if err != nil {
+		cancel()
+		t.Fatal("could not connect synthetic keeper")
+	}
+	t.Cleanup(func() { client.Close() })
+	got := resolveConfirmManager(ctx, client, broker.Descriptor{Mode: broker.ModeFull}, nil)
+	operationSnapshot := func() []string {
+		operationsMu.Lock()
+		defer operationsMu.Unlock()
+		return append([]string(nil), operations...)
+	}
+	return got, operationSnapshot, ctx, client, cancel
+}
+
+func assertConfirmOffDispatch(t *testing.T, ctx context.Context, client *broker.Client, operations func() []string) {
+	t.Helper()
+	descriptor := broker.Descriptor{Mode: broker.ModeFull, Protocol: broker.FullProtocol, Complete: true, Tools: []string{"remote_targets", "remote_exec", "remote_read", "remote_cancel", "app_list", "app_exec", "app_read", "app_cancel", "remote_upload", "remote_download", "transfer_status", "transfer_cancel"}}
+	server, err := bridge.NewRegistryForDescriptorWithConfirm(client, descriptor, nil)
+	if err != nil {
+		t.Fatal("could not build confirm-off bridge registry")
+	}
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	session, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal("could not connect in-memory MCP server")
+	}
+	t.Cleanup(func() { session.Close() })
+	conn, err := clientTransport.Connect(ctx)
+	if err != nil {
+		t.Fatal("could not connect raw in-memory MCP client")
+	}
+	t.Cleanup(func() { conn.Close() })
+	initialize, err := jsonrpc.DecodeMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"confirm-off-test","version":"1"}}}`))
+	if err != nil {
+		t.Fatal("could not decode MCP initialize")
+	}
+	if err := conn.Write(ctx, initialize); err != nil {
+		t.Fatal("could not send MCP initialize")
+	}
+	if _, err := conn.Read(ctx); err != nil {
+		t.Fatal("could not read MCP initialize response")
+	}
+	initialized, err := jsonrpc.DecodeMessage([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	if err != nil {
+		t.Fatal("could not decode MCP initialized notification")
+	}
+	if err := conn.Write(ctx, initialized); err != nil {
+		t.Fatal("could not send MCP initialized notification")
+	}
+	call, err := jsonrpc.DecodeMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remote_upload","arguments":{"target":"synthetic-target","local":"synthetic-file","remote":"/tmp/synthetic"}}}`))
+	if err != nil {
+		t.Fatal("could not decode remote_upload call")
+	}
+	if err := conn.Write(ctx, call); err != nil {
+		t.Fatal("could not send remote_upload call")
+	}
+	response, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal("could not read remote_upload result")
+	}
+	encoded, err := jsonrpc.EncodeMessage(response)
+	if err != nil {
+		t.Fatal("could not encode remote_upload result")
+	}
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		t.Fatal("could not decode remote_upload result")
+	}
+	if len(envelope.Error) != 0 || envelope.Result.IsError || len(envelope.Result.Content) == 0 || !strings.HasPrefix(envelope.Result.Content[0].Text, "Started job ") {
+		t.Fatalf("remote_upload did not normally dispatch with confirmation OFF: %s", encoded)
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline) && len(operations()) < 2; {
+		time.Sleep(time.Millisecond)
+	}
+	current := operations()
+	if len(current) != 2 || current[1] != "transfer_upload" {
+		t.Fatalf("keeper operations = %v, want confirm_config and one transfer_upload", current)
 	}
 }

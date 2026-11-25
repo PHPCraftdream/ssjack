@@ -75,7 +75,7 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 	if err != nil {
 		return 1, "describe", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
-	server, err := bridge.NewRegistryForDescriptor(client, descriptor)
+	server, err := bridge.NewRegistryForDescriptorWithConfirm(client, descriptor, resolveConfirmManager(ctx, client, descriptor, life))
 	if err != nil {
 		return 1, "registry", errors.New("keeper descriptor unavailable or invalid; refusing MCP startup")
 	}
@@ -96,6 +96,27 @@ func serveMCP(ctx context.Context, life *lifelog.Log) (int, string, error) {
 		return 1, "stdio", errors.New("MCP bridge session failed")
 	}
 	return 0, "stdio-closed", nil
+}
+
+// resolveConfirmManager asks the keeper once whether the owner started it
+// with --confirm-elicitation. Only the authenticated keeper wire channel can
+// answer yes; a failed or unavailable answer defaults to OFF, keeping
+// today's behavior byte-for-byte.
+func resolveConfirmManager(ctx context.Context, client *broker.Client, descriptor broker.Descriptor, life *lifelog.Log) *bridge.ConfirmManager {
+	if descriptor.Mode != broker.ModeFull {
+		return nil
+	}
+	var config struct {
+		Enabled bool `json:"confirm_elicitation"`
+	}
+	if err := client.Call(ctx, "confirm_config", struct{}{}, &config); err != nil {
+		life.Event("confirm-config-unavailable")
+		return nil
+	}
+	if !config.Enabled {
+		return nil
+	}
+	return bridge.NewConfirmManager(client, nil, nil)
 }
 
 // stdioCause names the bridge's own stdio refusals, which the generic classes

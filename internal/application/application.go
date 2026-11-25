@@ -48,6 +48,13 @@ type Input struct {
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty" jsonschema:"Operation timeout, 1 to 3600 seconds; default 600"`
 }
 
+// ClassifyOutput reports only the command class of one registered application
+// operation. It exists for the MCP elicitation gate's pre-acceptance check and
+// carries nothing else.
+type ClassifyOutput struct {
+	NonObservational bool `json:"non_observational"`
+}
+
 type Description struct {
 	Name      string `json:"name"`
 	Profile   string `json:"profile"`
@@ -253,6 +260,20 @@ func (m *Manager) Handle(ctx context.Context, request wire.Request) (wire.Reply,
 			out.Hint = noApplicationHint
 		}
 		return broker.Result(out, nil), true
+	case "app_classify":
+		var input Input
+		if wire.Decode(request.Data, &input) != nil {
+			return broker.Result(nil, errors.New("invalid application arguments")), true
+		}
+		// Classification runs the exact admission checks of app_start with the
+		// confirm rule satisfied, then reports only the descriptor's command
+		// class. It must never start a job: nothing here reaches m.jobs.
+		input.Confirm = true
+		if err := m.validateInput(input); err != nil {
+			return broker.Result(nil, err), true
+		}
+		app := m.apps[input.Application]
+		return broker.Result(ClassifyOutput{NonObservational: !app.observational[input.Arguments[0]]}, nil), true
 	case "app_start", "app_read", "app_cancel":
 		if m.jobs == nil {
 			return broker.Result(nil, errors.New("no application registered; start the keeper with --app DIR")), true

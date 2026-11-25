@@ -1,8 +1,12 @@
 package bridge
 
 import (
+	"io"
+	"time"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	confirm "github.com/PHPCraftdream/ssjack/internal/bridge/internal/confirm"
 	tooltext "github.com/PHPCraftdream/ssjack/internal/bridge/internal/tooltext"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
 )
@@ -31,6 +35,19 @@ func NewFullServer(client *broker.Client) *mcp.Server {
 // NewRegistryForDescriptor selects the registry a broker descriptor asks for.
 func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descriptor) (*mcp.Server, error) {
 	return tooltext.NewRegistryForDescriptor(client, descriptor)
+}
+
+// ConfirmManager is the optional manager used for interactive tool approval.
+type ConfirmManager = confirm.Manager
+
+// NewConfirmManager builds the elicitation manager wired to the keeper.
+func NewConfirmManager(client *broker.Client, now func() time.Time, random io.Reader) *ConfirmManager {
+	return tooltext.NewConfirmManager(client, now, random)
+}
+
+// NewRegistryForDescriptorWithConfirm selects the registry and optional approval manager.
+func NewRegistryForDescriptorWithConfirm(client *broker.Client, descriptor broker.Descriptor, confirmMgr *ConfirmManager) (*mcp.Server, error) {
+	return tooltext.NewRegistryForDescriptorWithConfirm(client, descriptor, confirmMgr)
 }
 
 // ParseResult is the reference reader of the text contract: it fills out from

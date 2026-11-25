@@ -82,7 +82,7 @@ func TestOwnerAndTextHelpStateActualBoundaries(t *testing.T) {
 func TestRootHelpListsPrimaryWorkflows(t *testing.T) {
 	var output bytes.Buffer
 	PrintRootHelp(&output)
-	for _, fragment := range []string{"ssjack ssh", "ssjack run claude -c", "ssjack add", "--vault FILE", "--version", "doctor", "rotate", "hostkey", "ssjack --interactive", "--server NAME", "--account NAME", "--mode full|declarative", "--enrollment-metadata", "--policy-snapshot", "--enrollment-identity", "text-adapter", "IMPORT"} {
+	for _, fragment := range []string{"ssjack ssh", "ssjack run claude -c", "ssjack add", "--vault FILE", "--version", "doctor", "rotate", "hostkey", "ssjack --interactive", "--server NAME", "--account NAME", "--mode full|declarative", "--enrollment-metadata", "--policy-snapshot", "--enrollment-identity", "--confirm-elicitation", "text-adapter", "IMPORT"} {
 		if !strings.Contains(output.String(), fragment) {
 			t.Fatalf("root help is missing %q", fragment)
 		}

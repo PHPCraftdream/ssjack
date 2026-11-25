@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -418,4 +419,89 @@ func TestDescriptorRejectsUnexpectedToolsAndProtocol(t *testing.T) {
 	if ValidateDescriptor(Descriptor{Protocol: "1", Mode: ModeDeclarative, Complete: false}) == nil {
 		t.Fatal("accepted ambiguous protocol")
 	}
+}
+
+func TestCallDetachedBoundsWaitAndPreservesConnection(t *testing.T) {
+	t.Run("timeout_leaves_connection_usable", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		auth := wire.Auth{Version: 2, Session: strings.Repeat("5", 64), Token: strings.Repeat("6", 64)}
+		keeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
+			switch req.Operation {
+			case "slow":
+				time.Sleep(700 * time.Millisecond)
+			case "fast":
+			}
+			return wire.Reply{OK: true, Data: req.Data}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
+		if err != nil {
+			keeper.Close()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			client.Close()
+			keeper.Close()
+		})
+
+		slowDone := make(chan error, 1)
+		go func() { slowDone <- client.Call(ctx, "slow", struct{}{}, nil) }()
+		time.Sleep(50 * time.Millisecond)
+
+		shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer shortCancel()
+		var out struct{}
+		if err := client.CallDetached(shortCtx, "fast", struct{}{}, &out); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CallDetached error = %v, want context.DeadlineExceeded", err)
+		}
+		if err := <-slowDone; err != nil {
+			t.Fatalf("slow Call = %v", err)
+		}
+		if err := client.Call(ctx, "fast", struct{}{}, &out); err != nil {
+			t.Fatalf("Call after detached timeout = %v", err)
+		}
+	})
+
+	t.Run("sends_raw_json_body_verbatim", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		auth := wire.Auth{Version: 2, Session: strings.Repeat("7", 64), Token: strings.Repeat("8", 64)}
+		keeper, err := Listen(ctx, auth.Session, auth.Token, time.Minute, func(_ context.Context, req wire.Request) wire.Reply {
+			if req.Operation == "probe" {
+				var input struct {
+					Application string `json:"application"`
+				}
+				if err := wire.Decode(req.Data, &input); err != nil {
+					return Result(nil, err)
+				}
+				return Result(input, nil)
+			}
+			return wire.Reply{Error: "unexpected operation"}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := Connect(ctx, keeper.Endpoint(), keeper.Pin(), auth)
+		if err != nil {
+			keeper.Close()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			client.Close()
+			keeper.Close()
+		})
+
+		var out struct {
+			Application string `json:"application"`
+		}
+		if err := client.CallDetached(ctx, "probe", json.RawMessage(`{"application":"app"}`), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Application != "app" {
+			t.Fatalf("Application = %q, want app", out.Application)
+		}
+	})
 }

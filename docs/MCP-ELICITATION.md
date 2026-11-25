@@ -1,6 +1,6 @@
 # MCP Elicitation for confirmation
 
-**Status:** design proposal; not implemented. This document proposes an optional, capability-gated human-confirmation step for the existing MCP tools. It does not change keeper authorization, tool arguments, job semantics, or default behavior. No tests have been run for this design.
+**Status:** The confirmation gate is implemented and wired behind the owner startup flag `--confirm-elicitation` (default OFF). OFF preserves byte-for-byte unchanged behavior; the feature is available in full mode only and is set only at keeper startup, never through tool arguments, environment in agent reach, or agent-writable files. This slice is not a vault setting. Whether the real Claude Code client sends the `_meta` form capability remains **UNVERIFIED**.
 
 ## 1. Purpose and scope
 
@@ -124,9 +124,9 @@ Tool errors above are only possible when the server receives a retry (or when an
 
 ## 6. Jobs, tasks, and listener boundaries
 
-### app_exec classification proposal
+### app_exec classification
 
-`app_exec` eligibility must be determined without starting a job or launching the application. Add a side-effect-free classify operation over the existing broker/application path that validates the registered application/command and returns only the observational-versus-non-observational class needed by the bridge. This classification is the only keeper request permitted before accepted retry, and only for `app_exec`; it must not reserve a job, create a task record, launch the application, stage anything, or otherwise change state. The actual execution path must recheck the keeper's classification and all existing guards immediately before execution; the keeper remains authoritative. Do not treat bridge-side classification as authorization or a substitute for keeper validation.
+`app_exec` eligibility is determined by the keeper's side-effect-free `app_classify` operation. It validates the registered application and command with the exact admission checks of `app_start` minus the confirm rule, and returns only `non_observational`. The bridge classifier calls it with a 3-second deadline and holds no keeper connection while the human decides. Execution still rechecks everything; the keeper remains authoritative. If classification fails or the application is unknown, `app_exec` is not elicited.
 
 Confirmation precedes every state-changing keeper call. Before an accepted retry, do not start a job, start a transfer, stage data, reserve a job, create a task record, hold the keeper broker connection while awaiting the user, or make any other state-changing keeper call. The sole permitted pre-acceptance keeper request is the side-effect-free app_exec classification described above. Only after a valid accepted retry does the bridge execute the existing tool handler.
 
@@ -140,7 +140,7 @@ Existing Tasks support is specifically for transfer tools and is implemented by 
 
 ## 7. Owner-controlled optional policy
 
-The optional elicitation feature is **OFF by default**. Step one adds an explicit owner-controlled enablement point, such as startup/keeper flag or vault configuration, inaccessible to tool arguments and agent-writable files. When OFF, the existing request path and wire behavior remain byte-for-byte unchanged. When ON, a declared-form-capable client's inability to display the prompt and resulting cancellation means no start; with no retry the server cannot emit a final tool result. This is an explicit owner trade-off, not an accidental loss of current behavior. A future mandatory-per-operation mode is out of scope. No policy can be changed by the model through arguments or workspace files.
+The optional elicitation feature is **OFF by default**. Its enablement point is the `ssjack --confirm-elicitation run` startup flag in full mode. The flag value travels from the keeper to the bridge MCP process (`ssjack mcp`) over the existing authenticated keeper wire channel as a `confirm_config` operation, answered at bridge startup; an unavailable or failed answer defaults to OFF. When OFF, the existing request path and wire behavior remain byte-for-byte unchanged. When ON, a declared-form-capable client's inability to display the prompt and resulting cancellation means no start; with no retry the server cannot emit a final tool result. This is an explicit owner trade-off, not an accidental loss of current behavior. A future mandatory-per-operation mode is out of scope. No policy can be changed by the model through arguments or workspace files.
 
 ## 8. Implementation plan
 

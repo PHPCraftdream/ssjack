@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -59,6 +61,12 @@ func NewServer(client *broker.Client) *mcp.Server {
 }
 
 func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descriptor) (*mcp.Server, error) {
+	return NewRegistryForDescriptorWithConfirm(client, descriptor, nil)
+}
+
+// NewRegistryForDescriptorWithConfirm validates a keeper descriptor and builds
+// the corresponding server with an optional elicitation manager.
+func NewRegistryForDescriptorWithConfirm(client *broker.Client, descriptor broker.Descriptor, confirmMgr *confirm.Manager) (*mcp.Server, error) {
 	if err := broker.ValidateDescriptor(descriptor); err != nil {
 		return nil, err
 	}
@@ -95,7 +103,34 @@ func NewRegistryForDescriptor(client *broker.Client, descriptor broker.Descripto
 	if descriptor.Mode == broker.ModeDeclarative {
 		return NewDeclarativeServer(), nil
 	}
-	return NewFullServer(client), nil
+	return NewFullServerWithClockAndConfirm(client, nil, confirmMgr), nil
+}
+
+// brokerClassifyDeadline bounds the pre-acceptance classification keeper call;
+// the gate holds no keeper connection while the human decides.
+const brokerClassifyDeadline = 3 * time.Second
+
+// brokerClassifier asks the keeper's side-effect-free app_classify operation.
+// Any failure means "not eligible": app_exec then keeps today's flow.
+type brokerClassifier struct{ client *broker.Client }
+
+func (c brokerClassifier) IsNonObservational(tool string, canonicalArgs []byte) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), brokerClassifyDeadline)
+	defer cancel()
+	var out application.ClassifyOutput
+	// The detached call can neither wedge behind a long keeper call past its deadline nor close the connection the accepted retry uses.
+	if err := c.client.CallDetached(ctx, "app_classify", json.RawMessage(canonicalArgs), &out); err != nil {
+		return false, err
+	}
+	return out.NonObservational, nil
+}
+
+// NewConfirmManager builds the elicitation manager wired to the keeper's
+// classification operation. now and random are test seams (nil is real).
+func NewConfirmManager(client *broker.Client, now func() time.Time, random io.Reader) *confirm.Manager {
+	mgr := confirm.NewManager(now, random)
+	mgr.SetClassify(brokerClassifier{client: client})
+	return mgr
 }
 
 // readTool serves one polling read of a command or application job.

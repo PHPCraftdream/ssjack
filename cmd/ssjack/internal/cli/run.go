@@ -106,6 +106,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	var appRouteFlags routes.Flags
 	flags.Var(&appRouteFlags, "app-route-for", "Owner-supplied per-app route override APP=incus:CONTAINER:USER for this invocation (repeatable, full mode)")
 	appRoute := flags.String("app-route", "", "Fixed Incus route incus:CONTAINER:USER for registered applications")
+	confirmElicitation := flags.Bool("confirm-elicitation", false, "Ask a form-capable MCP client to confirm overwrite transfers and non-observational app_exec before they start (full mode)")
 	var transferRootSpecs transfercmd.RootFlags
 	flags.Var(&transferRootSpecs, "transfer-root", "Register a transfer root as [NAME=]DIR (repeatable, full mode)")
 	transferMaxBytes := flags.Int64("transfer-max-bytes", transfercore.DefaultLimits().MaxBytes, "Maximum total bytes per transfer (full mode)")
@@ -163,13 +164,20 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 		return 1, errors.New("--transfer-root, --transfer-max-bytes and --transfer-max-entries are only available in full mode")
 	}
 	appFlagsSupplied := false
+	confirmElicitationSupplied := false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "app" || f.Name == "app-route" || f.Name == "app-route-for" {
 			appFlagsSupplied = true
 		}
+		if f.Name == "confirm-elicitation" {
+			confirmElicitationSupplied = true
+		}
 	})
 	if appFlagsSupplied && *modeFlag != string(broker.ModeFull) {
 		return 1, errors.New("--app, --app-route and --app-route-for are only available in full mode")
+	}
+	if confirmElicitationSupplied && *modeFlag != string(broker.ModeFull) {
+		return 1, errors.New("--confirm-elicitation is only available in full mode")
 	}
 	selectorProfile, named, selectionErr := startupSelection(flags, profile, *server, *account)
 	if selectionErr != nil {
@@ -264,6 +272,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 			transferRoots:      transferRootSpecs,
 			transferMaxBytes:   *transferMaxBytes,
 			transferMaxEntries: *transferMaxEntries,
+			confirmElicitation: *confirmElicitation,
 			noOutputFilter:     *noOutputFilter,
 			named:              named,
 			ttl:                *ttl,
