@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -359,4 +360,32 @@ func TestFixedIncusRoute(t *testing.T) {
 	if err != nil || gotProfile != "fixed" || gotCommand != want {
 		t.Fatal("fixed route or inner quoting changed")
 	}
+}
+
+func TestApplicationCancelAnswersTruthfully(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	manager := fixtureManager(t, ctx)
+
+	t.Run("cancel of a finished application job reports not cancelled and keeps state", func(t *testing.T) {
+		var start remote.StartOutput
+		applicationCall(t, ctx, manager, "app_start", Input{Application: fixtureName, Arguments: []string{"inspect"}}, &start)
+		finished := readApplication(t, ctx, manager, start.JobID)
+		var out remote.CancelOutput
+		applicationCall(t, ctx, manager, "app_cancel", remote.JobInput{JobID: start.JobID}, &out)
+		if out.Cancelled {
+			t.Fatalf("app_cancel of a finished job answered %+v", out)
+		}
+		again := readApplication(t, ctx, manager, start.JobID)
+		if again.ExitCode != finished.ExitCode || !bytes.Equal(again.Stdout, finished.Stdout) {
+			t.Fatalf("finished application state changed: %+v then %+v", finished, again)
+		}
+	})
+
+	t.Run("cancel of an unknown application job errors", func(t *testing.T) {
+		reply := applicationCall(t, ctx, manager, "app_cancel", remote.JobInput{JobID: "fabricated-job"}, nil)
+		if reply.OK || !strings.Contains(reply.Error, "unknown operation") {
+			t.Fatalf("app_cancel of an unknown id answered %+v", reply)
+		}
+	})
 }

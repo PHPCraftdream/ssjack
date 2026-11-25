@@ -159,4 +159,5 @@ type job struct {
 	mu     sync.Mutex
 	exit   int
 	err    string
+	ended  bool
 }

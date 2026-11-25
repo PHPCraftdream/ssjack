@@ -191,6 +191,7 @@ func (m *Manager) Start(input StartInput) (StartOutput, error) {
 		if err != nil {
 			j.err = err.Error()
 		}
+		j.ended = true
 		j.mu.Unlock()
 		m.mu.Lock()
 		m.active--
@@ -300,11 +301,22 @@ func (m *Manager) ReadWait(ctx context.Context, input ReadInput) (ReadOutput, er
 	}
 }
 
+// Cancel reports whether a cancellation was requested while the job had not
+// yet recorded a terminal state. A job that already ended answers false and
+// is not signalled. A job ending at the same moment keeps its own recorded
+// outcome: a true answer means only that cancellation was requested, and the
+// caller reads the record to learn the final state.
 func (m *Manager) Cancel(id string) (CancelOutput, error) {
 	j, err := m.get(id)
 	if err != nil {
 		return CancelOutput{}, err
 	}
+	j.mu.Lock()
+	if j.ended {
+		j.mu.Unlock()
+		return CancelOutput{Cancelled: false}, nil
+	}
+	j.mu.Unlock()
 	j.cancel()
 	return CancelOutput{Cancelled: true}, nil
 }

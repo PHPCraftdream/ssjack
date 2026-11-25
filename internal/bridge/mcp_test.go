@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"io"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -236,4 +238,117 @@ func TestMCPParseResultRejectsForeignAndNonPointerResults(t *testing.T) {
 			t.Fatalf("ParseResult accepted or mislabeled %T: err %v, want %q", out.result, err, out.want)
 		}
 	}
+}
+
+var cancelStartedJob = regexp.MustCompile(`Started job (\S+)`)
+
+func TestCancelToolsReportTheKeeperAnswer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("remote_cancel of a running job says cancelled", func(t *testing.T) {
+		manager := remote.NewManager(ctx, []string{"t"}, func(ctx context.Context, _, _ string, _, _ io.Writer) (int, error) {
+			<-ctx.Done()
+			return -1, ctx.Err()
+		})
+		session, _ := connectBridge(t, ctx, func(callCtx context.Context, req wire.Request) wire.Reply { return manager.Handle(callCtx, req) }, nil)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_exec", Arguments: map[string]any{"target": "t", "command": "wait"}})
+		if err != nil || res.IsError {
+			t.Fatalf("remote_exec failed: result=%+v err=%v", res, err)
+		}
+		text, err := ResultText(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := cancelStartedJob.FindStringSubmatch(text)
+		if len(id) != 2 {
+			t.Fatalf("could not extract job ID from %q", text)
+		}
+		res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_cancel", Arguments: map[string]any{"job_id": id[1]}})
+		if err != nil || res.IsError {
+			t.Fatalf("remote_cancel failed: result=%+v err=%v", res, err)
+		}
+		text, err = ResultText(res)
+		if err != nil || text != "Cancelled job "+id[1] {
+			t.Fatalf("remote_cancel answered %q: %v", text, err)
+		}
+	})
+
+	t.Run("remote_cancel of a finished job says it had already finished", func(t *testing.T) {
+		manager := remote.NewManager(ctx, []string{"t"}, func(_ context.Context, _, _ string, _, _ io.Writer) (int, error) { return 0, nil })
+		session, _ := connectBridge(t, ctx, func(callCtx context.Context, req wire.Request) wire.Reply { return manager.Handle(callCtx, req) }, nil)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_exec", Arguments: map[string]any{"target": "t", "command": "done"}})
+		if err != nil || res.IsError {
+			t.Fatalf("remote_exec failed: result=%+v err=%v", res, err)
+		}
+		text, err := ResultText(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := cancelStartedJob.FindStringSubmatch(text)
+		if len(id) != 2 {
+			t.Fatalf("could not extract job ID from %q", text)
+		}
+		res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_read", Arguments: map[string]any{"job_id": id[1], "wait_seconds": 20}})
+		if err != nil || res.IsError {
+			t.Fatalf("remote_read failed: result=%+v err=%v", res, err)
+		}
+		doneText, err := ResultText(res)
+		if err != nil || !strings.Contains(doneText, "done (exit code 0)") {
+			t.Fatalf("job not observed done: %q, %v", doneText, err)
+		}
+		res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_cancel", Arguments: map[string]any{"job_id": id[1]}})
+		if err != nil || res.IsError {
+			t.Fatalf("remote_cancel failed: result=%+v err=%v", res, err)
+		}
+		text, err = ResultText(res)
+		if err != nil || text != "Job "+id[1]+" had already finished" {
+			t.Fatalf("remote_cancel answered %q: %v", text, err)
+		}
+	})
+
+	t.Run("remote_cancel of an unknown job errors", func(t *testing.T) {
+		manager := remote.NewManager(ctx, []string{"t"}, func(_ context.Context, _, _ string, _, _ io.Writer) (int, error) { return 0, nil })
+		session, _ := connectBridge(t, ctx, func(callCtx context.Context, req wire.Request) wire.Reply { return manager.Handle(callCtx, req) }, nil)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "remote_cancel", Arguments: map[string]any{"job_id": "no-such-job"}})
+		if err != nil || !res.IsError {
+			t.Fatalf("remote_cancel of an unknown job = %+v, %v", res, err)
+		}
+	})
+
+	t.Run("app_cancel of a running job says cancelled", func(t *testing.T) {
+		handler := func(_ context.Context, req wire.Request) wire.Reply {
+			if req.Operation == "app_cancel" {
+				return broker.Result(remote.CancelOutput{Cancelled: true}, nil)
+			}
+			return wire.Reply{Error: "denied"}
+		}
+		session, _ := connectBridge(t, ctx, handler, nil)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "app_cancel", Arguments: map[string]any{"job_id": "app-job"}})
+		if err != nil || res.IsError {
+			t.Fatalf("app_cancel failed: result=%+v err=%v", res, err)
+		}
+		text, err := ResultText(res)
+		if err != nil || text != "Cancelled job app-job" {
+			t.Fatalf("unexpected cancellation result %q: %v", text, err)
+		}
+	})
+
+	t.Run("app_cancel of a finished job says it had already finished", func(t *testing.T) {
+		handler := func(_ context.Context, req wire.Request) wire.Reply {
+			if req.Operation == "app_cancel" {
+				return broker.Result(remote.CancelOutput{Cancelled: false}, nil)
+			}
+			return wire.Reply{Error: "denied"}
+		}
+		session, _ := connectBridge(t, ctx, handler, nil)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "app_cancel", Arguments: map[string]any{"job_id": "app-job"}})
+		if err != nil || res.IsError {
+			t.Fatalf("app_cancel failed: result=%+v err=%v", res, err)
+		}
+		text, err := ResultText(res)
+		if err != nil || text != "Job app-job had already finished" {
+			t.Fatalf("unexpected cancellation result %q: %v", text, err)
+		}
+	})
 }

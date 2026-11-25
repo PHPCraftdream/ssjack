@@ -368,8 +368,8 @@ A client that declares the MCP tasks extension (`io.modelcontextprotocol/tasks`)
   keeper's hint, for example that the owner starts the keeper with `--app DIR`).
 - `remote_exec`, `app_exec`: `Started job <job_id>`, then
   `Read output with remote_read|app_read job_id=<job_id>; use wait_seconds 20 to wait for it.`
-- `remote_cancel`, `app_cancel`: `Cancelled job <job_id>`, or
-  `Job <job_id> had already finished`.
+- `remote_cancel`, `app_cancel`: `Cancelled job <job_id>` (a cancellation was requested while the job had not ended; if it finishes at the same moment, its own outcome is retained), or
+  `Job <job_id> had already finished` (the job was no longer running: done, failed, timed out or already cancelled; its recorded state and output are unchanged).
 - `remote_read`, `app_read`: the lines below, in this order.
   1. `Job <job_id>: running` or `Job <job_id>: done (exit code <n>)`.
   2. `Error: <message>` when the job ended with an error (one line).
