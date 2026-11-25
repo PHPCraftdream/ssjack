@@ -227,7 +227,7 @@ func TestCancelAnswersTruthfully(t *testing.T) {
 		if err != nil || !result.Cancelled {
 			t.Fatalf("Cancel() = %+v, %v", result, err)
 		}
-		close(release)
+		releaseOnce()
 		awaitJob(t, m, job.JobID)
 		got, err := m.Read(ReadInput{JobID: job.JobID})
 		if err != nil {
@@ -262,7 +262,7 @@ func TestCancelAnswersTruthfully(t *testing.T) {
 		if err != nil || !result.Cancelled {
 			t.Fatalf("Cancel() = %+v, %v", result, err)
 		}
-		close(release)
+		releaseOnce()
 		awaitJob(t, m, job.JobID)
 		got, err := m.Read(ReadInput{JobID: job.JobID})
 		if err != nil {
