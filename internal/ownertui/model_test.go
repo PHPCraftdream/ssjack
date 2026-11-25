@@ -504,7 +504,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 				refreshedPath = candidate.CanonicalPath
 			}
 		}
-		if !ok || cursor < 0 || cursor >= len(entries) || entries[cursor].Name != "service-a" || entries[cursor].DisplayPath != `"svc-z"` || mut.Path != refreshedPath || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
+		if !ok || cursor < 0 || cursor >= len(entries) || entries[cursor].Name != `"service-a"` || entries[cursor].DisplayPath != `"svc-z"` || mut.Path != refreshedPath || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
 			t.Fatalf("reviewed row not selected after reordering: mutation=%+v cursor=%d entries=%+v view=%q", mut, cursor, entries, m.View().Content)
 		}
 		canonical := discovery.Scan(root).Candidates[0].CanonicalPath
