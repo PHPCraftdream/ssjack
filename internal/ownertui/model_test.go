@@ -154,7 +154,7 @@ func selectApprovalRow(t *testing.T, m *Model, name string) {
 		cursor := m.approvals.Cursor()
 		if cursor >= 0 && cursor < len(entries) {
 			entry := entries[cursor]
-			if entry.Name == name || entry.Record.Name == name {
+			if entry.Name == fmt.Sprintf("%q", name) || entry.Record.Name == name {
 				return
 			}
 		}
