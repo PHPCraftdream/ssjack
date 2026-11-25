@@ -165,7 +165,7 @@ func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 		t.Fatalf("the keeper started %d jobs, want exactly one transfer", len(minted))
 	}
 	jobID := minted[0]
-	requireOps(t, keeper, "session.describe", "transfer_upload")
+	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload")
 
 	frame, ok := logbook.contains(`"resultType":"task"`)
 	if !ok {
@@ -216,7 +216,7 @@ func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 	if text := requireSingleText(t, "tasks/get", got.Result); text != wantText {
 		t.Fatalf("the completed task text was\n%s\nwant\n%s", text, wantText)
 	}
-	requireOps(t, keeper, "session.describe", "transfer_upload", "transfer_status")
+	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload", "transfer_status")
 
 	acked, err := mcp.CallCustomMethod[*taskUpdateParams, *taskAck, taskUpdateParams](ctx, session, "tasks/update", &taskUpdateParams{TaskID: jobID, InputResponses: map[string]json.RawMessage{"name": json.RawMessage(`{"action":"accept"}`)}})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 	if cancelled.ResultType != "complete" {
 		t.Fatalf("tasks/cancel reported resultType %q, want complete", cancelled.ResultType)
 	}
-	requireOps(t, keeper, "session.describe", "transfer_upload", "transfer_status")
+	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload", "transfer_status")
 
 	mark := logbook.mark()
 	for _, call := range []struct {
@@ -341,7 +341,7 @@ func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {
 		t.Fatalf("tasks/cancel answered %#v (%v), want a complete ack", cancelled, err)
 	}
 
-	requireOps(t, keeper, "session.describe", "transfer_upload", "transfer_status", "transfer_status", "transfer_status")
+	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload", "transfer_status", "transfer_status", "transfer_status")
 	for index, frame := range logbook.since(0) {
 		if leaked := leakedSentinel(frame, sentinelLine, sentinelText); leaked != "" {
 			t.Fatalf("recorded frame %d carries the keeper record sentinel %q: %s", index, leaked, frame)
