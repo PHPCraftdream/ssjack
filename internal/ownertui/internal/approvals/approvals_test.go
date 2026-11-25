@@ -178,6 +178,28 @@ func TestListOverflowKeepsRecords(t *testing.T) {
 }
 
 func TestUnmatchedRecords(t *testing.T) {
+	t.Run("root missing descriptor is quiet but invalid descriptor remains visible", func(t *testing.T) {
+		root := t.TempDir()
+		entries := List(root, nil)
+		for _, entry := range entries {
+			if entry.DisplayPath == `"."` {
+				t.Fatalf("missing root descriptor rendered: %+v", entry)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, application.DescriptorFile), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		entries = List(root, nil)
+		found := false
+		for _, entry := range entries {
+			if entry.DisplayPath == `"."` && entry.Reason == "descriptor_invalid" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("invalid root descriptor diagnostic missing: %+v", entries)
+		}
+	})
 	t.Run("reports missing invalid and unscanned paths", func(t *testing.T) {
 		root := t.TempDir()
 		inside := filepath.Join(root, "empty")
@@ -197,7 +219,7 @@ func TestUnmatchedRecords(t *testing.T) {
 		}
 		records := []vault.Approval{{Name: "one", Path: inside}, {Name: "two", Path: filepath.Join(root, "gone")}, {Name: "three", Path: invalid}, {Name: "four", Path: filepath.Join(t.TempDir(), "outside")}, {Name: "five", Path: near}}
 		entries := List(root, records)
-		want := map[string]string{inside: "descriptor_missing", filepath.Join(root, "gone"): "descriptor_missing", invalid: "descriptor_invalid", near: "not_scanned"}
+		want := map[string]string{inside: "descriptor_missing", filepath.Join(root, "gone"): "descriptor_missing", invalid: "descriptor_invalid", near: "descriptor_missing"}
 		found := map[string]bool{}
 		for _, e := range entries {
 			if reason, ok := want[e.Record.Path]; ok {

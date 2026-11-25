@@ -77,6 +77,9 @@ func List(root string, records []vault.Approval) []Entry {
 			entries = append(entries, entry)
 		}
 		for _, diagnostic := range scan.Diagnostics {
+			if diagnostic.Path == "." && diagnostic.Reason == "descriptor_missing" {
+				continue
+			}
 			path, safe := display(diagnostic.Path)
 			entry := Entry{Status: StatusUnsafe, Reason: diagnostic.Reason, DisplayPath: path, PathSafe: safe}
 			if !safe {

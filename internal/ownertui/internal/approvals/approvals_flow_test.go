@@ -116,12 +116,34 @@ func TestVerifiedRevoke(t *testing.T) {
 			t.Fatalf("apply err=%v calls=%d", err, ops.revokeCalls)
 		}
 	})
-	t.Run("revoke confirmation verifies live record", func(t *testing.T) {
+	t.Run("matching live record revokes through confirmation", func(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-a", "service-a")
 		scan := discovery.Scan(root)
 		record := vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}
 		ops := &fakeVaultOps{records: []vault.Approval{record}}
+		c := New(nil, root, nil)
+		c.SetRecords([]vault.Approval{record})
+		c.Refresh()
+		for i, entry := range c.Entries() {
+			if entry.Record.Name == record.Name {
+				c.Select(i)
+				break
+			}
+		}
+		c.Revoke()
+		c.vault = ops
+		if err := c.RevokeConfirm(); err != nil || ops.revokeCalls != 1 {
+			t.Fatalf("err=%v calls=%d", err, ops.revokeCalls)
+		}
+	})
+	t.Run("changed live hash refuses confirmation", func(t *testing.T) {
+		root := t.TempDir()
+		putDescriptor(t, root, "svc-a", "service-a")
+		scan := discovery.Scan(root)
+		record := vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}
+		live := vault.Approval{Name: record.Name, Path: record.Path, Hash: strings.Repeat("b", 64)}
+		ops := &fakeVaultOps{records: []vault.Approval{live}}
 		c := New(nil, root, nil)
 		c.SetRecords([]vault.Approval{record})
 		c.Refresh()
@@ -476,7 +498,8 @@ func TestChangedReapprovalAndStaleConflict(t *testing.T) {
 		}
 		c.Refresh()
 		c.Select(0)
-		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: newHash}, newHash); err != nil {
+		changedPath := scan.Candidates[0].CanonicalPath
+		if err := v.ApproveApplication(vault.Approval{Name: "service-a", Path: changedPath, Hash: hex.EncodeToString(make([]byte, 32))}, newHash); err != nil {
 			t.Fatal(err)
 		}
 		c.Arm()

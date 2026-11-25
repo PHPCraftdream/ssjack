@@ -132,6 +132,9 @@ func (c *Controller) pinnedEntryIndex() int {
 			if e.Status != StatusCandidate && e.Status != StatusChanged {
 				continue
 			}
+			if c.pending.Replaces != "" && e.Record.Hash != c.pending.Replaces {
+				continue
+			}
 			return i
 		case "revoke":
 			if (e.Status == StatusApproved || e.Status == StatusChanged) && e.Record.Name == c.pending.Name && e.Record.Hash == c.pending.Replaces {
