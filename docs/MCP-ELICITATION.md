@@ -1,6 +1,6 @@
 # MCP Elicitation for confirmation
 
-**Status:** The confirmation gate is implemented and wired behind the owner startup flag `--confirm-elicitation` (default OFF). OFF preserves byte-for-byte unchanged behavior; the feature is available in full mode only and is set only at keeper startup, never through tool arguments, environment in agent reach, or agent-writable files. This slice is not a vault setting. Whether the real Claude Code client sends the `_meta` form capability remains **UNVERIFIED**.
+**Status:** The confirmation gate is implemented and wired behind the owner startup flag `--confirm-elicitation` (default OFF). OFF preserves byte-for-byte unchanged behavior; the feature is available in full mode only and is set only at keeper startup, never through tool arguments, environment in agent reach, or agent-writable files. This slice is not a vault setting. Live verification on 2026-11-25: with `--confirm-elicitation` set at keeper startup, a real Claude Code client `remote_upload` call with `overwrite=true` and `confirm=true` displayed a form dialog before the operation started; Accept started the server-side task (matching SHA-256), Decline answered `operation was not started: declined` with no job started; without the flag the same call ran with no dialog, unchanged from before the feature. Not verified live: the client's version string, the dialog's exact visual presentation, `app_exec` behavior, the Cancel action, and the dialog timeout.
 
 ## 1. Purpose and scope
 
@@ -182,6 +182,10 @@ Tests should prove absence of side effects using a counting/fake keeper and shou
 8. **Should mandatory owner policy be included now?** Proposed default: explicitly no; the optional feature itself is enabled only by owner-controlled startup/keeper or vault configuration, OFF by default. Mandatory-per-operation policy remains future/out of scope; no setting is accessible to model-controlled arguments or agent-writable files.
 
 ## Source basis and unverified claims
+
+### Verified live
+
+On 2026-11-25, one real Claude Code client was tested with `remote_upload` using `overwrite=true` and `confirm=true`. With `--confirm-elicitation` set at keeper startup, it displayed a form dialog before the operation started; Accept started the server-side task (matching SHA-256), and Decline answered `operation was not started: declined` with no job started. Without the flag, the same call ran with no dialog, unchanged from before the feature. The client's version string, the dialog's exact visual presentation, `app_exec` behavior, the Cancel action, and the dialog timeout were not verified live.
 
 Repository facts verified for this design: `go.mod` pins go-sdk v1.8.0; `internal/transfer/internal/manager/handle.go` defines `StartInput` with `Confirm` and overwrite requiring confirmation; `internal/application/application.go` defines `Input.Confirm`, validates non-observational commands require confirm, and starts app jobs only after validation; `internal/bridge/internal/tooltext/registry.go` registers the relevant tools and transfer tasks; `docs/FILE-TRANSFER.md`, `docs/APP-CONTRACT.md`, and `docs/MCP-TASKS.md` describe current contracts. `internal/bridge/internal/tooltext/render.go` provides bounded one-line/result-rendering helpers, not general input sanitization; app output masking in `application.go` is limited to exact-token masking on child-process output.
 
