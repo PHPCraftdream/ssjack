@@ -150,7 +150,7 @@ func approvalFixture(t *testing.T, b *fakeBackend, withRecord bool) (*Model, str
 func selectApprovalRow(t *testing.T, m *Model, name string) {
 	t.Helper()
 	entries := m.approvals.Entries()
-	for i := 0; i < len(entries); i++ {
+	for i := 0; i <= len(entries); i++ {
 		cursor := m.approvals.Cursor()
 		if cursor >= 0 && cursor < len(entries) {
 			entry := entries[cursor]
