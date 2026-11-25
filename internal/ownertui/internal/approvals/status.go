@@ -77,9 +77,6 @@ func List(root string, records []vault.Approval) []Entry {
 			entries = append(entries, entry)
 		}
 		for _, diagnostic := range scan.Diagnostics {
-			if diagnostic.Path == "." && diagnostic.Reason == "descriptor_missing" {
-				continue
-			}
 			path, safe := display(diagnostic.Path)
 			entry := Entry{Status: StatusUnsafe, Reason: diagnostic.Reason, DisplayPath: path, PathSafe: safe}
 			if !safe {
@@ -91,6 +88,9 @@ func List(root string, records []vault.Approval) []Entry {
 	diagnosticReasons := make(map[string]string, len(scan.Diagnostics))
 	for _, d := range scan.Diagnostics {
 		diagnosticReasons[filepath.Clean(filepath.FromSlash(d.Path))] = d.Reason
+	}
+	for _, path := range scan.Undescribed {
+		diagnosticReasons[filepath.Clean(filepath.FromSlash(path))] = "descriptor_missing"
 	}
 	for i, record := range records {
 		if matched[i] {

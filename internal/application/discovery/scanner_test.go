@@ -122,8 +122,12 @@ func TestScanDiagnosticsAndCollisions(t *testing.T) {
 	t.Run("diagnostic cap and summary", func(t *testing.T) {
 		root := t.TempDir()
 		for i := 0; i < 22; i++ {
-			if err := os.Mkdir(filepath.Join(root, fmtName(i)), 0700); err != nil {
+			dir := filepath.Join(root, fmtName(i))
+			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal("fixture_mkdir_failed")
+			}
+			if err := os.WriteFile(filepath.Join(dir, "ssjack-app.json"), []byte("{"), 0600); err != nil {
+				t.Fatal("fixture_write_failed")
 			}
 		}
 		got := Scan(root)
@@ -133,6 +137,43 @@ func TestScanDiagnosticsAndCollisions(t *testing.T) {
 				reason = got.Diagnostics[16].Reason
 			}
 			t.Fatalf("diagnostic_count=%d summary_reason=%q", len(got.Diagnostics), reason)
+		}
+	})
+	t.Run("folders without a descriptor are not diagnostics", func(t *testing.T) {
+		root := t.TempDir()
+		for _, name := range []string{"plain-b", "plain-a", "bad"} {
+			if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+				t.Fatal("fixture_mkdir_failed")
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, "bad", "ssjack-app.json"), []byte("{"), 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		writeDescriptor(t, filepath.Join(root, "good"), "good")
+		got := Scan(root)
+		if !reflect.DeepEqual(got.Undescribed, []string{".", "plain-a", "plain-b"}) {
+			t.Fatalf("undescribed=%v", got.Undescribed)
+		}
+		if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != "bad" || got.Diagnostics[0].Reason != "descriptor_invalid" || hasReason(got, "descriptor_missing") {
+			t.Fatalf("diagnostics=%+v", got.Diagnostics)
+		}
+		if !reflect.DeepEqual(paths(got.Candidates), []string{"good"}) {
+			t.Fatalf("candidate_count=%d", len(got.Candidates))
+		}
+	})
+	t.Run("many undescribed folders do not crowd out a real rejection", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 0; i < 40; i++ {
+			if err := os.Mkdir(filepath.Join(root, fmtName(i)), 0700); err != nil {
+				t.Fatal("fixture_mkdir_failed")
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, "entry-039", "ssjack-app.json"), []byte("{"), 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		got := Scan(root)
+		if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != "entry-039" || got.Diagnostics[0].Reason != "descriptor_invalid" {
+			t.Fatalf("diagnostics=%+v", got.Diagnostics)
 		}
 	})
 	t.Run("diagnostic selection deterministic order", func(t *testing.T) {

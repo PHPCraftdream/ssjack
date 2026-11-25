@@ -37,8 +37,11 @@ type Diagnostic struct {
 }
 
 type Result struct {
-	Candidates     []Candidate
-	Diagnostics    []Diagnostic
+	Candidates  []Candidate
+	Diagnostics []Diagnostic
+	// Undescribed lists scanned folders (root as ".") without a descriptor:
+	// not candidates and not rejections, so they never become Diagnostics.
+	Undescribed    []string
 	Overflow       bool
 	OverflowReason string
 }
@@ -240,6 +243,10 @@ type directoryIdentity struct {
 
 func addCandidateFromRoot(result *Result, canonicalRoot string, directory *os.Root, identity os.FileInfo, rel string, seen *[]directoryIdentity, validate func() bool) {
 	data, reason := readBoundedDescriptor(directory)
+	if reason == "descriptor_missing" {
+		result.Undescribed = append(result.Undescribed, normalizedDiagnosticPath(rel))
+		return
+	}
 	if reason != "" {
 		addDiagnostic(result, rel, reason)
 		return
@@ -343,6 +350,7 @@ func diagnosticLess(a, b Diagnostic) bool {
 }
 
 func finish(result *Result) {
+	sort.Strings(result.Undescribed)
 	sort.Slice(result.Candidates, func(i, j int) bool {
 		a, b := normalizedDiagnosticPath(result.Candidates[i].Path), normalizedDiagnosticPath(result.Candidates[j].Path)
 		if a == "." {
