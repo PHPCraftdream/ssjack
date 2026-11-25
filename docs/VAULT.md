@@ -34,7 +34,9 @@ For non-menu connections use `--server production --account operator ssh`, `chec
 An optional encrypted `applications` section stores owner-side application
 approval records: a validated name, a canonical absolute path, the exact
 SHA-256 hash of the application descriptor, and an optional `incus:CONTAINER:USER`
-route. New readers accept the section; older strict readers reject the file as
+route. Per-application route precedence is the `--app-route-for` invocation flag,
+then this stored route, then the global `--app-route` default; the global route
+is not automatically converted into stored per-application routes. New readers accept the section; older strict readers reject the file as
 an unknown field until ssjack is upgraded. Approving a name that already has a
 record is an explicit replacement: the caller must pass the descriptor hash
 that was previously reviewed and stored; a mismatch refuses and the old

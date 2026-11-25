@@ -35,7 +35,11 @@ type Options struct {
 	Guard     remote.GuardProvider
 	Container string
 	User      string
+	Routes    map[string]RouteSpec
 }
+
+// RouteSpec is an owner-supplied fixed Incus route for one registered app.
+type RouteSpec struct{ Container, User string }
 
 type Input struct {
 	Application    string   `json:"application" jsonschema:"Registered application name from app_list"`
@@ -64,6 +68,8 @@ type ListOutput struct {
 
 type registered struct {
 	App
+	route         RouteSpec
+	hasRoute      bool
 	observational map[string]bool
 	refused       map[string]bool
 }
@@ -143,6 +149,21 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 	if err := ValidateRoute(options.Container, options.User); err != nil {
 		return nil, err
 	}
+	for name, route := range options.Routes {
+		if err := ValidateRoute(route.Container, route.User); err != nil {
+			return nil, err
+		}
+		found := false
+		for _, app := range options.Apps {
+			if app.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("per-application route names an unregistered application")
+		}
+	}
 	m.apps = make(map[string]*registered, len(options.Apps))
 	names := make([]string, 0, len(options.Apps))
 	for _, app := range options.Apps {
@@ -153,12 +174,19 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 		if m.apps[entry.Name] != nil {
 			return nil, errors.New("registered application names must be unique")
 		}
+		if route, ok := options.Routes[entry.Name]; ok {
+			entry.route, entry.hasRoute = route, true
+		}
 		m.apps[entry.Name] = entry
 		names = append(names, entry.Name)
-		m.descriptions = append(m.descriptions, Description{Name: entry.Name, Profile: options.Profile, Container: options.Container})
+		container := options.Container
+		if entry.hasRoute {
+			container = entry.route.Container
+		}
+		m.descriptions = append(m.descriptions, Description{Name: entry.Name, Profile: options.Profile, Container: container})
 	}
-	runner := routeRunner(options.Runner, options.Container, options.User)
 	profile := options.Profile
+	globalRunner := routeRunner(options.Runner, options.Container, options.User)
 	m.jobs = remote.NewGuardedManager(parent, names, func(ctx context.Context, target, encoded string, stdout, stderr io.Writer) (int, error) {
 		var arguments []string
 		app := m.apps[target]
@@ -167,6 +195,10 @@ func New(parent context.Context, options *Options) (*Manager, error) {
 		}
 		if ctx.Err() != nil {
 			return -1, ctx.Err()
+		}
+		runner := globalRunner
+		if app.hasRoute {
+			runner = routeRunner(options.Runner, app.route.Container, app.route.User)
 		}
 		scope, err := apptransport.Listen(ctx, profile, runner)
 		if err != nil {

@@ -20,6 +20,31 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/wire"
 )
 
+func TestPerApplicationRoutes(t *testing.T) {
+	t.Run("new_validates_routes_and_app_list_reports_override", func(t *testing.T) {
+		app := fixtureApp(t, fixtureName)
+		runner := remote.StreamRunner(func(context.Context, string, string, io.Reader, io.Writer, io.Writer) (int, error) { return 0, nil })
+		for _, options := range []*Options{
+			{Apps: []App{app}, Profile: "fixed", Runner: runner, Routes: map[string]RouteSpec{"missing": {Container: "box", User: "user"}}},
+			{Apps: []App{app}, Profile: "fixed", Runner: runner, Routes: map[string]RouteSpec{fixtureName: {Container: "bad;box", User: "user"}}},
+		} {
+			if _, err := New(context.Background(), options); err == nil {
+				t.Fatal("invalid per-app route accepted")
+			}
+		}
+		manager, err := New(context.Background(), &Options{Apps: []App{app}, Profile: "fixed", Runner: runner, Container: "global", User: "user", Routes: map[string]RouteSpec{fixtureName: {Container: "specific", User: "guest"}}})
+		if err != nil {
+			t.Fatal("valid per-app route rejected")
+		}
+		defer manager.Close()
+		var out ListOutput
+		applicationCall(t, context.Background(), manager, "app_list", nil, &out)
+		if len(out.Applications) != 1 || out.Applications[0].Container != "specific" {
+			t.Fatalf("app_list route = %+v", out.Applications)
+		}
+	})
+}
+
 func TestApplicationProcess(t *testing.T) {
 	if os.Getenv("SSJACK_APPLICATION_TEST_HELPER") != "1" {
 		return

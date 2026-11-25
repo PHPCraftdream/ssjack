@@ -11,6 +11,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/agent"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/discover"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/launchguard"
+	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/routes"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/transfercmd"
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
@@ -50,6 +51,7 @@ func loadKeeperCredentials(ctx context.Context, path, profile string) (keeperCre
 type fullModeOptions struct {
 	vaultPath, profile    string
 	appRoute              string
+	appRouteFor           routes.Flags
 	appDirectories        []string
 	transferRoots         []string
 	transferMaxBytes      int64
@@ -108,6 +110,25 @@ func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, 
 		return session, cleanup, err
 	}
 	discover.PostUnlock(statuses, os.Stderr)
+	discoveredNames := make(map[string]bool, len(discovered))
+	for _, app := range discovered {
+		discoveredNames[app.Name] = true
+	}
+	enabled := make(map[string]bool, len(discovered)+len(explicitApps))
+	allNames := make([]string, 0, len(discovered)+len(explicitApps))
+	for _, app := range explicitApps {
+		enabled[app.Name] = true
+		allNames = append(allNames, app.Name)
+	}
+	for _, app := range discovered {
+		enabled[app.Name] = true
+		allNames = append(allNames, app.Name)
+	}
+	if err := opts.appRouteFor.CheckEnabled(enabled); err != nil {
+		return session, cleanup, err
+	}
+	vaultRoutes := routes.VaultRoutes(approvals, discoveredNames)
+	overrides := opts.appRouteFor.Overrides()
 	if applicationOptions == nil {
 		if len(discovered) != 0 {
 			container, user, routeErr := application.ParseRoute(opts.appRoute)
@@ -115,9 +136,14 @@ func startFullMode(ctx context.Context, opts fullModeOptions) (fullModeSession, 
 				return session, cleanup, routeErr
 			}
 			applicationOptions = &application.Options{Apps: discovered, Profile: opts.profile, Container: container, User: user}
+			applicationOptions.Routes = applicationRouteSpecs(overrides, vaultRoutes, container, user, allNames)
 		}
 	} else if len(discovered) != 0 {
 		applicationOptions.Apps = append(applicationOptions.Apps, discovered...)
+	}
+	if applicationOptions != nil {
+		container, user := applicationOptions.Container, applicationOptions.User
+		applicationOptions.Routes = applicationRouteSpecs(overrides, vaultRoutes, container, user, allNames)
 	}
 	guard, err := launchguard.Select(credentials.Guard(), opts.noOutputFilter, os.Stderr)
 	if err != nil {
@@ -164,6 +190,15 @@ type enrollmentInputs struct {
 	mode                                               string
 	metadataPath, policyPath, identityPath             string
 	metadataSupplied, policySupplied, identitySupplied bool
+}
+
+func applicationRouteSpecs(overrides, vaultRoutes map[string]string, container, user string, names []string) map[string]application.RouteSpec {
+	resolved := routes.Resolve(overrides, vaultRoutes, container, user, names)
+	result := make(map[string]application.RouteSpec, len(resolved))
+	for name, route := range resolved {
+		result[name] = application.RouteSpec{Container: route.Container, User: route.User}
+	}
+	return result
 }
 
 // loadEnrollment validates the declarative enrollment flags and loads the

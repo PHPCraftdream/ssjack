@@ -83,6 +83,15 @@ func expectRefusal(t *testing.T, dir, want string) {
 	}
 }
 
+func TestDescriptorRejectsOwnerRoute(t *testing.T) {
+	t.Run("descriptor_rejects_route_field", func(t *testing.T) {
+		dir := descriptorDir(t, validDescriptor(`,"route":"incus:c:u"`))
+		if _, err := LoadDescriptor(dir); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Fatal("descriptor-controlled route accepted")
+		}
+	})
+}
+
 func TestDescriptorValid(t *testing.T) {
 	raw := `{"format":"ssjack-app-v1","name":"synthetic-app","launch":{"executable":"` + toolPath + `","args":["entry.js","--flag"]},"workdir":"work","commands":{"observational":["status","inspect"],"refused":["serve"]}}`
 	dir := descriptorDir(t, raw)

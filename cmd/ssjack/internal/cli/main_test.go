@@ -466,6 +466,11 @@ func syntheticApp(t *testing.T, name string) string {
 }
 
 func TestApplicationRegistrationWithoutUnlock(t *testing.T) {
+	t.Run("registered_applications_route_requires_app", func(t *testing.T) {
+		if _, err := registeredApplications(nil, "incus:guest:operator", "main", nil); err == nil {
+			t.Fatal("route without an application accepted")
+		}
+	})
 	if options, err := registeredApplications(nil, "", "main", nil); err != nil || options != nil {
 		t.Fatal("standalone keeper unexpectedly registered an application")
 	}
@@ -541,6 +546,19 @@ func TestApplicationRegistrationRefusals(t *testing.T) {
 }
 
 func TestApplicationStartupValidationPrecedesCredentials(t *testing.T) {
+	t.Run("malformed_app_route_for_precedes_credentials", func(t *testing.T) {
+		old := cliLoadAgentCredentials
+		defer func() { cliLoadAgentCredentials = old }()
+		called := false
+		cliLoadAgentCredentials = func(context.Context, string, string) (keeperCredentials, error) {
+			called = true
+			return nil, errors.New("credentials reached")
+		}
+		code, err := Run(context.Background(), []string{"--vault", filepath.Join(t.TempDir(), "vault"), "--app-route-for", "broken", "run", "harness"})
+		if code == 0 || err == nil || called {
+			t.Fatalf("malformed route-for reached credentials: %d (called=%v)", code, called)
+		}
+	})
 	old := cliLoadAgentCredentials
 	defer func() { cliLoadAgentCredentials = old }()
 	called := false

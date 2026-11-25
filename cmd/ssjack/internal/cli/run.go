@@ -17,6 +17,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/keys"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/launchguard"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/remotemcp"
+	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/routes"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/shell"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/startup"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/terminal"
@@ -102,6 +103,8 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	identityPath := flags.String("enrollment-identity", "", "Absolute path to declarative enrollment identity snapshot")
 	var appDirectories appDirectoryFlags
 	flags.Var(&appDirectories, "app", "Register an application directory containing ssjack-app.json (repeatable, full mode)")
+	var appRouteFlags routes.Flags
+	flags.Var(&appRouteFlags, "app-route-for", "Owner-supplied per-app route override APP=incus:CONTAINER:USER for this invocation (repeatable, full mode)")
 	appRoute := flags.String("app-route", "", "Fixed Incus route incus:CONTAINER:USER for registered applications")
 	var transferRootSpecs transfercmd.RootFlags
 	flags.Var(&transferRootSpecs, "transfer-root", "Register a transfer root as [NAME=]DIR (repeatable, full mode)")
@@ -161,12 +164,12 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 	}
 	appFlagsSupplied := false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "app" || f.Name == "app-route" {
+		if f.Name == "app" || f.Name == "app-route" || f.Name == "app-route-for" {
 			appFlagsSupplied = true
 		}
 	})
 	if appFlagsSupplied && *modeFlag != string(broker.ModeFull) {
-		return 1, errors.New("--app and --app-route are only available in full mode")
+		return 1, errors.New("--app, --app-route and --app-route-for are only available in full mode")
 	}
 	selectorProfile, named, selectionErr := startupSelection(flags, profile, *server, *account)
 	if selectionErr != nil {
@@ -257,6 +260,7 @@ func runWithStartupPassword(ctx context.Context, args []string) (code int, resul
 			profile:            profile,
 			appDirectories:     appDirectories,
 			appRoute:           *appRoute,
+			appRouteFor:        appRouteFlags,
 			transferRoots:      transferRootSpecs,
 			transferMaxBytes:   *transferMaxBytes,
 			transferMaxEntries: *transferMaxEntries,
