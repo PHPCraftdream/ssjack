@@ -780,28 +780,24 @@ clients without the extension.
 
 ## Later design: exec and application tools
 
-A task path for `remote_exec` and `app_exec` is not part of this design. Its
-prerequisites are open work, and no task behaviour for them is specified until
-they land:
+A task path for `remote_exec` and `app_exec` is specified in
+[MCP-TASKS-EXEC.md](MCP-TASKS-EXEC.md). Both prerequisites it needed have
+landed:
 
 - A truthful cancel result from the command and application job managers.
-  `[ssjack code]` `Cancel` answers `Cancelled: true` for any retained id,
-  including a job that already finished, and `app_cancel` delegates to it
-  (`internal/remote/internal/jobs/jobs.go`; `internal/application/application.go`).
-  It must distinguish a cancelled job from a finished one the way the transfer
-  manager does (`internal/transfer/internal/manager/manager.go`), or a client
-  cancellation could label a finished job as cancelled.
-- A paged output contract with real offsets. A task result has to be built from
-  reads whose offsets the model can continue from: one read returns at most a
-  32 KiB chunk per stream, and the text renderer may add a base64 copy of a chunk
-  that is not valid UTF-8, so a result assembled from several reads needs a
-  defined page sequence and offsets that are exactly the ones the result reports.
-  Without that, a result either skips output the model never saw or exceeds the
-  documented size.
+  `[ssjack code]` `Cancel` answers `Cancelled: true` only when the job had
+  not yet recorded a terminal state and the cancellation was requested, and
+  `Cancelled: false` for a job that already ended, keeping its own recorded
+  outcome; `app_cancel` delegates to the same manager
+  (`internal/remote/internal/jobs/jobs.go`, `Cancel`;
+  `internal/application/application.go`).
+- A paged output contract with real offsets: docs/EXEC-OUTPUT-PAGING.md
+  (decisions D1–D7), under which an exec task result carries no command
+  output and the model fetches pages with `remote_read`/`app_read`.
 
-No exec or application task behaviour is specified in this document. The transfer
-design does not imply any of it, and the prerequisites above are the work that
-would allow a separate design.
+No exec or application task behaviour is specified in this document. The
+prerequisites above are landed, and the separate design that uses them is
+[MCP-TASKS-EXEC.md](MCP-TASKS-EXEC.md).
 
 ## Open questions for the owner
 
