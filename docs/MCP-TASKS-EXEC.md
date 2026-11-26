@@ -18,10 +18,7 @@ The tags below mark the source of every statement in this document.
 document does not re-verify them, it cites the parent's findings.
 `[pinned SDK v1.8.0]` likewise. `[ssjack code]` is observed in this repository; it is followed by the
 parenthesised file reference, in the style of docs/MCP-TASKS.md, for example
-"`[ssjack code]` (`internal/remote/internal/jobs/jobs.go:309-322`)". `[assumption: owner question N]` is a decision this design takes
-on the strength of an owner question of `docs/EXEC-OUTPUT-PAGING.md` whose
-recommended option the owner has not answered; the questions are repeated at
-the end.
+"`[ssjack code]` (`internal/remote/internal/jobs/jobs.go:309-322`)". The Decisions section records the choices delegated by the owner to the implementer.
 
 ## Why
 
@@ -50,10 +47,10 @@ The decisions of this document, and the section that takes each one:
 | State mapping | A nonzero exit or a remote error is a command outcome: the task ends `completed` with it in the result text; `failed` stays machinery-only | State mapping | Mapping a nonzero exit to `failed`: the machinery's nested `error` replaces the exit code and loses it (justified in "State mapping") |
 | Learning the state | Every `tasks/get` is one ordinary read at offset 0 whose chunk bytes are discarded before rendering; no new keeper operation | Learning the state without output | A new side-effect-free status-only keeper operation: duplicated wire surface for this path's benefit alone, rejected by the paging document |
 | Cancel | `tasks/cancel` calls `remote_cancel`/`app_cancel`; the truthful reply decides nothing, the following read does | Cancellation | Taking the cancel reply's boolean as the task state: `true` means only that a cancellation was requested, so an already-finished job would be mislabelled |
-| Timeouts | `timeout_seconds` is unchanged; a timed-out job is a `completed` task with its error line | Timeouts and lifetime | Mapping a timed-out job to `failed`: it loses the exit code the polling path shows (open question 6) |
+| Timeouts | `timeout_seconds` is unchanged; a timed-out job is a `completed` task with its error line | Timeouts and lifetime | Mapping a timed-out job to `failed`: it loses the exit code the polling path shows (decision 6) |
 | Elicitation | The confirm gate runs before task creation; a declined operation starts no job and creates no task | Interaction with the elicitation gate | An `input_required` task that asks through the task itself with `inputRequests`: the gate answers before the task exists, which is strictly simpler |
 | Secrets | The record carries no output; D7 masking is unchanged; the one new exposure is byte counts and the error line | Secrets and exposure | Inlining a bounded first output page in the result (D1's rejected alternative): widens exposure and contradicts the transfer-design precedent |
-| Result text | Two fixed field lines per state, derived from the EXEC-OUTPUT-PAGING example | Result text per state | Reusing the reads' `Next:` line verbatim: blurs result-versus-read provenance (owner question 4) |
+| Result text | Two fixed field lines per state, derived from the EXEC-OUTPUT-PAGING example | Result text per state | Reusing the reads' `Next:` line verbatim: blurs result-versus-read provenance (decision 4) |
 | Failure modes | Machinery failures stay the transfer design's split; an evicted job freezes `failed` | Error behaviour | Persisting or retaining output in the task record to survive job eviction (D6's rejected alternative) |
 | Tests | Task store, bridge interception, keeper manager, launched stdio bridge | Test plan | Rendering the deciding read and filtering chunk text out of the rendered result: fragile, because it depends on the render format (rejected by the paging document) |
 | Order and non-goals | Four mergeable slices; no polling-path change | Implementation order and non-goals | A status-only keeper operation again, here because it would add a keeper-side slice to the order; rejected for the same duplicated-wire-surface reason |
@@ -135,7 +132,7 @@ here:
   the session closes. `ttlMs` stays 7200000 and `pollIntervalMs` stays 10000
   (`[ssjack code]` (`internal/bridge/internal/tasks/wire.go:13-20`)).
 - Strictly what the record must not hold: no command output bytes, no
-  rendered or base64 output text (`[assumption: owner question 1]`, no
+  rendered or base64 output text (decision 1: no
   inlined page), no command text or argv, no target or
   application name, no path, no vault or bootstrap material, and no keeper
   error text. It holds only: the id, created/updated times, the task state,
@@ -241,8 +238,7 @@ The mapping:
   offset 1 and `more=no`, from which the derivation correctly recovers
   offset 0 and `more=yes`. The chunk bytes are discarded before any
   rendering, so no chunk text or base64 line can reach the handle, the
-  `statusMessage` or the result (`[assumption: owner question 5]`, which
-  confirms D1 here). `[assumption: owner question 2]` The memory cost is
+  `statusMessage` or the result (decision 5 confirms D1 here). The memory cost is
   at most two raw 32 KiB chunks per poll — nothing is rendered, so the
   216 KiB worst case of D2 applies only to a rendered read; reads are
   non-destructive, so the model's own first read from the derived offsets
@@ -349,11 +345,11 @@ The mapping:
   a cancel call was made through it (`tasks/cancel`) or directly with the
   cancel tool. The mapping therefore stays: a context-cancelled end maps to
   `cancelled`; a deadline-exceeded end maps to the timeout outcome; the
-  runner's own error maps to the error outcome. Open question 7 is pointed
-  at exactly this gap.
+  runner's own error maps to the error outcome. Decision 7 records this
+  classification.
 - A cancelled task has no result text and hence no `Resume:` line, but its
   retained output stays pageable
-  (`[assumption: owner question 3]`, cancelled buffers keep their retained
+  (decision 3: cancelled buffers keep their retained
   output). Because the task id equals the job id, the model can find that
   output without any Resume line by reading from offset 0 with
   `remote_read`/`app_read` — always valid for retained output — and take
@@ -512,11 +508,8 @@ passing exactly the derived offsets; drain both streams until `done` with
 The offsets are the ones derived from the deciding read per "Learning the
 state without output" — per stream `next - len(chunk)` clamped at 0, which
 for a retained stream is its oldest retained byte, 0 when nothing was lost —
-and are exactly the offsets the model must pass (D1, D4;
-`[assumption: owner question 4]`, the distinct `Resume:` format assumed
-here). The model's own reads render full chunks under the documented bound
-of D2; the task result itself never carries one
-(`[assumption: owner question 1]`, no inlined page).
+and are exactly the offsets the model must pass (D1, D4; decision 4, the distinct `Resume:` format). The model's own reads render full chunks under the documented bound
+of D2; the task result itself never carries one (decision 1).
 
 ## Error behaviour
 
@@ -598,8 +591,8 @@ replays its frozen answer.
   asking up to five minutes before reporting the outcome as unknown.
 - The job finishes while nobody polls and the model never reads the output:
   the task completes and carries only status, exit code and offsets; the
-  output is fetched or not, as the model decides. This is owner question 5's
-  trade-off, accepted here (`[assumption: owner question 5]`).
+  output is fetched or not, as the model decides. This is decision 5's
+  trade-off, accepted here.
 
 ## Test plan
 
@@ -748,8 +741,7 @@ bridge_tasks_test.go, raw_test.go); this design adds
 limit.
 
 1. This document and the cross-links in docs/REMOTE-MCP.md and
-   docs/APP-CONTRACT.md (both currently point at the transfer design's
-   "Later design" section for the exec task path; point them here). No
+   docs/APP-CONTRACT.md, whose exec task links now point to this design. No
    behaviour change.
 2. Exec task records and handlers: the exec `Tools` seam (`Read`, `Cancel`,
    the fixed `Resume:`/`Status:`/`Error:` renderers), the state mapping, the
@@ -775,57 +767,18 @@ list and transfer tools; changes to `timeout_seconds`, `wait_seconds`, the
 clients without the extension; durable or on-disk tasks; any new secret,
 path, command text or remote content in a task record; a new startup flag.
 
-## Open questions for the owner
+## Decisions
 
-The paging document's five open questions are unanswered; this design takes
-each recommended option as an explicit assumption and repeats them here,
-followed by the questions this document itself raises.
+The following decisions were made on 2026-11-26, delegated by the owner to the implementer; all recommended options were taken. Each maps to the corresponding decision in docs/EXEC-OUTPUT-PAGING.md where applicable.
 
-1. (assumed) May the task result ever inline a first output page? Context: D1
-   keeps output out of the record, but a small preview would save one
-   `remote_read`/`app_read` call per finished job. Options: (a) never inline
-   (assumed here); (b) inline the first N bytes with a hard documented bound.
-   Recommendation: (a).
-2. (assumed) Is the corrected worst-case rendered read response acceptable —
-   about 108 KiB per stream and 216 KiB for both for non-UTF-8 output, versus
-   64 KiB plus constants in the common case? Options: (a) keep 32 KiB pages
-   and document the bound (assumed); (b) shrink the response for non-UTF-8
-   chunks. Recommendation: (a). This affects the model's paging reads, not
-   the task result.
-3. (assumed) Do cancelled jobs keep their output buffers pageable? Options:
-   (a) keep pageable, as the manager does today (assumed); (b) truncate on
-   cancel. Recommendation: (a).
-4. (assumed) `Resume:` versus reusing the reads' `Next:` line format.
-   Options: (a) a distinct `Resume:` format (assumed here; the fixed text
-   above uses it); (b) reuse `Next:` verbatim. Recommendation: (a).
-5. (assumed) With D1, a finished job always costs at least one read call even
-   when the model does not care about the output; the task's benefit is no
-   polling plus completion, not fewer round trips. Options: (a) keep D1
-   (assumed); (b) inline a bounded first page. Recommendation: (a).
-6. Should a timed-out job map to `completed` with its error line (this
-   design's choice, consistent with the command-outcome rule) or to `failed`?
-   Context: `failed` replaces the outcome with the machinery error and loses
-   the exit code; the polling path shows timeouts as an `Error:` line on a
-   `done` job. Recommendation: `completed`, as taken here.
-7. How should the bridge recognise a cancellation-caused end? The manager
-   records the runner's error string, so the bridge matches the fixed
-   context-cancellation text rather than an in-process sentinel
-   (`[ssjack code]` (`internal/remote/internal/jobs/jobs.go:185-200`)). The
-   gaps are the ones the classification table in "Cancellation" spells
-   out: (i) a direct cancel tool call (`remote_cancel`/`app_cancel`) and a
-   `tasks/cancel` produce the same outcome `cancelled` and cannot be told
-   apart from the job side — the record's `cancelRequested` flag is the
-   only difference and it is not required for the mapping; (ii) a runner
-   that itself returns a context error is indistinguishable from a
-   cancellation. Options: (a) match the fixed strings, as designed here;
-   (b) add an explicit terminal-cause field to the read output (a small
-   keeper-side change, exact but new wire surface). Recommendation: (a)
-   now, (b) if the error strings ever become configurable.
-8. Should the exec task report a `statusMessage` while working? This design
-   omits it because an exec read has no content-free progress fields; the
-   transfer task's field lines have no equivalent here. Options: (a) omit
-   (recommended); (b) a fixed word such as `running`, at the cost of a
-   state word the polling path never prints.
+1. **No output in task results (paging decision 1).** The result carries no output; the model reads it with `remote_read`/`app_read`. This preserves the task-record non-goal and keeps output retrieval in existing read tools. **Rejected:** a bounded inline first page, which widens exposure and complicates size bounds.
+2. **Accept the rendered-response bound (paging decision 2).** Document about 108 KiB rendered per stream and 216 KiB for both streams for non-UTF-8; keep pages at 32 KiB. This accounts for replacement expansion and base64 while preserving the current chunk contract. **Rejected:** shrinking responses for non-UTF-8, which would change the documented read format and client expectations.
+3. **Cancelled output remains pageable from offset 0 (paging decision 3).** Keep retained output readable after cancellation until eviction, matching current manager behavior. **Rejected:** truncating on cancel, which discards currently retained output.
+4. **Use a distinct `Resume:` line (paging decision 4).** Keep result offsets distinct from reads' `Next:` line to make result-versus-read provenance unambiguous. **Rejected:** reusing `Next:` verbatim.
+5. **Keep D1 despite the read cost (paging decision 5).** A finished job costs at least one read call even when the model does not need output; the task benefit is no polling plus completion notification. **Rejected:** inline a bounded first page, which contradicts the task-record non-goal and complicates the size bound.
+6. **Timeout maps to `completed` with an error line.** This preserves the command outcome and the error/exit information shown by the polling path. **Rejected:** `failed`, which replaces the outcome with a machinery error and loses the exit code.
+7. **Recognize cancellation by matching the fixed recorded error text `context canceled`.** This uses the recorded runner error without adding wire surface; pin the exact matched fixed text in a test so jobs-side wording changes fail CI rather than silently breaking the mapping. An explicit terminal-cause field remains a later option if error texts become configurable. **Rejected:** adding that field now, which requires a keeper-side wire change.
+8. **Omit `statusMessage` while working.** Exec reads have no content-free progress fields, so omitting it avoids inventing a state word the polling path does not print. **Rejected:** a fixed status word such as `running`.
 
 
 
