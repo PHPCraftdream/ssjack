@@ -76,6 +76,10 @@ func ownerCommandPTYChild(t *testing.T) {
 			class = applyChildCLIOperation
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			class = applyChildCLIContext
+		case errors.Is(err, ownercommand.ErrCancelled):
+			class = applyChildCLICancelled
+		case errors.Is(err, ownercommand.ErrIncomplete):
+			class = applyChildCLIIncomplete
 		}
 		nativeChildFatal(t, class, "confirmed owner command returned an unexpected CLI code: got=%d want=0", code)
 	}
@@ -112,16 +116,18 @@ type nativeFailureMarker struct{ class, text string }
 type nativeChildFailure string
 
 const (
-	ownerChildStdinNotTTY  nativeChildFailure = "owner-stdin-not-tty"
-	ownerChildStdoutNotTTY nativeChildFailure = "owner-stdout-not-tty"
-	ownerChildRawSetup     nativeChildFailure = "owner-raw-setup"
-	cancelChildCLICode     nativeChildFailure = "cancel-cli-code"
-	cancelChildCLIVerdict  nativeChildFailure = "cancel-cli-verdict"
-	applyChildCLICode      nativeChildFailure = "apply-cli-code"
-	applyChildCLIError     nativeChildFailure = "apply-cli-error"
-	applyChildCLIControl   nativeChildFailure = "apply-cli-control-unavailable" // ownercontrol.Open failed
-	applyChildCLIOperation nativeChildFailure = "apply-cli-operation-failed"    // TUI, command or close step failed
-	applyChildCLIContext   nativeChildFailure = "apply-cli-context-ended"
+	ownerChildStdinNotTTY   nativeChildFailure = "owner-stdin-not-tty"
+	ownerChildStdoutNotTTY  nativeChildFailure = "owner-stdout-not-tty"
+	ownerChildRawSetup      nativeChildFailure = "owner-raw-setup"
+	cancelChildCLICode      nativeChildFailure = "cancel-cli-code"
+	cancelChildCLIVerdict   nativeChildFailure = "cancel-cli-verdict"
+	applyChildCLICode       nativeChildFailure = "apply-cli-code"
+	applyChildCLIError      nativeChildFailure = "apply-cli-error"
+	applyChildCLIControl    nativeChildFailure = "apply-cli-control-unavailable" // ownercontrol.Open failed
+	applyChildCLIOperation  nativeChildFailure = "apply-cli-operation-failed"    // TUI, command or close step failed
+	applyChildCLIContext    nativeChildFailure = "apply-cli-context-ended"
+	applyChildCLICancelled  nativeChildFailure = "apply-cli-cancelled"  // explicit cancel key or prompt cancel
+	applyChildCLIIncomplete nativeChildFailure = "apply-cli-incomplete" // TUI quit before the command finished or failed
 
 	interactiveChildStdinNotTTY  nativeChildFailure = "interactive-stdin-not-tty"
 	interactiveChildStdoutNotTTY nativeChildFailure = "interactive-stdout-not-tty"
@@ -147,7 +153,8 @@ func (trace *nativeTerminalTrace) addChildFailureMarkers(classes ...nativeChildF
 func (trace *nativeTerminalTrace) addOwnerCommandChildFailureMarkers() {
 	trace.addChildFailureMarkers(ownerChildStdinNotTTY, ownerChildStdoutNotTTY, ownerChildRawSetup,
 		cancelChildCLICode, cancelChildCLIVerdict, applyChildCLICode, applyChildCLIError,
-		applyChildCLIControl, applyChildCLIOperation, applyChildCLIContext)
+		applyChildCLIControl, applyChildCLIOperation, applyChildCLIContext,
+		applyChildCLICancelled, applyChildCLIIncomplete)
 }
 
 func (trace *nativeTerminalTrace) addInteractiveTerminalFailureMarkers() {
