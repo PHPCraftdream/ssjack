@@ -68,7 +68,16 @@ func ownerCommandPTYChild(t *testing.T) {
 		return
 	}
 	if code != 0 {
-		nativeChildFatal(t, applyChildCLICode, "confirmed owner command returned an unexpected CLI code: got=%d want=0", code)
+		class := applyChildCLICode
+		switch {
+		case errors.Is(err, ownercontrol.ErrControl):
+			class = applyChildCLIControl
+		case errors.Is(err, ownercommand.ErrOperation):
+			class = applyChildCLIOperation
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			class = applyChildCLIContext
+		}
+		nativeChildFatal(t, class, "confirmed owner command returned an unexpected CLI code: got=%d want=0", code)
 	}
 	if err != nil {
 		nativeChildFatal(t, applyChildCLIError, "confirmed owner command returned an error")
@@ -110,6 +119,9 @@ const (
 	cancelChildCLIVerdict  nativeChildFailure = "cancel-cli-verdict"
 	applyChildCLICode      nativeChildFailure = "apply-cli-code"
 	applyChildCLIError     nativeChildFailure = "apply-cli-error"
+	applyChildCLIControl   nativeChildFailure = "apply-cli-control-unavailable" // ownercontrol.Open failed
+	applyChildCLIOperation nativeChildFailure = "apply-cli-operation-failed"    // TUI, command or close step failed
+	applyChildCLIContext   nativeChildFailure = "apply-cli-context-ended"
 
 	interactiveChildStdinNotTTY  nativeChildFailure = "interactive-stdin-not-tty"
 	interactiveChildStdoutNotTTY nativeChildFailure = "interactive-stdout-not-tty"
@@ -134,7 +146,8 @@ func (trace *nativeTerminalTrace) addChildFailureMarkers(classes ...nativeChildF
 
 func (trace *nativeTerminalTrace) addOwnerCommandChildFailureMarkers() {
 	trace.addChildFailureMarkers(ownerChildStdinNotTTY, ownerChildStdoutNotTTY, ownerChildRawSetup,
-		cancelChildCLICode, cancelChildCLIVerdict, applyChildCLICode, applyChildCLIError)
+		cancelChildCLICode, cancelChildCLIVerdict, applyChildCLICode, applyChildCLIError,
+		applyChildCLIControl, applyChildCLIOperation, applyChildCLIContext)
 }
 
 func (trace *nativeTerminalTrace) addInteractiveTerminalFailureMarkers() {
