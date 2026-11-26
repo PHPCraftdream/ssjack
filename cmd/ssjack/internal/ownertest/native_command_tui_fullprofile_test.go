@@ -783,9 +783,7 @@ func nativeOwnerCommandAcceptance(t *testing.T, diagnostics *testing.T, ctx cont
 				credentialInput := append(bytes.Clone(credential), '\r')
 				trace.write(t, "credential-secret-value", credentialInput)
 				trace.expectText(t, lifetime, "credential-nonempty", "> Credential: <hidden; entered>", "native owner did not display its focused hidden nonempty credential")
-				trace.write(t, "focus-apply", []byte{'\t'})
-				trace.expectText(t, lifetime, "apply-focused", "> [Apply]", "native owner did not focus its Apply action")
-				trace.write(t, "apply", []byte{'\r'})
+				nativeArchiveWriteKeys(t, trace, lifetime, "apply", []byte{'\t', '\r'})
 			}
 			trace.wait(t, lifetime, "native owner command did not finish its explicit decision")
 			if mode == "apply" {
