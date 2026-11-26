@@ -14,6 +14,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/appstoreref"
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -115,6 +116,12 @@ func (b *backend) Link(directory string, master []byte) error {
 	b.linkedDirectory, b.linkedMaster = directory, append([]byte(nil), master...)
 	b.mu.Unlock()
 	return b.record("link")
+}
+func (b *backend) ApproveApplication(ownerpacket.ApprovalChange) error {
+	return b.record("approve-application")
+}
+func (b *backend) RevokeApplication(ownerpacket.ApprovalChange) error {
+	return b.record("revoke-application")
 }
 func (b *backend) RetryDatabase() error { return b.record("retry-db") }
 func (b *backend) Reconcile() error     { return b.record("reconcile") }

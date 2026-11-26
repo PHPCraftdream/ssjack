@@ -29,6 +29,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
@@ -413,6 +414,14 @@ const (
 	importKeyEsc   = 27
 )
 
+var errManagerApproval = errors.New("approval operations are not part of the import flow")
+
+// managerBackend adds the approval operations, which the import flow never calls, to the manager.
+type managerBackend struct{ *ownerdb.Manager }
+
+func (managerBackend) ApproveApplication(ownerpacket.ApprovalChange) error { return errManagerApproval }
+func (managerBackend) RevokeApplication(ownerpacket.ApprovalChange) error  { return errManagerApproval }
+
 // importDriver feeds Bubble Tea messages straight into the owner model's
 // Update, except secret entry which runs the same model in a short-lived Program.
 // Tick commands are never executed, so the model only changes through this driver.
@@ -423,7 +432,7 @@ type importDriver struct {
 
 func newImportDriver(t *testing.T, ctx context.Context, manager *ownerdb.Manager) *importDriver {
 	t.Helper()
-	d := &importDriver{t: t, model: ownertui.New(ctx, manager)}
+	d := &importDriver{t: t, model: ownertui.New(ctx, managerBackend{manager})}
 	// A tall window keeps every preview row visible.
 	d.send(tea.WindowSizeMsg{Width: 200, Height: 100})
 	d.refresh()
