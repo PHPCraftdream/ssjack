@@ -322,8 +322,8 @@ func TestRegistryConstructorWiring(t *testing.T) {
 				t.Fatalf("accepted retry did not return task handle: %s", retry)
 			}
 			ops, jobs = keeper.snapshot()
-			if len(ops) != 3 || ops[1] != "app_classify" || ops[2] != "app_start" || jobs != 1 || handle.Result.TaskID != strings.Repeat("a", 64) {
-				t.Fatalf("retry operations %v jobs %d taskId %q, want classify/app_start once and minted job id", ops, jobs, handle.Result.TaskID)
+			if len(ops) != 2 || ops[0] != "app_classify" || ops[1] != "app_start" || jobs != 1 || handle.Result.TaskID != strings.Repeat("a", 64) {
+				t.Fatalf("operations %v jobs %d taskId %q, want app_classify then app_start and minted job id", ops, jobs, handle.Result.TaskID)
 			}
 		})
 		t.Run("declined retry makes no task", func(t *testing.T) {

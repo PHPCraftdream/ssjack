@@ -241,31 +241,40 @@ func TestMCPTaskPathOverTheLaunchedBridge(t *testing.T) {
 	}
 	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload", "transfer_status")
 
-	mark := logbook.mark()
-	for _, call := range []struct {
+	for index, call := range []struct {
 		name string
 		args map[string]any
 	}{
 		{"remote_exec", map[string]any{"target": "allowed", "command": "true"}},
 		{"app_exec", map[string]any{"application": "app", "arguments": []string{"status"}}},
 	} {
+		mark := logbook.mark()
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.name, Arguments: call.args})
 		if err != nil {
 			t.Fatalf("%s failed: %v", call.name, err)
 		}
-		if result == nil || result.IsError {
-			t.Fatalf("%s was not answered with today's text: %#v", call.name, result)
+		if result == nil || result.IsError || len(result.Content) != 0 {
+			t.Fatalf("%s was not answered with a task handle: %#v", call.name, result)
 		}
-		text := requireSingleText(t, call.name, result)
-		if !strings.HasPrefix(text, "Started job ") {
-			t.Fatalf("%s returned %q, want today's started-job text", call.name, text)
+		minted = keeper.minted()
+		wantIDs := index + 2
+		if len(minted) != wantIDs {
+			t.Fatalf("%s minted %d job ids, want %d", call.name, len(minted), wantIDs)
 		}
+		jobID := minted[index+1]
+		var frame []byte
+		for _, recorded := range logbook.since(mark) {
+			if bytes.Contains(recorded, []byte(`"resultType":"task"`)) {
+				frame = recorded
+				break
+			}
+		}
+		if frame == nil {
+			t.Fatalf("%s response carried no task handle", call.name)
+		}
+		requireTaskHandle(t, frame, jobID)
 	}
-	for _, frame := range logbook.since(mark) {
-		if bytes.Contains(frame, []byte(`"resultType":"task"`)) {
-			t.Fatalf("an exec call was answered with a task handle: %s", frame)
-		}
-	}
+	requireOps(t, keeper, "session.describe", "confirm_config", "transfer_upload", "transfer_status", "start", "app_start")
 }
 
 func TestMCPTaskLaunchedBridgeAnswersCarryNoCanaries(t *testing.T) {

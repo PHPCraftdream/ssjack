@@ -485,8 +485,13 @@ func TestExecTaskInterceptionEligibilityAndFallback(t *testing.T) {
 			if got := answerText(t, result); got != want(id) {
 				t.Fatalf("fallback %q, want %q", got, want(id))
 			}
-			if _, err := taskGet(ctx, session, id); err == nil || rpcError(t, err).Code != -32602 {
-				t.Fatalf("fallback unexpectedly created task %q: %v", id, err)
+			ops := keeper.ops()
+			wantOp := "start"
+			if tool == "app_exec" {
+				wantOp = "app_start"
+			}
+			if len(ops) != 1 || ops[0] != wantOp || len(keeper.started()) != 1 || countOps(ops, "read") != 0 || countOps(ops, "app_read") != 0 {
+				t.Fatalf("fallback operations %v, want only %s and no reads", ops, wantOp)
 			}
 		}
 		t.Run("remote_exec", func(t *testing.T) { runFallback("remote_exec") })
@@ -499,6 +504,9 @@ func TestExecTaskInterceptionEligibilityAndFallback(t *testing.T) {
 		if !strings.HasPrefix(answerText(t, result), "Started job ") || strings.Contains(answerText(t, result), "task") {
 			t.Fatalf("legacy fallback %q", answerText(t, result))
 		}
+		if len(keeper.started()) != 1 || len(keeper.ops()) != 1 || keeper.ops()[0] != "app_start" {
+			t.Fatalf("legacy keeper operations %v, want one app_start and one minted id", keeper.ops())
+		}
 	})
 	t.Run("legacy_pre_revision", func(t *testing.T) {
 		keeper := &taskKeeper{}
@@ -506,6 +514,9 @@ func TestExecTaskInterceptionEligibilityAndFallback(t *testing.T) {
 		result := callTaskTool(t, ctx, session, "app_exec", map[string]any{"application": "allowed", "arguments": []string{"status"}})
 		if !strings.HasPrefix(answerText(t, result), "Started job ") || strings.Contains(answerText(t, result), "task") {
 			t.Fatalf("legacy fallback %q", answerText(t, result))
+		}
+		if len(keeper.started()) != 1 || len(keeper.ops()) != 1 || keeper.ops()[0] != "app_start" {
+			t.Fatalf("legacy keeper operations %v, want one app_start and one minted id", keeper.ops())
 		}
 	})
 	t.Run("refused start", func(t *testing.T) {
@@ -520,8 +531,8 @@ func TestExecTaskInterceptionEligibilityAndFallback(t *testing.T) {
 			if !result.IsError || answerText(t, result) != "refused" {
 				t.Fatalf("refusal changed: %+v", result)
 			}
-			if _, err := taskGet(ctx, session, strings.Repeat("ab", 32)); err == nil || rpcError(t, err).Code != -32602 {
-				t.Fatalf("refused start created a task: %v", err)
+			if len(keeper.started()) != 0 || len(keeper.ops()) != 1 || keeper.ops()[0] != map[string]string{"remote_exec": "start", "app_exec": "app_start"}[tool] {
+				t.Fatalf("refused start operations %v and minted ids %v", keeper.ops(), keeper.started())
 			}
 		}
 		t.Run("remote_exec", func(t *testing.T) { runRefusedStart("remote_exec") })
