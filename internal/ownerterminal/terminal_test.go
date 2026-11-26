@@ -11,8 +11,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"golang.org/x/term"
 )
+
+// linuxProbe is replaced by the linux test build to report /proc state.
+var linuxProbe = func(pid int) []string {
+	return []string{fmt.Sprintf("bridge pid=%d process probe requires linux", pid)}
+}
+
+func waitErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "exit-zero"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline-exceeded"
+	case errors.Is(err, ErrTerminal):
+		return "err-terminal"
+	default:
+		return "other"
+	}
+}
 
 func TestNativeTerminalChild(t *testing.T) {
 	if os.Getenv("SSJACK_NATIVE_TERMINAL_CHILD") != "1" {
@@ -56,6 +75,9 @@ func TestNativeTerminal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			flakediag.OnFailure(t, func() string {
+				return flakediag.Join("goroutines:\n" + flakediag.SafeGoroutineDump(64*1024))
+			})
 			capture := CaptureOutput(terminal.Output)
 			defer func() {
 				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
@@ -74,11 +96,14 @@ func TestNativeTerminal(t *testing.T) {
 				t.Fatal("real terminal readiness failed:", err)
 			}
 			if mode == "cancel" {
+				cancelledAt := time.Now()
 				cancel()
 				joined, stop := context.WithTimeout(context.Background(), time.Minute)
 				defer stop()
-				if err := terminal.Wait(joined); !errors.Is(err, ErrTerminal) {
-					t.Fatal("cancelled terminal did not join its child with a failed exit")
+				err := terminal.Wait(joined)
+				if !errors.Is(err, ErrTerminal) {
+					t.Fatalf("cancelled terminal did not join its child with a failed exit: err=%v\n%s",
+						err, cancelSnapshot(terminal, capture, time.Since(cancelledAt), err))
 				}
 				return
 			}
@@ -101,4 +126,32 @@ func TestNativeTerminal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func cancelSnapshot(terminal *Terminal, capture *Capture, sinceCancel time.Duration, waitErr error) string {
+	doneClosed, watchClosed := false, false
+	select {
+	case <-terminal.done:
+		doneClosed = true
+	default:
+	}
+	select {
+	case <-terminal.watch:
+		watchClosed = true
+	default:
+	}
+	ready, total, overflow := false, 0, false
+	capture.Inspect(func(data []byte, captured int, over bool) {
+		ready = bytes.Contains(data, []byte("NATIVE-TERMINAL-READY"))
+		total, overflow = captured, over
+	})
+	lines := []string{"goroutines-in-branch:", flakediag.SafeGoroutineDump(8 * 1024)}
+	lines = append(lines,
+		fmt.Sprintf("elapsed-since-cancel=%v waitErrorClass=%s", sinceCancel, waitErrorClass(waitErr)),
+		fmt.Sprintf("sigterm result=%s", terminal.stopSignalState()),
+		fmt.Sprintf("doneClosed=%v watchClosed=%v", doneClosed, watchClosed),
+		fmt.Sprintf("capture total=%d readySeen=%v overflow=%v", total, ready, overflow),
+	)
+	lines = append(lines, linuxProbe(terminal.pid)...)
+	return flakediag.Join(lines...)
 }

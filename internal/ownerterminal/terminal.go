@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"syscall"
 )
 
 var ErrTerminal = errors.New("synthetic terminal process failed")
@@ -22,6 +23,10 @@ type Terminal struct {
 	Output     io.ReadCloser
 	done       chan struct{}
 	watch      chan struct{}
+	pid        int
+	stopMu     sync.Mutex
+	stopSent   bool
+	stopErr    error
 	stop       func()
 	err        error
 	once       sync.Once
@@ -49,6 +54,33 @@ func (t *Terminal) Wait(ctx context.Context) error {
 		return t.err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// stopErrorClass renders a bounded classification of a signal failure.
+func stopErrorClass(err error) string {
+	switch {
+	case errors.Is(err, os.ErrProcessDone):
+		return "process-already-finished"
+	case errors.Is(err, syscall.EPERM):
+		return "eperm"
+	case errors.Is(err, syscall.ESRCH):
+		return "esrch"
+	default:
+		return "other"
+	}
+}
+
+func (t *Terminal) stopSignalState() string {
+	t.stopMu.Lock()
+	defer t.stopMu.Unlock()
+	switch {
+	case !t.stopSent:
+		return "not-sent"
+	case t.stopErr == nil:
+		return "sent-ok"
+	default:
+		return "error:" + stopErrorClass(t.stopErr)
 	}
 }
 

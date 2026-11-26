@@ -89,14 +89,22 @@ func start(ctx context.Context, spec Command) (_ *Terminal, result error) {
 	}
 	_ = windows.CloseHandle(process.Thread)
 	t := &Terminal{Input: inWrite, Output: outRead, done: make(chan struct{}), watch: make(chan struct{})}
+	t.pid = int(process.ProcessId)
 	var processMu sync.Mutex
 	t.stop = func() {
 		processMu.Lock()
 		defer processMu.Unlock()
 		select {
 		case <-t.done:
+			t.stopMu.Lock()
+			t.stopSent = true
+			t.stopErr = os.ErrProcessDone
+			t.stopMu.Unlock()
 		default:
-			_ = windows.TerminateProcess(process.Process, 1)
+			t.stopMu.Lock()
+			t.stopSent = true
+			t.stopErr = windows.TerminateProcess(process.Process, 1)
+			t.stopMu.Unlock()
 		}
 	}
 	go func() {

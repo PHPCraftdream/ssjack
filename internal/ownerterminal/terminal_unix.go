@@ -34,7 +34,13 @@ func start(ctx context.Context, spec Command) (*Terminal, error) {
 		return nil, ErrTerminal
 	}
 	t := &Terminal{Input: input, Output: output, done: make(chan struct{}), watch: make(chan struct{})}
-	t.stop = func() { _ = command.Process.Signal(syscall.SIGTERM) }
+	t.pid = command.Process.Pid
+	t.stop = func() {
+		t.stopMu.Lock()
+		defer t.stopMu.Unlock()
+		t.stopSent = true
+		t.stopErr = command.Process.Signal(syscall.SIGTERM)
+	}
 	go func() {
 		if command.Wait() != nil {
 			t.err = ErrTerminal
