@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -55,6 +56,83 @@ func (r *remoteRecorder) Execute(ctx context.Context, command ownerpacket.Comman
 			Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: revision}}}, r.failure
 	}
 	return ownerdb.Snapshot{}, r.failure
+}
+
+func TestRemoteApprovalWriteForwardedWithRevision(t *testing.T) {
+	approve := ownerpacket.ApprovalChange{ApplicationName: "approvable", ApplicationPath: "/opt/approvable", ReviewedHash: strings.Repeat("ab", 32), ReplacesHash: strings.Repeat("cd", 32)}
+	revoke := ownerpacket.ApprovalChange{ApplicationName: "revocable", ReviewedHash: strings.Repeat("ef", 32), ReplacesHash: strings.Repeat("12", 32)}
+	for _, test := range []struct {
+		name, operation string
+		change          ownerpacket.ApprovalChange
+		call            func(*Remote, ownerpacket.ApprovalChange) error
+	}{
+		{"approve", "approve_application", approve, (*Remote).ApproveApplication},
+		{"revoke", "revoke_application", revoke, (*Remote).RevokeApplication},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := &remoteRecorder{failure: refusal}
+			b := (&Remote{ctx: context.Background(), client: r}).AtRevision(42).(*Remote)
+			if err := test.call(b, test.change); !errors.Is(err, refusal) {
+				t.Fatalf("approval error = %v", err)
+			}
+			command := r.command
+			if command.Operation != test.operation || command.Revision == nil || *command.Revision != 42 || command.Plan != 0 || command.Approval == nil || !reflect.DeepEqual(*command.Approval, test.change) {
+				t.Fatal("remote approval did not preserve its operation, revision or body")
+			}
+			if command.Directory != nil || command.Secret != nil || command.Export != nil || command.Link != nil || command.Inspect != nil || command.Recovery != "" || command.Rotation != nil {
+				t.Fatal("remote approval set another command body")
+			}
+		})
+	}
+}
+
+func TestRemoteRevokeRejectsPathField(t *testing.T) {
+	cases := []struct {
+		call func(*Remote) error
+	}{
+		{func(b *Remote) error {
+			return b.ApproveApplication(ownerpacket.ApprovalChange{ApplicationPath: "synthetic-path", ReviewedHash: strings.Repeat("ab", 32)})
+		}},
+		{func(b *Remote) error {
+			return b.RevokeApplication(ownerpacket.ApprovalChange{ApplicationName: "revocable", ApplicationPath: "/opt/revocable", ReviewedHash: strings.Repeat("ab", 32), ReplacesHash: strings.Repeat("cd", 32)})
+		}},
+	}
+	for _, test := range cases {
+		r := &remoteRecorder{}
+		b := (&Remote{ctx: context.Background(), client: r}).AtRevision(42).(*Remote)
+		if err := test.call(b); !errors.Is(err, ownerpacket.ErrProtocol) || r.command.Operation != "" {
+			t.Fatal("invalid remote approval reached the protocol")
+		}
+	}
+}
+
+func TestRemoteApprovalErrorPropagationAndMissingRevision(t *testing.T) {
+	approve := ownerpacket.ApprovalChange{ApplicationName: "approvable", ApplicationPath: "/opt/approvable", ReviewedHash: strings.Repeat("ab", 32), ReplacesHash: strings.Repeat("cd", 32)}
+	revoke := ownerpacket.ApprovalChange{ApplicationName: "revocable", ReviewedHash: strings.Repeat("ef", 32), ReplacesHash: strings.Repeat("12", 32)}
+	calls := []struct {
+		name   string
+		change ownerpacket.ApprovalChange
+		call   func(*Remote, ownerpacket.ApprovalChange) error
+	}{
+		{"approve", approve, (*Remote).ApproveApplication},
+		{"revoke", revoke, (*Remote).RevokeApplication},
+	}
+	for _, failure := range []error{ownerpacket.ErrReviewStale, vault.ErrOwnerRevision, refusal} {
+		for _, test := range calls {
+			r := &remoteRecorder{failure: failure}
+			b := (&Remote{ctx: context.Background(), client: r}).AtRevision(42).(*Remote)
+			if err := test.call(b, test.change); !errors.Is(err, failure) {
+				t.Fatalf("%s did not preserve %v: %v", test.name, failure, err)
+			}
+		}
+	}
+	for _, test := range calls {
+		r := &remoteRecorder{}
+		b := &Remote{ctx: context.Background(), client: r}
+		if err := test.call(b, test.change); !errors.Is(err, vault.ErrOwnerRevision) || r.command.Operation != "" {
+			t.Fatalf("unscoped %s approval reached the protocol", test.name)
+		}
+	}
 }
 
 func TestRemoteSnapshotVaultRefusesWithoutProtocolTraffic(t *testing.T) {

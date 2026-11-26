@@ -3,11 +3,14 @@ package ownerbackend
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -20,6 +23,7 @@ type recorder struct {
 	revision  uint64
 	plan      uint64
 	snapshots uint64
+	mutation  ownerdb.ApprovalMutation
 }
 
 func (r *recorder) Snapshot() (ownerdb.Snapshot, error) {
@@ -32,6 +36,13 @@ func (r *recorder) Snapshot() (ownerdb.Snapshot, error) {
 func (r *recorder) record(action string, revision uint64) error {
 	r.action, r.revision = action, revision
 	return refusal
+}
+func (r *recorder) ApproveWithSnapshot(ctx context.Context, revision uint64, mut ownerdb.ApprovalMutation) error {
+	if _, bounded := ctx.Deadline(); !bounded || ctx.Err() != nil {
+		return errors.New("synthetic missing active bound")
+	}
+	r.mutation = mut
+	return r.record("approve", revision)
 }
 func (r *recorder) EditAt(revision uint64, _ func(*vault.Vault) error) error {
 	return r.record("edit", revision)
@@ -77,6 +88,56 @@ type snapshotManager struct {
 func (m *snapshotManager) SnapshotVault() (string, error) {
 	m.calls++
 	return "synthetic-snapshot", nil
+}
+
+func TestLocalApprovalWriteMapsToManagerMutation(t *testing.T) {
+	approve := ownerpacket.ApprovalChange{ApplicationName: "approvable", ApplicationPath: "/opt/approvable", ReviewedHash: strings.Repeat("ab", 32), ReplacesHash: strings.Repeat("cd", 32)}
+	revoke := ownerpacket.ApprovalChange{ApplicationName: "revocable", ReviewedHash: strings.Repeat("ef", 32), ReplacesHash: strings.Repeat("12", 32)}
+	for _, test := range []struct {
+		name   string
+		change ownerpacket.ApprovalChange
+		call   func(*Local, ownerpacket.ApprovalChange) error
+		want   ownerdb.ApprovalMutation
+	}{
+		{"approve", approve, (*Local).ApproveApplication, ownerdb.ApprovalMutation{Kind: "approve", Name: approve.ApplicationName, Path: approve.ApplicationPath, Hash: approve.ReviewedHash, Replaces: approve.ReplacesHash}},
+		{"revoke", revoke, (*Local).RevokeApplication, ownerdb.ApprovalMutation{Kind: "revoke", Name: revoke.ApplicationName, Hash: revoke.ReviewedHash, Replaces: revoke.ReplacesHash}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := &recorder{}
+			original := &Local{manager: r}
+			if err := test.call(original.AtRevision(42).(*Local), test.change); !errors.Is(err, refusal) || r.action != "approve" || r.revision != 42 || !reflect.DeepEqual(r.mutation, test.want) {
+				t.Fatal("local approval did not preserve its revision or manager mutation")
+			}
+			if test.name == "revoke" && r.mutation.Path != "" {
+				t.Fatal("revoke mutation unexpectedly included a path")
+			}
+		})
+	}
+	invalid := ownerpacket.ApprovalChange{ApplicationPath: "synthetic-path", ReviewedHash: strings.Repeat("ab", 32)}
+	for _, test := range []struct {
+		change ownerpacket.ApprovalChange
+		call   func(*Local, ownerpacket.ApprovalChange) error
+	}{
+		{invalid, (*Local).ApproveApplication},
+		{ownerpacket.ApprovalChange{ApplicationName: "revocable", ApplicationPath: "/opt/revocable", ReviewedHash: strings.Repeat("ab", 32), ReplacesHash: strings.Repeat("cd", 32)}, (*Local).RevokeApplication},
+	} {
+		r := &recorder{}
+		if err := test.call(&Local{manager: r}, test.change); !errors.Is(err, ownerpacket.ErrProtocol) || r.action != "" || r.revision != 0 {
+			t.Fatal("invalid local approval reached the manager")
+		}
+	}
+	for _, test := range []struct {
+		change ownerpacket.ApprovalChange
+		call   func(*Local, ownerpacket.ApprovalChange) error
+	}{
+		{approve, (*Local).ApproveApplication},
+		{revoke, (*Local).RevokeApplication},
+	} {
+		r := &recorder{}
+		if err := test.call(&Local{manager: r}, test.change); !errors.Is(err, vault.ErrOwnerRevision) || r.action != "" {
+			t.Fatal("unscoped local approval reached the manager")
+		}
+	}
 }
 
 func TestLocalSnapshotVaultDelegatesToManager(t *testing.T) {

@@ -55,8 +55,8 @@ func (b *Remote) OwnerSnapshot() (vault.DirectoryMetadata, ownerdb.Status, owner
 
 // SnapshotVault refuses: the vault ciphertext and its saved digest live on
 // the keeper side and the owner protocol has no snapshot operation, so the
-// client cannot take a verified snapshot. Approval writes stay unavailable
-// on remote backends instead of faking success.
+// client cannot take a verified snapshot. Composite approval writes use
+// ApproveApplication and RevokeApplication instead.
 func (b *Remote) SnapshotVault() (string, error) { return "", ownerpacket.ErrProtocol }
 
 func (b *Remote) Metadata() (vault.DirectoryMetadata, error) {
@@ -150,6 +150,25 @@ func helperPaths(command *ownerpacket.Command) error {
 func (b *Remote) Edit(func(*vault.Vault) error) error { return ownerpacket.ErrProtocol }
 func (b *Remote) ApplyDirectory(change ownerpacket.DirectoryChange) error {
 	return b.mutate(ownerpacket.Command{Operation: "directory", Directory: &change})
+}
+func (b *Remote) ApproveApplication(change ownerpacket.ApprovalChange) error {
+	if !change.Valid() {
+		return ownerpacket.ErrProtocol
+	}
+	return b.mutate(ownerpacket.Command{Operation: "approve_application", Approval: &change})
+}
+
+// revokeValid checks the revoke shape (no application path); ApprovalChange.Valid is the approve shape.
+func revokeValid(change ownerpacket.ApprovalChange) bool {
+	revision := uint64(0)
+	return (ownerpacket.Command{Operation: "revoke_application", Revision: &revision, Approval: &change}).Valid()
+}
+
+func (b *Remote) RevokeApplication(change ownerpacket.ApprovalChange) error {
+	if !revokeValid(change) {
+		return ownerpacket.ErrProtocol
+	}
+	return b.mutate(ownerpacket.Command{Operation: "revoke_application", Approval: &change})
 }
 func (b *Remote) Submit(change vault.OwnerChange) error {
 	return b.mutate(ownerpacket.Command{Operation: "secret", Secret: &ownerpacket.SecretChange{

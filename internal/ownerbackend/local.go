@@ -2,8 +2,10 @@ package ownerbackend
 
 import (
 	"context"
+	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
@@ -41,6 +43,7 @@ type manager interface {
 	ResumeDraftAt(uint64) error
 	CancelDraft() error
 	CancelDraftAt(uint64) error
+	ApproveWithSnapshot(context.Context, uint64, ownerdb.ApprovalMutation) error
 	Flush(context.Context) error
 	Close(context.Context) error
 }
@@ -117,6 +120,30 @@ func (b *Local) Submit(change vault.OwnerChange) error {
 		return b.manager.SubmitAt(*b.expected, change)
 	}
 	return b.manager.Submit(change)
+}
+
+// approve bounds the composite write like Remote bounds its exchange: Local has no operation context seam.
+func (b *Local) approve(mutation ownerdb.ApprovalMutation) error {
+	if b.expected == nil {
+		return vault.ErrOwnerRevision
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	return b.manager.ApproveWithSnapshot(ctx, *b.expected, mutation)
+}
+
+func (b *Local) ApproveApplication(change ownerpacket.ApprovalChange) error {
+	if !change.Valid() {
+		return ownerpacket.ErrProtocol
+	}
+	return b.approve(ownerdb.ApprovalMutation{Kind: "approve", Name: change.ApplicationName, Path: change.ApplicationPath, Hash: change.ReviewedHash, Replaces: change.ReplacesHash})
+}
+
+func (b *Local) RevokeApplication(change ownerpacket.ApprovalChange) error {
+	if !revokeValid(change) {
+		return ownerpacket.ErrProtocol
+	}
+	return b.approve(ownerdb.ApprovalMutation{Kind: "revoke", Name: change.ApplicationName, Hash: change.ReviewedHash, Replaces: change.ReplacesHash})
 }
 func (b *Local) Link(directory string, master []byte) error {
 	if b.expected != nil {
