@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
-	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui/internal/approvals"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
@@ -42,6 +42,8 @@ type fakeBackend struct {
 	imp                                 ownerdb.ImportStatus
 	calls                               []string // import calls in order
 	args                                []string // InspectImport's path and password, in call order
+	approveOps, revokeOps               int
+	changes                             []ownerpacket.ApprovalChange
 	edits, submissions, closes, exports int
 	mu                                  sync.Mutex // Guards import state and hooks in Program tests.
 	on                                  map[string]func(*fakeBackend)
@@ -61,6 +63,36 @@ func (b *fakeBackend) SnapshotVault() (string, error) {
 	return b.path, nil
 }
 func (b *fakeBackend) Status() ownerdb.Status { return b.status }
+func (b *fakeBackend) ApproveApplication(c ownerpacket.ApprovalChange) error {
+	b.approveOps++
+	b.changes = append(b.changes, c)
+	if b.approvalVault == nil {
+		return errors.New("vault_unavailable")
+	}
+	if err := b.approvalVault.ApproveApplication(vault.Approval{Name: c.ApplicationName, Path: c.ApplicationPath, Hash: c.ReviewedHash}, c.ReplacesHash); err != nil {
+		return err
+	}
+	records, err := vault.ListApplicationApprovals(b.approvalVault)
+	if err == nil {
+		b.metadata.Approvals = records
+	}
+	return nil
+}
+func (b *fakeBackend) RevokeApplication(c ownerpacket.ApprovalChange) error {
+	b.revokeOps++
+	b.changes = append(b.changes, c)
+	if b.approvalVault == nil {
+		return errors.New("vault_unavailable")
+	}
+	if err := b.approvalVault.RevokeApplication(c.ApplicationName); err != nil {
+		return err
+	}
+	records, err := vault.ListApplicationApprovals(b.approvalVault)
+	if err == nil {
+		b.metadata.Approvals = records
+	}
+	return nil
+}
 func (b *fakeBackend) Edit(edit func(*vault.Vault) error) error {
 	b.edits++
 	if b.editFn != nil {
@@ -190,25 +222,6 @@ func realApprovalBackend(t *testing.T, metadata vault.DirectoryMetadata) *fakeBa
 	v, err := vault.Load(path, password)
 	must(t, err)
 	b := &fakeBackend{metadata: metadata, path: path, vaultFile: path, approvalVault: v}
-	b.editFn = func(edit func(*vault.Vault) error) error {
-		if b.edits == 1 && b.snapshots > 0 {
-			before, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			if !bytes.Equal(before, b.snapshotBytes) {
-				return errors.New("snapshot did not match pre-edit ciphertext")
-			}
-		}
-		if err := edit(b.approvalVault); err != nil {
-			return err
-		}
-		if err := vault.SaveUnlocked(context.Background(), path, b.approvalVault); err != nil {
-			return err
-		}
-		b.metadata.Approvals, err = vault.ListApplicationApprovals(v)
-		return err
-	}
 	return b
 }
 func approvalSnapshots(t *testing.T, path string) []string {
@@ -246,6 +259,8 @@ func TestApprovalsModelFlows(t *testing.T) {
 			_ = sharedBackend.approvalVault.RevokeApplication(record.Name)
 		}
 		sharedBackend.metadata.Approvals = nil
+		sharedBackend.approveOps, sharedBackend.revokeOps = 0, 0
+		sharedBackend.changes = nil
 		sharedBackend.edits, sharedBackend.snapshots = 0, 0
 		sharedBackend.snapshotBytes = nil
 		sharedBackend.snapshotErr = nil
@@ -259,30 +274,33 @@ func TestApprovalsModelFlows(t *testing.T) {
 			t.Fatalf("view did not render an unselected quoted candidate: %q", view)
 		}
 	})
-	t.Run("approve writes and snapshots only once", func(t *testing.T) {
+	t.Run("approve writes without snapshot", func(t *testing.T) {
 		b := resetShared()
 		m, child := approvalFixture(t, b, false)
 		selectApprovalRow(t, m, "service-a")
 		press(m, 'a')
 		msg := completeApprovalCmd(t, m, press(m, 13))
-		if _, ok := msg.(operationMsg); !ok || b.edits != 1 {
-			t.Fatalf("approve message=%T edits=%d", msg, b.edits)
+		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
+		reviewedHash := hex.EncodeToString(discovery.Scan(filepath.Dir(child)).Candidates[0].Fingerprint[:])
+		wantApprove := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: canonical, ReviewedHash: reviewedHash, ReplacesHash: ""}
+		if _, ok := msg.(operationMsg); !ok || b.approveOps != 1 || len(b.changes) != 1 || b.changes[0] != wantApprove || b.edits != 0 {
+			t.Fatalf("approveOps=%d changes=%+v want=%+v edits=%d", b.approveOps, b.changes, wantApprove, b.edits)
 		}
 		paths := approvalSnapshots(t, b.path)
-		if len(paths) != 0 || b.snapshots != 1 {
-			t.Fatalf("snapshot count=%d files=%v", b.snapshots, paths)
+		if len(paths) != 0 || b.snapshots != 0 {
+			t.Fatalf("approval menu snapshot count=%d files=%v", b.snapshots, paths)
 		}
 		v := b.approvalVault
 		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
-		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
-		if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
+		if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != reviewedHash {
 			t.Fatalf("approval record=%+v", records)
 		}
 		if _, err := hex.DecodeString(records[0].Hash); err != nil {
 			t.Fatalf("approval hash is not hex: %q", records[0].Hash)
 		}
+		reviewedHash = records[0].Hash
 		_, refresh := m.Update(operationMsg{action: "approvals"})
 		if refresh != nil {
 			msg := refresh()
@@ -291,11 +309,11 @@ func TestApprovalsModelFlows(t *testing.T) {
 		selectApprovalRow(t, m, "service-a")
 		press(m, 'x')
 		msg = completeApprovalCmd(t, m, press(m, 13))
-		if _, ok := msg.(operationMsg); !ok || b.edits != 2 {
-			t.Fatalf("revoke message=%T edits=%d", msg, b.edits)
+		if _, ok := msg.(operationMsg); !ok || b.revokeOps != 1 || len(b.changes) != 2 || b.changes[1] != (ownerpacket.ApprovalChange{ApplicationName: "service-a", ReviewedHash: reviewedHash, ReplacesHash: reviewedHash}) || b.edits != 0 || b.snapshots != 0 {
+			t.Fatalf("revoke message=%T revokeOps=%d edits=%d snapshots=%d", msg, b.revokeOps, b.edits, b.snapshots)
 		}
-		if got := approvalSnapshots(t, b.path); len(got) != 0 || b.snapshots != 1 {
-			t.Fatalf("revoke created extra snapshot: files=%v snapshots=%d", got, b.snapshots)
+		if got := approvalSnapshots(t, b.path); len(got) != 0 || b.snapshots != 0 {
+			t.Fatalf("approval menu created a snapshot: files=%v snapshots=%d", got, b.snapshots)
 		}
 		v = b.approvalVault
 		must(t, err)
@@ -343,23 +361,20 @@ func TestApprovalsModelFlows(t *testing.T) {
 			t.Fatal("cancelled approval caused write effects")
 		}
 	})
-	t.Run("snapshot failure blocks approve edit", func(t *testing.T) {
+	t.Run("menu writes directly without snapshot or edit", func(t *testing.T) {
 		b := resetShared()
-		b.snapshotErr = errors.New("snapshot unavailable")
-		m, _ := approvalFixture(t, b, false)
+		m, child := approvalFixture(t, b, false)
 		selectApprovalRow(t, m, "service-a")
 		press(m, 'a')
-		if cmd := press(m, 13); cmd != nil || m.message != "snapshot_failed" || b.edits != 0 {
-			t.Fatalf("snapshot failure cmd=%v message=%q edits=%d", cmd != nil, m.message, b.edits)
+		completeApprovalCmd(t, m, press(m, 13))
+		if b.approveOps != 1 || b.edits != 0 || b.snapshots != 0 || len(b.changes) != 1 {
+			t.Fatalf("approve calls=%d changes=%+v edits=%d snapshots=%d", b.approveOps, b.changes, b.edits, b.snapshots)
 		}
-		b.snapshotErr = nil
-		cmd := press(m, 13)
-		if cmd == nil || b.edits != 0 {
-			t.Fatal("snapshot retry did not queue the edit")
-		}
-		completeApprovalCmd(t, m, cmd)
-		if b.edits != 1 || b.snapshots != 1 {
-			t.Fatalf("retry edits=%d snapshots=%d", b.edits, b.snapshots)
+		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
+		reviewedHash := hex.EncodeToString(discovery.Scan(filepath.Dir(child)).Candidates[0].Fingerprint[:])
+		want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: canonical, ReviewedHash: reviewedHash, ReplacesHash: ""}
+		if b.changes[0] != want || b.edits != 0 || b.snapshots != 0 {
+			t.Fatalf("direct change=%+v want=%+v edits=%d snapshots=%d", b.changes[0], want, b.edits, b.snapshots)
 		}
 	})
 	t.Run("arm then changed scan refuses confirmation", func(t *testing.T) {
@@ -370,8 +385,8 @@ func TestApprovalsModelFlows(t *testing.T) {
 		rewriteApprovalDescriptor(t, child)
 		m.approvals.SetRecords(m.metadata.Approvals)
 		m.approvals.Refresh()
-		if cmd := press(m, 13); cmd != nil || b.edits != 0 || m.approvals.Message() != "review_stale" {
-			t.Fatalf("cmd=%v edits=%d message=%q", cmd != nil, b.edits, m.approvals.Message())
+		if cmd := press(m, 13); cmd != nil || b.approveOps != 0 || b.revokeOps != 0 || b.edits != 0 || b.snapshots != 0 || m.approvals.Message() != "review_stale" {
+			t.Fatalf("cmd=%v approveOps=%d revokeOps=%d edits=%d snapshots=%d message=%q", cmd != nil, b.approveOps, b.revokeOps, b.edits, b.snapshots, m.approvals.Message())
 		}
 		v := b.approvalVault
 		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
@@ -394,8 +409,14 @@ func TestApprovalsModelFlows(t *testing.T) {
 		press(m, 'a')
 		m.metadata.Approvals[0].Hash = strings.Repeat("b", 64)
 		refreshApprovals(m)
-		if cmd := press(m, 13); cmd != nil || b.edits != 1 || m.approvals.Message() != "review_stale" {
-			t.Fatalf("cmd=%v edits=%d message=%q", cmd != nil, b.edits, m.approvals.Message())
+		if cmd := press(m, 13); cmd != nil || b.approveOps != 1 || m.approvals.Message() != "review_stale" || len(b.changes) != 1 {
+			t.Fatalf("cmd=%v approveOps=%d changes=%+v message=%q", cmd != nil, b.approveOps, b.changes, m.approvals.Message())
+		}
+		v := b.approvalVault
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		if len(records) != 1 || records[0].Name != "service-a" || records[0].Hash != b.changes[0].ReviewedHash {
+			t.Fatalf("stale approve changed vault records: %+v", records)
 		}
 	})
 	t.Run("arm unchanged refresh stays confirmable", func(t *testing.T) {
@@ -410,58 +431,13 @@ func TestApprovalsModelFlows(t *testing.T) {
 		records, err := vault.ListApplicationApprovals(v)
 		must(t, err)
 		canonical := discovery.Scan(filepath.Dir(child)).Candidates[0].CanonicalPath
-		if b.edits != 1 || len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || len(records[0].Hash) != 64 {
-			t.Fatalf("edits=%d records=%+v", b.edits, records)
+		reviewedHash := hex.EncodeToString(discovery.Scan(filepath.Dir(child)).Candidates[0].Fingerprint[:])
+		wantChange := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: canonical, ReviewedHash: reviewedHash}
+		if b.approveOps != 1 || len(b.changes) != 1 || b.changes[0] != wantChange || len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != reviewedHash {
+			t.Fatalf("approveOps=%d records=%+v", b.approveOps, records)
 		}
 		if _, err := hex.DecodeString(records[0].Hash); err != nil {
 			t.Fatalf("hash=%q", records[0].Hash)
-		}
-	})
-	t.Run("snapshot precedes edit and matches pre-edit bytes", func(t *testing.T) {
-		b := resetShared()
-		m, _ := approvalFixture(t, b, false)
-		b.editFn = func(edit func(*vault.Vault) error) error {
-			if b.edits == 1 {
-				if b.snapshots != 1 {
-					return fmt.Errorf("snapshot count before edit=%d", b.snapshots)
-				}
-				before, err := os.ReadFile(b.path)
-				if err != nil {
-					return err
-				}
-				if !bytes.Equal(before, b.snapshotBytes) {
-					return errors.New("snapshot differs from pre-edit ciphertext")
-				}
-			}
-			v := b.approvalVault
-			if err := edit(v); err != nil {
-				return err
-			}
-			if err := vault.SaveUnlocked(context.Background(), b.path, v); err != nil {
-				return err
-			}
-			records, err := vault.ListApplicationApprovals(v)
-			b.metadata.Approvals = records
-			return err
-		}
-		selectApprovalRow(t, m, "service-a")
-		press(m, 'a')
-		completeApprovalCmd(t, m, press(m, 13))
-		after, err := os.ReadFile(b.path)
-		must(t, err)
-		if bytes.Equal(after, b.snapshotBytes) {
-			t.Fatal("vault ciphertext did not change after edit")
-		}
-		_, refresh := m.Update(operationMsg{action: "approvals"})
-		if refresh != nil {
-			msg := refresh()
-			m.Update(msg)
-		}
-		selectApprovalRow(t, m, "service-a")
-		press(m, 'x')
-		completeApprovalCmd(t, m, press(m, 13))
-		if b.snapshots != 1 {
-			t.Fatalf("second mutation took another snapshot: %d", b.snapshots)
 		}
 	})
 	t.Run("reordered armed candidate stays pinned through confirm", func(t *testing.T) {
@@ -489,7 +465,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		if !ok || mut.Name != "service-a" {
 			t.Fatalf("armed mutation=%+v ok=%t", mut, ok)
 		}
-		reviewedHash := mut.Hash
+		reviewedHash := hex.EncodeToString(discovery.Scan(root).Candidates[0].Fingerprint[:])
 		renamed := filepath.Join(root, "svc-z")
 		if err := os.Rename(first, renamed); err != nil {
 			t.Fatal(err)
@@ -497,41 +473,30 @@ func TestApprovalsModelFlows(t *testing.T) {
 		refreshApprovals(m)
 		entries := m.approvals.Entries()
 		cursor := m.approvals.Cursor()
-		mut, ok = m.approvals.Pending()
 		refreshedPath := ""
 		for _, candidate := range discovery.Scan(root).Candidates {
 			if candidate.Name == "service-a" {
 				refreshedPath = candidate.CanonicalPath
 			}
 		}
-		if !ok || cursor < 0 || cursor >= len(entries) || entries[cursor].Name != `"service-a"` || entries[cursor].DisplayPath != `"svc-z"` || mut.Path != refreshedPath || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
+		mut, ok = m.approvals.Pending()
+		if !ok || cursor < 0 || cursor >= len(entries) || entries[cursor].Name != `"service-a"` || entries[cursor].DisplayPath != `"svc-z"` || mut.Path != refreshedPath || mut.Hash != reviewedHash || !strings.Contains(m.View().Content, `> candidate name="service-a"`) {
 			t.Fatalf("reviewed row not selected after reordering: mutation=%+v cursor=%d entries=%+v view=%q", mut, cursor, entries, m.View().Content)
-		}
-		canonical := refreshedPath
-		b.editFn = func(edit func(*vault.Vault) error) error {
-			v := b.approvalVault
-			if err := edit(v); err != nil {
-				return err
-			}
-			records, err := vault.ListApplicationApprovals(v)
-			if err != nil {
-				return err
-			}
-			if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != canonical || records[0].Hash != reviewedHash {
-				return fmt.Errorf("approved record=%+v", records)
-			}
-			if err := vault.SaveUnlocked(context.Background(), b.path, v); err != nil {
-				return err
-			}
-			b.metadata.Approvals = records
-			return nil
 		}
 		msg := completeApprovalCmd(t, m, press(m, 13))
 		if operation, ok := msg.(operationMsg); !ok || operation.err != nil {
 			t.Fatalf("approval operation=%#v", msg)
 		}
-		if b.edits != 1 {
-			t.Fatalf("edits=%d", b.edits)
+		if b.approveOps != 1 {
+			t.Fatalf("approveOps=%d", b.approveOps)
+		}
+		v := b.approvalVault
+		must(t, vault.SaveUnlocked(context.Background(), b.path, v))
+		records, err := vault.ListApplicationApprovals(v)
+		must(t, err)
+		wantChange := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: refreshedPath, ReviewedHash: reviewedHash}
+		if len(records) != 1 || records[0].Name != "service-a" || records[0].Path != refreshedPath || records[0].Hash != reviewedHash || len(b.changes) != 1 || b.changes[0] != wantChange {
+			t.Fatalf("records=%+v changes=%+v want=%+v", records, b.changes, wantChange)
 		}
 	})
 	t.Run("unprintable record path never rendered", func(t *testing.T) {
@@ -539,7 +504,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		root := t.TempDir()
 		m := testModel(b)
 		m.approvalCWD = root
-		m.approvals = approvals.New(nil, root, nil)
+		m.approvals = approvals.New(nil, root)
 		m.metadata.Approvals = []vault.Approval{{Name: "unsafe\x02name", Path: filepath.Join(root, "bad\x01path"), Hash: strings.Repeat("a", 64)}}
 		m.approvals.SetRecords(m.metadata.Approvals)
 		m.approvals.Refresh()
@@ -553,7 +518,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		root, outside := t.TempDir(), t.TempDir()
 		m := testModel(&fakeBackend{})
 		m.approvalCWD = root
-		m.approvals = approvals.New(nil, root, nil)
+		m.approvals = approvals.New(nil, root)
 		m.metadata.Approvals = []vault.Approval{{Name: "outside", Path: filepath.Join(outside, "app"), Hash: strings.Repeat("a", 64)}}
 		m.approvals.SetRecords(m.metadata.Approvals)
 		m.approvals.Refresh()
@@ -575,7 +540,7 @@ func TestApprovalsModelFlows(t *testing.T) {
 		must(t, err)
 		root := t.TempDir()
 		m.approvalCWD = root
-		m.approvals = approvals.New(nil, root, nil)
+		m.approvals = approvals.New(nil, root)
 		m.metadata.Approvals = records
 		refreshApprovals(m)
 		entries := m.approvals.Entries()
@@ -594,8 +559,8 @@ func TestApprovalsModelFlows(t *testing.T) {
 		v = b.approvalVault
 		records, err = vault.ListApplicationApprovals(v)
 		must(t, err)
-		if b.edits != 2 || len(records) != 0 {
-			t.Fatalf("edits=%d remaining=%v child=%s", b.edits, records, child)
+		if b.approveOps != 1 || b.revokeOps != 1 || len(records) != 0 {
+			t.Fatalf("approveOps=%d revokeOps=%d remaining=%v child=%s", b.approveOps, b.revokeOps, records, child)
 		}
 	})
 }
@@ -800,70 +765,6 @@ func TestBubbleTeaProgramNavigatesCancelsClosesAndKeepsSingleConnection(t *testi
 	rendered := wait()
 	_, ok := model.TakeConnection()
 	check(t, ok || backend.closes != 1 || !strings.Contains(rendered, escaped("only")), "a single connection point was activated, or exit did not close once")
-}
-
-const archivePassword = "synthetic-archive-password" // Wait for stable rendered output before sending more keys.
-
-func importBackend(inspected ownerdb.ImportStatus) *fakeBackend {
-	return &fakeBackend{on: map[string]func(*fakeBackend){
-		"inspect": func(f *fakeBackend) { f.imp = inspected },
-		"confirm": func(f *fakeBackend) {
-			f.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
-		},
-		"abort": func(f *fakeBackend) { f.imp = ownerdb.ImportStatus{} },
-	}}
-}
-func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, func() string, *Model) {
-	model, program, out, wait, release := startProgram(t, b, archivePassword)
-	downTo(program, b, "import")
-	send(program, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "synthetic-archive.zip"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
-	waitRawOutput(t, out, "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
-	release()
-	waitOutput(t, out, "<hidden; entered>")
-	send(program, tea.KeyPressMsg{Code: 9})
-	waitOutput(t, out, "> [Apply]")
-	program.Send(tea.KeyPressMsg{Code: 13})
-	return program, out, wait, model
-}
-
-func TestCompletedImportRejectsAnOlderRefreshSnapshot(t *testing.T) {
-	b := stagedBackend()
-	m := testModel(b)
-	stale := m.refresh()()
-	b.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
-	m.Update(operationMsg{action: "import-confirm"})
-	_, next := m.Update(stale)
-	check(t, m.imp.Phase != ownerdb.ImportComplete || m.at.screen != databaseScreen || next == nil,
-		"old refresh rolled back the completed import or stopped its single refresh chain")
-}
-
-func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {
-	b := importBackend(stagedBackend().imp)
-	program, out, wait, model := importFlow(t, b)
-	waitOutput(t, out, "Import preview")
-	program.Send(tea.KeyPressMsg{Code: 13}) // cursor 0: [Confirm import…]
-	waitOutput(t, out, "Type IMPORT")
-	send(program, tea.PasteMsg{Content: "IMPORT"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
-	waitOutput(t, out, "were added")
-	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	output := wait()
-	check(t, model.form != nil || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword, "real Program import did not accept the reader value")
-	check(t, strings.Join(b.calls, ",") != "inspect,confirm" || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword || b.closes != 1 || strings.Contains(output, archivePassword), "program flow lost input, did not inspect, confirm and close once, or exposed the archive password")
-}
-func TestBubbleTeaProgramShowsFixedMessageForWrongPasswordAndEscapeAbortsOnce(t *testing.T) {
-	b := importBackend(ownerdb.ImportStatus{Err: ownerarchive.ErrAuthentication})
-	program, out, wait, _ := importFlow(t, b)
-	waitOutput(t, out, "wrong archive password")
-	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	output := wait()
-	check(t, strings.Join(b.calls, ",") != "inspect" || strings.Contains(output, "Import preview"), "failed inspection staged a preview or called more")
-	check(t, strings.Contains(output, archivePassword) || strings.Contains(output, ownerarchive.ErrAuthentication.Error()), "output exposed the password or the raw error")
-	b = importBackend(stagedBackend().imp)
-	program, out, wait, _ = importFlow(t, b)
-	waitOutput(t, out, "Import preview")
-	send(program, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	wait()
-	check(t, strings.Join(b.calls, ",") != "inspect,abort", "Escape on the preview did not abort exactly once without confirming")
 }
 
 func TestStaleSecretReadClearsValueAndCancelledRetryPreservesField(t *testing.T) {

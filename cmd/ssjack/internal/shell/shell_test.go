@@ -3,12 +3,20 @@ package shell
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
+
+func TestOwnerProtocolVersionMismatchMessage(t *testing.T) {
+	err := ownerControlOpenError()
+	if err == nil || err.Error() != ownerControlMessage || !strings.Contains(err.Error(), "may run a different ssjack protocol version") || !strings.Contains(err.Error(), "Restart keeper and client from the same build") {
+		t.Fatalf("owner-control message=%v", err)
+	}
+}
 
 func TestShellOutcomeFailsClosedOnlyWhenInputNotReleased(t *testing.T) {
 	for _, err := range []error{

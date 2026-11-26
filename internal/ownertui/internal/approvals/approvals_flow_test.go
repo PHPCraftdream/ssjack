@@ -54,7 +54,7 @@ func controllerFor(t *testing.T, v *vault.Vault) *Controller {
 	t.Helper()
 	root := t.TempDir()
 	putDescriptor(t, root, "svc-a", "service-a")
-	c := New(v, root, nil)
+	c := New(v, root)
 	c.Refresh()
 	for i, e := range c.Entries() {
 		if e.candidate != nil {
@@ -122,7 +122,7 @@ func TestVerifiedRevoke(t *testing.T) {
 		scan := discovery.Scan(root)
 		record := vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}
 		ops := &fakeVaultOps{records: []vault.Approval{record}}
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{record})
 		c.Refresh()
 		for i, entry := range c.Entries() {
@@ -144,7 +144,7 @@ func TestVerifiedRevoke(t *testing.T) {
 		record := vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}
 		live := vault.Approval{Name: record.Name, Path: record.Path, Hash: strings.Repeat("b", 64)}
 		ops := &fakeVaultOps{records: []vault.Approval{live}}
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{record})
 		c.Refresh()
 		for i, entry := range c.Entries() {
@@ -166,7 +166,7 @@ func TestPinnedRefreshRelocatesCursor(t *testing.T) {
 		root := t.TempDir()
 		first := putDescriptor(t, root, "svc-a", "service-a")
 		putDescriptor(t, root, "svc-b", "service-b")
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -196,7 +196,7 @@ func TestPinnedRefreshRelocatesCursor(t *testing.T) {
 		root := t.TempDir()
 		child := putDescriptor(t, root, "svc-a", "service-a")
 		putDescriptor(t, root, "svc-b", "service-b")
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -216,7 +216,7 @@ func TestRejectedApprovalStaysApproved(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-a", "service-a")
 		scan := discovery.Scan(root)
-		c := New(v, root, nil)
+		c := New(v, root)
 		c.Refresh()
 		c.Select(0)
 		c.Reject()
@@ -311,7 +311,7 @@ func TestApproveWritesCandidate(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-a", "service-a")
 		scan := discovery.Scan(root)
-		c := New(v, root, nil)
+		c := New(v, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -419,7 +419,7 @@ func TestRevokePersistsWithoutApprovalSection(t *testing.T) {
 		if v1.Approvals == nil || len(v1.Approvals) != 1 {
 			t.Fatalf("approval section missing after approve: %#v", v1.Approvals)
 		}
-		c = New(v1, c.workingDir, nil)
+		c = New(v1, c.workingDir)
 		c.Refresh()
 		c.Select(0)
 		c.Revoke()
@@ -463,7 +463,7 @@ func TestChangedReapprovalAndStaleConflict(t *testing.T) {
 		root := t.TempDir()
 		child := putDescriptor(t, root, "svc-a", "service-a")
 		scan := discovery.Scan(root)
-		c := New(v, root, nil)
+		c := New(v, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -553,81 +553,12 @@ func TestApprovalLimitsAndPathValidation(t *testing.T) {
 		}
 		candidateRoot := t.TempDir()
 		putDescriptor(t, candidateRoot, "svc-a", "service-a")
-		c := New(v, candidateRoot, nil)
+		c := New(v, candidateRoot)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
 		if err := c.ConfirmApprove(); err == nil || c.Message() != "approval_limit_reached" {
 			t.Fatalf("limit err=%v message=%q", err, c.Message())
-		}
-	})
-}
-
-func TestSnapshotGuard(t *testing.T) {
-	t.Run("failed mutation resets snapshot guard", func(t *testing.T) {
-		_, v, _ := openTestVault(t)
-		c := controllerFor(t, v)
-		calls := 0
-		c.snapshot = func() error { calls++; return nil }
-		c.Arm()
-		if err := c.ConfirmApprove(); err != nil {
-			t.Fatal(err)
-		}
-		if calls != 1 {
-			t.Fatalf("first snapshot calls=%d", calls)
-		}
-		c.Select(0)
-		c.Revoke()
-		records, _ := vault.ListApplicationApprovals(v)
-		ops := &fakeVaultOps{records: records, revokeErr: errors.New("failed")}
-		c.vault = ops
-		if err := c.RevokeConfirm(); err == nil || calls != 1 {
-			t.Fatalf("failed revoke err=%v snapshot calls=%d", err, calls)
-		}
-		c.vault = v
-		c.Refresh()
-		c.Select(0)
-		c.Revoke()
-		if err := c.RevokeConfirm(); err != nil || calls != 2 {
-			t.Fatalf("retry err=%v snapshot calls=%d", err, calls)
-		}
-	})
-	t.Run("snapshots once and rejects failed snapshot", func(t *testing.T) {
-		_, v, _ := openTestVault(t)
-		c := controllerFor(t, v)
-		calls := 0
-		c.snapshot = func() error { calls++; return nil }
-		c.Refresh()
-		if calls != 0 {
-			t.Fatalf("refresh snapshotted %d times", calls)
-		}
-		c.Select(0)
-		c.Reject()
-		if err := c.RejectConfirm(); err != nil {
-			t.Fatal(err)
-		}
-		if calls != 0 {
-			t.Fatalf("reject snapshotted %d times", calls)
-		}
-		c = controllerFor(t, v)
-		c.snapshot = func() error { calls++; return nil }
-		c.Arm()
-		if err := c.ConfirmApprove(); err != nil {
-			t.Fatal(err)
-		}
-		if calls != 1 {
-			t.Fatalf("snapshot calls=%d", calls)
-		}
-		_, v2, _ := openTestVault(t)
-		failing := controllerFor(t, v2)
-		failing.snapshot = func() error { return errors.New("private failure") }
-		failing.Arm()
-		if err := failing.ConfirmApprove(); err == nil || failing.Message() != "snapshot_failed" {
-			t.Fatal("snapshot failure was not fixed")
-		}
-		records, _ := vault.ListApplicationApprovals(v2)
-		if len(records) != 0 {
-			t.Fatalf("snapshot failure mutated vault: %v", records)
 		}
 	})
 }

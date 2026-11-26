@@ -2,15 +2,19 @@ package ownertui
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 	"github.com/PHPCraftdream/ssjack/tests/fixtures/terminalmodel"
 )
@@ -41,6 +45,371 @@ func TestApprovalsNavigation(t *testing.T) {
 			t.Fatal("approvals back navigation did not return to database")
 		}
 	})
+}
+
+type approvalBackend struct {
+	backend
+	metadata                  vault.DirectoryMetadata
+	approveCalls, revokeCalls []ownerpacket.ApprovalChange
+	edits, snapshots          int
+	approveErr, revokeErr     error
+	pinned                    []uint64
+	current                   uint64
+}
+
+type revisionApprovalBackend struct {
+	Backend
+	parent   *approvalBackend
+	revision uint64
+}
+
+func noBackendWrites(b *approvalBackend) bool {
+	return len(b.approveCalls) == 0 && len(b.revokeCalls) == 0 && b.edits == 0 && b.snapshots == 0
+}
+
+func (b *revisionApprovalBackend) ApproveApplication(c ownerpacket.ApprovalChange) error {
+	if b.parent.current != 0 && b.revision != b.parent.current {
+		return vault.ErrOwnerRevision
+	}
+	return b.parent.ApproveApplication(c)
+}
+func (b *revisionApprovalBackend) RevokeApplication(c ownerpacket.ApprovalChange) error {
+	if b.parent.current != 0 && b.revision != b.parent.current {
+		return vault.ErrOwnerRevision
+	}
+	return b.parent.RevokeApplication(c)
+}
+
+func (b *approvalBackend) Metadata() (vault.DirectoryMetadata, error) { return b.metadata, nil }
+func (b *approvalBackend) Status() ownerdb.Status                     { return ownerdb.Status{} }
+func (b *approvalBackend) ApproveApplication(c ownerpacket.ApprovalChange) error {
+	b.approveCalls = append(b.approveCalls, c)
+	if b.approveErr != nil {
+		return b.approveErr
+	}
+	record := vault.Approval{Name: c.ApplicationName, Path: c.ApplicationPath, Hash: c.ReviewedHash}
+	for i := range b.metadata.Approvals {
+		if b.metadata.Approvals[i].Name == c.ApplicationName {
+			b.metadata.Approvals[i] = record
+			return nil
+		}
+	}
+	b.metadata.Approvals = append(b.metadata.Approvals, record)
+	return nil
+}
+func (b *approvalBackend) RevokeApplication(c ownerpacket.ApprovalChange) error {
+	b.revokeCalls = append(b.revokeCalls, c)
+	if b.revokeErr != nil {
+		return b.revokeErr
+	}
+	for i := range b.metadata.Approvals {
+		if b.metadata.Approvals[i].Name == c.ApplicationName {
+			b.metadata.Approvals = append(b.metadata.Approvals[:i], b.metadata.Approvals[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+func (b *approvalBackend) Edit(func(*vault.Vault) error) error { b.edits++; return nil }
+func (b *approvalBackend) SnapshotVault() (string, error)      { b.snapshots++; return "", nil }
+func (b *approvalBackend) AtRevision(r uint64) Backend {
+	b.pinned = append(b.pinned, r)
+	return &revisionApprovalBackend{Backend: b.backend, parent: b, revision: r}
+}
+
+func TestApprovalMenuSucceedsOverBackendWrite(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	b := &approvalBackend{}
+	m := &Model{ctx: context.Background(), backend: b, ready: true, height: 24}
+	m.approvalCWD = root
+	m.status = ownerdb.Status{Database: vault.SessionStatus{Revision: 37}}
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	if len(m.approvals.Entries()) == 0 {
+		t.Fatal("candidate missing")
+	}
+	press(m, tea.KeyDown)
+	press(m, 'a')
+	mutation, ok := m.approvals.Pending()
+	if !ok {
+		t.Fatal("approval was not pinned")
+	}
+	cmd := press(m, 13)
+	msg := cmd()
+	if op, ok := msg.(operationMsg); !ok || op.err != nil {
+		t.Fatalf("approve operation=%#v", msg)
+	}
+	m.Update(msg)
+	fingerprintHex := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	wantPath := scan.Candidates[0].CanonicalPath
+	wantApprove := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: wantPath, ReviewedHash: fingerprintHex}
+	if len(b.approveCalls) != 1 || b.approveCalls[0] != wantApprove || mutation.Hash != fingerprintHex || len(b.revokeCalls) != 0 || b.edits != 0 || b.snapshots != 0 || len(b.pinned) != 1 || b.pinned[0] != 37 || m.approvals.Message() != "approved" {
+		t.Fatalf("calls=%+v pinned=%v edits=%d snapshots=%d message=%q", b.approveCalls, b.pinned, b.edits, b.snapshots, m.approvals.Message())
+	}
+	root = t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan = discovery.Scan(root)
+	hash := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	b = &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hash}}}}
+	m = &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.status = ownerdb.Status{Database: vault.SessionStatus{Revision: 38}}
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'x')
+	cmd = press(m, 13)
+	if cmd == nil {
+		t.Fatal("revoke command missing")
+	}
+	msg = cmd()
+	m.Update(msg)
+	wantRevoke := ownerpacket.ApprovalChange{ApplicationName: "service-a", ReviewedHash: hash, ReplacesHash: hash}
+	if len(b.revokeCalls) != 1 || b.revokeCalls[0] != wantRevoke || len(b.approveCalls) != 0 || b.edits != 0 || b.snapshots != 0 || len(b.pinned) != 1 || b.pinned[0] != 38 {
+		t.Fatalf("revoke=%+v pinned=%v edits=%d snapshots=%d", b.revokeCalls, b.pinned, b.edits, b.snapshots)
+	}
+}
+
+func TestApprovalMenuRejectAndConfirmation(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	b := &approvalBackend{}
+	m := &Model{ctx: context.Background(), backend: b, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'r')
+	press(m, 13)
+	if !noBackendWrites(b) || m.message != "rejected" {
+		t.Fatalf("reject calls=%+v/%+v message=%q", b.approveCalls, b.revokeCalls, m.message)
+	}
+	press(m, 'n')
+	press(m, 13)
+	if m.message != "cancelled" || !noBackendWrites(b) {
+		t.Fatalf("cancelled message=%q", m.message)
+	}
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	b = &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hex.EncodeToString(scan.Candidates[0].Fingerprint[:])}}}}
+	m = &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'x')
+	if m.approvals.ArmedAction() != "revoke" || m.message != "confirmation_required" || !noBackendWrites(b) {
+		t.Fatalf("armed=%q message=%q", m.approvals.ArmedAction(), m.message)
+	}
+	// Separate fresh case: Enter with no action armed and no controller message.
+	b = &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hex.EncodeToString(scan.Candidates[0].Fingerprint[:])}}}}
+	m = &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 13)
+	if m.message != "confirmation_required" || !noBackendWrites(b) {
+		t.Fatalf("unarmed message=%q", m.message)
+	}
+}
+
+func TestApprovalMenuWriteFailuresAreFixed(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{ownerpacket.ErrReviewStale, "the reviewed application changed — re-open the approvals menu"},
+		{fmt.Errorf("wrap: %w", ownerpacket.ErrReviewStale), "the reviewed application changed — re-open the approvals menu"},
+		{errors.Join(ownerpacket.ErrReviewStale, errors.New("other")), "the reviewed application changed — re-open the approvals menu"},
+		{ownerdb.ErrApprovalReview, "the reviewed application changed — re-open the approvals menu"},
+		{fmt.Errorf("wrap: %w", ownerdb.ErrApprovalReview), "the reviewed application changed — re-open the approvals menu"},
+		{errors.Join(ownerdb.ErrApprovalReview, errors.New("other")), "the reviewed application changed — re-open the approvals menu"},
+		{fmt.Errorf("wrap: %w", vault.ErrOwnerRevision), "owner state changed — reopen and retry"},
+		{errors.New("keeper write failed"), "approval_failed"},
+	} {
+		b := &approvalBackend{approveErr: tc.err}
+		m := &Model{ctx: context.Background(), backend: b, ready: true, height: 24}
+		m.approvalCWD = root
+		m.openApprovals()
+		m.at = location{screen: approvalsScreen}
+		press(m, tea.KeyDown)
+		press(m, 'a')
+		cmd := press(m, 13)
+		if cmd == nil {
+			t.Fatal("approval command missing")
+		}
+		m.Update(cmd())
+		if m.approvals.Message() != tc.want {
+			t.Fatalf("error %v message=%q want %q", tc.err, m.approvals.Message(), tc.want)
+		}
+	}
+}
+
+func TestApprovalMenuRevokeWritesLiveRecord(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	if len(scan.Candidates) != 1 {
+		t.Fatalf("candidates=%d", len(scan.Candidates))
+	}
+	hash := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	b := &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hash}}}}
+	m := &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.status = ownerdb.Status{Database: vault.SessionStatus{Revision: 91}}
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'x')
+	cmd := press(m, 13)
+	if cmd == nil {
+		t.Fatal("revoke command missing")
+	}
+	m.Update(cmd())
+	want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ReviewedHash: hash, ReplacesHash: hash}
+	if len(b.revokeCalls) != 1 || b.revokeCalls[0] != want || len(b.approveCalls) != 0 || b.edits != 0 || b.snapshots != 0 || len(b.pinned) != 1 || b.pinned[0] != 91 || m.approvals.Message() != "revoked" {
+		t.Fatalf("revoke=%+v approve=%+v pinned=%v edits=%d snapshots=%d message=%q", b.revokeCalls, b.approveCalls, b.pinned, b.edits, b.snapshots, m.message)
+	}
+}
+
+func TestApprovalMenuChangedRecordRevokeUsesLiveHash(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	fingerprintHex := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	recordHash := strings.Repeat("cd", 32)
+	if recordHash == fingerprintHex {
+		t.Fatal("record and candidate hashes must differ")
+	}
+	metadata := vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: recordHash}}}
+	b := &approvalBackend{metadata: metadata}
+	m := &Model{ctx: context.Background(), backend: b, metadata: metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'x')
+	cmd := press(m, 13)
+	if cmd == nil {
+		t.Fatal("revoke command missing")
+	}
+	m.Update(cmd())
+	want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ReviewedHash: recordHash, ReplacesHash: recordHash}
+	if len(b.revokeCalls) != 1 || b.revokeCalls[0] != want || b.revokeCalls[0].ReviewedHash == fingerprintHex || b.revokeCalls[0].ReplacesHash == fingerprintHex || len(b.approveCalls) != 0 || b.edits != 0 || b.snapshots != 0 || m.approvals.Message() != "revoked" {
+		t.Fatalf("revoke=%+v approve=%+v edits=%d snapshots=%d message=%q", b.revokeCalls, b.approveCalls, b.edits, b.snapshots, m.approvals.Message())
+	}
+}
+
+func TestApprovalMenuChangedCandidateUsesDistinctHashes(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	if len(scan.Candidates) != 1 {
+		t.Fatalf("candidates=%d", len(scan.Candidates))
+	}
+	hashA := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	hashB := strings.Repeat("cd", 32)
+	if hashA == hashB {
+		t.Fatal("fixture hashes must differ")
+	}
+	path := scan.Candidates[0].CanonicalPath
+	b := &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: path, Hash: hashB}}}}
+	m := &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'a')
+	mut, ok := m.approvals.Pending()
+	if !ok || mut.Replaces != hashB || mut.Hash != hashA {
+		t.Fatalf("changed approval pin=%+v ok=%v", mut, ok)
+	}
+	cmd := press(m, 13)
+	if cmd == nil {
+		t.Fatal("approve command missing")
+	}
+	m.Update(cmd())
+	want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: path, ReviewedHash: hashA, ReplacesHash: hashB}
+	if len(b.approveCalls) != 1 || b.approveCalls[0] != want || len(b.revokeCalls) != 0 || b.edits != 0 || b.snapshots != 0 {
+		t.Fatalf("approve=%+v revoke=%+v", b.approveCalls, b.revokeCalls)
+	}
+}
+
+func TestApprovalMenuStaleRevisionOnRevoke(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	if len(scan.Candidates) != 1 {
+		t.Fatalf("candidates=%d", len(scan.Candidates))
+	}
+	hash := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	path := scan.Candidates[0].CanonicalPath
+	b := &approvalBackend{metadata: vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: path, Hash: hash}}}, revokeErr: fmt.Errorf("wrap: %w", vault.ErrOwnerRevision)}
+	m := &Model{ctx: context.Background(), backend: b, metadata: b.metadata, ready: true, height: 24}
+	m.approvalCWD = root
+	m.openApprovals()
+	m.at = location{screen: approvalsScreen}
+	press(m, tea.KeyDown)
+	press(m, 'x')
+	cmd := press(m, 13)
+	if cmd == nil {
+		t.Fatal("revoke command missing")
+	}
+	m.Update(cmd())
+	if m.approvals.Message() != "owner state changed — reopen and retry" || len(b.revokeCalls) != 1 || len(b.approveCalls) != 0 {
+		t.Fatalf("message=%q revoke=%+v approve=%+v", m.message, b.revokeCalls, b.approveCalls)
+	}
+}
+
+func TestApprovalMenuConfirmUsesArmedRevision(t *testing.T) {
+	root := t.TempDir()
+	putApprovalDescriptor(t, root)
+	scan := discovery.Scan(root)
+	hash := hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	for _, tc := range []struct {
+		name    string
+		current uint64
+		wantErr string
+	}{
+		{name: "current revision differs; pinned write refused", current: 38, wantErr: "owner state changed — reopen and retry"},
+		{name: "armed revision matches; revoke succeeds", current: 37},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := vault.DirectoryMetadata{Approvals: []vault.Approval{{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hash}}}
+			b := &approvalBackend{metadata: metadata, current: tc.current}
+			m := &Model{ctx: context.Background(), backend: b, metadata: metadata, ready: true, height: 24}
+			m.approvalCWD = root
+			m.status = ownerdb.Status{Database: vault.SessionStatus{Revision: 37}}
+			m.openApprovals()
+			m.at = location{screen: approvalsScreen}
+			press(m, tea.KeyDown)
+			press(m, 'x')
+			m.Update(refreshMsg{epoch: m.epoch, metadata: metadata, status: ownerdb.Status{Database: vault.SessionStatus{Revision: 38}}, imports: ownerdb.ImportStatus{}})
+			cmd := press(m, 13)
+			if cmd == nil {
+				t.Fatal("pinned revoke command missing")
+			}
+			m.Update(cmd())
+			if len(b.pinned) != 1 || b.pinned[0] != 37 {
+				t.Fatalf("pinned revisions=%v", b.pinned)
+			}
+			if tc.wantErr != "" {
+				if m.approvals.Message() != tc.wantErr || len(b.revokeCalls) != 0 || len(b.approveCalls) != 0 || len(b.metadata.Approvals) != 1 || b.metadata.Approvals[0] != (vault.Approval{Name: "service-a", Path: scan.Candidates[0].CanonicalPath, Hash: hash}) {
+					t.Fatalf("message=%q revoke=%+v approvals=%+v", m.approvals.Message(), b.revokeCalls, b.metadata.Approvals)
+				}
+				return
+			}
+			want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ReviewedHash: hash, ReplacesHash: hash}
+			if len(b.revokeCalls) != 1 || b.revokeCalls[0] != want || len(b.approveCalls) != 0 || m.approvals.Message() != "revoked" || len(b.metadata.Approvals) != 0 {
+				t.Fatalf("revoke=%+v message=%q", b.revokeCalls, m.approvals.Message())
+			}
+		})
+	}
 }
 
 func TestExportFormScopeAndSecretFieldMaskingAndBounds(t *testing.T) {
@@ -375,4 +744,70 @@ func TestImportModelFlowsPreviewsPhasesConfirmationAndFixedMessages(t *testing.T
 	}
 	m.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportPartial, Published: 1, Total: 2}
 	check(t, !strings.Contains(m.View().Content, "only in this process's memory"), "partial line omits that the remaining values are RAM-only")
+}
+
+const archivePassword = "synthetic-archive-password" // Wait for stable rendered output before sending more keys.
+
+func importBackend(inspected ownerdb.ImportStatus) *fakeBackend {
+	return &fakeBackend{on: map[string]func(*fakeBackend){
+		"inspect": func(f *fakeBackend) { f.imp = inspected },
+		"confirm": func(f *fakeBackend) {
+			f.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
+		},
+		"abort": func(f *fakeBackend) { f.imp = ownerdb.ImportStatus{} },
+	}}
+}
+
+func importFlow(t *testing.T, b *fakeBackend) (*tea.Program, *terminalBuffer, func() string, *Model) {
+	model, program, out, wait, release := startProgram(t, b, archivePassword)
+	downTo(program, b, "import")
+	send(program, tea.KeyPressMsg{Code: 13}, tea.PasteMsg{Content: "synthetic-archive.zip"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
+	waitRawOutput(t, out, "Secret (hidden; Enter submits, Esc/Ctrl+C cancels): ")
+	release()
+	waitOutput(t, out, "<hidden; entered>")
+	send(program, tea.KeyPressMsg{Code: 9})
+	waitOutput(t, out, "> [Apply]")
+	program.Send(tea.KeyPressMsg{Code: 13})
+	return program, out, wait, model
+}
+
+func TestCompletedImportRejectsAnOlderRefreshSnapshot(t *testing.T) {
+	b := stagedBackend()
+	m := testModel(b)
+	stale := m.refresh()()
+	b.imp = ownerdb.ImportStatus{Phase: ownerdb.ImportComplete, Published: 1, Total: 1}
+	m.Update(operationMsg{action: "import-confirm"})
+	_, next := m.Update(stale)
+	check(t, m.imp.Phase != ownerdb.ImportComplete || m.at.screen != databaseScreen || next == nil,
+		"old refresh rolled back the completed import or stopped its single refresh chain")
+}
+
+func TestBubbleTeaProgramImportsThroughPreviewAndConfirmation(t *testing.T) {
+	b := importBackend(stagedBackend().imp)
+	program, out, wait, model := importFlow(t, b)
+	waitOutput(t, out, "Import preview")
+	program.Send(tea.KeyPressMsg{Code: 13}) // cursor 0: [Confirm import…]
+	waitOutput(t, out, "Type IMPORT")
+	send(program, tea.PasteMsg{Content: "IMPORT"}, tea.KeyPressMsg{Code: 9}, tea.KeyPressMsg{Code: 13})
+	waitOutput(t, out, "were added")
+	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	output := wait()
+	check(t, model.form != nil || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword, "real Program import did not accept the reader value")
+	check(t, strings.Join(b.calls, ",") != "inspect,confirm" || strings.Join(b.args, "|") != "synthetic-archive.zip|"+archivePassword || b.closes != 1 || strings.Contains(output, archivePassword), "program flow lost input, did not inspect, confirm and close once, or exposed the archive password")
+}
+
+func TestBubbleTeaProgramShowsFixedMessageForWrongPasswordAndEscapeAbortsOnce(t *testing.T) {
+	b := importBackend(ownerdb.ImportStatus{Err: ownerarchive.ErrAuthentication})
+	program, out, wait, _ := importFlow(t, b)
+	waitOutput(t, out, "wrong archive password")
+	program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	output := wait()
+	check(t, strings.Join(b.calls, ",") != "inspect" || strings.Contains(output, "Import preview"), "failed inspection staged a preview or called more")
+	check(t, strings.Contains(output, archivePassword) || strings.Contains(output, ownerarchive.ErrAuthentication.Error()), "output exposed the password or the raw error")
+	b = importBackend(stagedBackend().imp)
+	program, out, wait, _ = importFlow(t, b)
+	waitOutput(t, out, "Import preview")
+	send(program, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	wait()
+	check(t, strings.Join(b.calls, ",") != "inspect,abort", "Escape on the preview did not abort exactly once without confirming")
 }

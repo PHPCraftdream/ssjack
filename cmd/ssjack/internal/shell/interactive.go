@@ -16,6 +16,10 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 )
 
+const ownerControlMessage = "Owner control could not be opened. The keeper may run a different ssjack protocol version, vault credentials may be invalid, or the owner connection/setup may be unavailable. Restart keeper and client from the same build; verify vault credentials and owner-channel setup."
+
+func ownerControlOpenError() error { return errors.New(ownerControlMessage) }
+
 func RunInteractive(ctx context.Context, path, server, account string) (int, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return 1, errors.New("--interactive requires a trusted input and output terminal")
@@ -30,7 +34,7 @@ func RunInteractive(ctx context.Context, path, server, account string) (int, err
 	control, err := ownercontrol.Open(ctx, path, password)
 	clear(password)
 	if err != nil {
-		return 1, ownercontrol.ErrControl
+		return 1, ownerControlOpenError()
 	}
 	defer control.Detach()
 	model := ownertui.New(ctx, control.Backend())

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -28,16 +30,14 @@ type Controller struct {
 	cursor              int
 	rejections          map[string]bool
 	vault               vaultOps
-	snapshot            func() error
-	sessionSnapshotDone bool
 	workingDir, message string
 	armed               string
 	pending             Mutation
 	pendingOK           bool
 }
 
-func New(v *vault.Vault, workingDir string, snapshot func() error) *Controller {
-	c := &Controller{cursor: -1, rejections: make(map[string]bool), workingDir: workingDir, snapshot: snapshot}
+func New(v *vault.Vault, workingDir string) *Controller {
+	c := &Controller{cursor: -1, rejections: make(map[string]bool), workingDir: workingDir}
 	if v != nil {
 		c.vault = v
 	}
@@ -53,21 +53,6 @@ func (c *Controller) SetRecords(records []vault.Approval) {
 func (c *Controller) ArmedAction() string       { return c.armed }
 func (c *Controller) ClearMessage()             { c.message = "" }
 func (c *Controller) Pending() (Mutation, bool) { return c.pending, c.pendingOK }
-
-func (c *Controller) SnapshotBeforeFirstWrite() error {
-	if c.sessionSnapshotDone {
-		return nil
-	}
-	if c.snapshot == nil {
-		c.sessionSnapshotDone = true
-		return nil
-	}
-	if c.snapshot() != nil {
-		return c.fail("snapshot_failed")
-	}
-	c.sessionSnapshotDone = true
-	return nil
-}
 
 func (c *Controller) Refresh() {
 	var records []vault.Approval
@@ -250,6 +235,90 @@ func (c *Controller) RevokeConfirm() error {
 	}
 	return c.runPending(c.vault)
 }
+
+// CheckPin refuses unless the armed pin still matches the refreshed entries.
+func (c *Controller) CheckPin() error {
+	if !c.pinMatches() {
+		c.clearPin()
+		return c.fail("review_stale")
+	}
+	return nil
+}
+
+func WriteBackend(m Mutation, ops interface {
+	ApproveApplication(ownerpacket.ApprovalChange) error
+	RevokeApplication(ownerpacket.ApprovalChange) error
+}) error {
+	if err := ValidateMutation(m); err != nil {
+		return err
+	}
+	if ops == nil {
+		err := errors.New("vault_unavailable")
+		if m.Kind != "approve" {
+			err = errors.New("revoke_failed")
+		}
+		return err
+	}
+	change, err := BackendChange(m)
+	if err != nil {
+		return err
+	}
+	if m.Kind == "approve" {
+		err = ops.ApproveApplication(change)
+	} else {
+		err = ops.RevokeApplication(change)
+	}
+	if err != nil {
+		return errors.New(MapWriteError(err))
+	}
+	return nil
+}
+
+// ValidateMutation keeps the client-side pre-write checks of the controller.
+func ValidateMutation(m Mutation) error {
+	switch m.Kind {
+	case "approve":
+		if vault.ValidateApprovalName(m.Name) != nil {
+			return errors.New("name_invalid")
+		}
+		if err := validPath(m.Path); err != nil {
+			if len(m.Path) > 512 {
+				return errors.New("path_limit_exceeded")
+			}
+			return errors.New("path_invalid")
+		}
+	case "revoke":
+		if vault.ValidateApprovalName(m.Name) != nil {
+			return errors.New("name_invalid")
+		}
+	default:
+		return errors.New("mutation_invalid")
+	}
+	return nil
+}
+
+func BackendChange(m Mutation) (ownerpacket.ApprovalChange, error) {
+	switch m.Kind {
+	case "approve":
+		return ownerpacket.ApprovalChange{ApplicationName: m.Name, ApplicationPath: m.Path, ReviewedHash: m.Hash, ReplacesHash: m.Replaces}, nil
+	case "revoke":
+		return ownerpacket.ApprovalChange{ApplicationName: m.Name, ReviewedHash: m.Replaces, ReplacesHash: m.Replaces}, nil
+	default:
+		return ownerpacket.ApprovalChange{}, errors.New("mutation_invalid")
+	}
+}
+
+func MapWriteError(err error) string {
+	switch {
+	case errors.Is(err, ownerpacket.ErrReviewStale) || errors.Is(err, ownerdb.ErrApprovalReview):
+		return "the reviewed application changed — re-open the approvals menu"
+	case errors.Is(err, vault.ErrOwnerRevision):
+		return "owner state changed — reopen and retry"
+	default:
+		return mapVaultError(err)
+	}
+}
+
 func (c *Controller) runPending(ops vaultOps) error {
 	if !c.pinMatches() {
 		c.clearPin()
@@ -257,10 +326,6 @@ func (c *Controller) runPending(ops vaultOps) error {
 	}
 	if ops == nil {
 		return c.fail("vault_unavailable")
-	}
-	if err := c.SnapshotBeforeFirstWrite(); err != nil {
-		c.clearPin()
-		return err
 	}
 	err := ApplyVerified(ops, c.pending)
 	c.Complete(err)
@@ -270,7 +335,6 @@ func (c *Controller) Complete(err error) {
 	kind := c.pending.Kind
 	c.clearPin()
 	if err != nil {
-		c.sessionSnapshotDone = false
 		c.message = err.Error()
 		return
 	}

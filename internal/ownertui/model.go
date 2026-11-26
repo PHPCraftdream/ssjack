@@ -14,6 +14,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/ownertui/internal/approvals"
 	"github.com/PHPCraftdream/ssjack/internal/stdindrain"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -25,6 +26,8 @@ type Backend interface {
 	Status() ownerdb.Status
 	Edit(func(*vault.Vault) error) error
 	SnapshotVault() (string, error)
+	ApproveApplication(ownerpacket.ApprovalChange) error
+	RevokeApplication(ownerpacket.ApprovalChange) error
 	Submit(vault.OwnerChange) error
 	Link(string, []byte) error
 	Reconcile() error
@@ -76,9 +79,11 @@ type Model struct {
 	epoch    uint64
 	imp      ownerdb.ImportStatus // latest import status; metadata only
 	// reselect blocks activation after a refresh changed the focused item.
-	reselect    bool
-	approvals   *approvals.Controller
-	approvalCWD string
+	reselect            bool
+	approvals           *approvals.Controller
+	approvalsRevision   uint64
+	approvalArmRevision uint64
+	approvalCWD         string
 
 	// connection is an owner-selected SSH request awaiting TakeConnection.
 	connection *Connection
@@ -259,6 +264,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.approvals.Refresh()
 			}
 			m.status, m.ready = msg.status, true
+			m.approvalsRevision = m.status.Database.Revision
 		} else {
 			m.message = "Cannot refresh database metadata."
 		}
@@ -271,6 +277,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.action == "approvals" {
 			m.approvals.Complete(msg.err)
+			if _, ok := m.approvals.Pending(); !ok {
+				m.approvalArmRevision = 0
+			}
 			return m, m.refresh()
 		}
 		if strings.HasPrefix(msg.action, "import") {
@@ -356,11 +365,9 @@ func (m *Model) openApprovals() {
 		m.approvalCWD = cwd
 	}
 	if m.approvals == nil {
-		m.approvals = approvals.New(nil, m.approvalCWD, func() error {
-			_, err := m.backend.SnapshotVault()
-			return err
-		})
+		m.approvals = approvals.New(nil, m.approvalCWD)
 	}
+	m.approvalsRevision = m.status.Database.Revision
 	m.approvals.SetRecords(m.metadata.Approvals)
 	m.approvals.Refresh()
 }
@@ -394,10 +401,16 @@ func (m *Model) handleApprovalsKey(name string) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		m.approvals.Arm()
+		if m.approvals.ArmedAction() != "" {
+			m.approvalArmRevision = m.approvalsRevision
+		}
 	case "r":
 		m.approvals.Reject()
 	case "x":
 		m.approvals.Revoke()
+		if m.approvals.ArmedAction() != "" {
+			m.approvalArmRevision = m.approvalsRevision
+		}
 	case "n":
 		m.approvals.Cancel()
 	case "enter", "y":
@@ -411,14 +424,21 @@ func (m *Model) handleApprovalsKey(name string) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if err := m.approvals.SnapshotBeforeFirstWrite(); err != nil {
+			if err := m.approvals.CheckPin(); err != nil {
 				m.message = m.approvals.Message()
 				return m, nil
 			}
 			m.working = true
+			scoped := scopeBackend(m.backend, m.approvalArmRevision, 0)
 			return m, func() tea.Msg {
-				err := m.backend.Edit(func(v *vault.Vault) error { return approvals.ApplyVerified(v, mut) })
-				return operationMsg{action: "approvals", err: err}
+				ops, ok := scoped.(interface {
+					ApproveApplication(ownerpacket.ApprovalChange) error
+					RevokeApplication(ownerpacket.ApprovalChange) error
+				})
+				if !ok {
+					return operationMsg{action: "approvals", err: errors.New("approval_failed")}
+				}
+				return operationMsg{action: "approvals", err: approvals.WriteBackend(mut, ops)}
 			}
 		case "reject":
 			_ = m.approvals.RejectConfirm()

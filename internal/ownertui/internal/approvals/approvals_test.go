@@ -1,6 +1,8 @@
 package approvals
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
+	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
+	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
 )
 
@@ -55,7 +59,7 @@ func TestPinnedReview(t *testing.T) {
 	t.Run("refresh invalidates changed descriptor", func(t *testing.T) {
 		root := t.TempDir()
 		child := putDescriptor(t, root, "svc-01", "service-a")
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -80,7 +84,7 @@ func TestPinnedReview(t *testing.T) {
 	t.Run("review-time stored hash is passed to vault", func(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-a", "service-a")
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}})
 		c.Refresh()
 		c.Select(0)
@@ -100,20 +104,21 @@ func TestPinnedReview(t *testing.T) {
 	t.Run("stored hash change invalidates review", func(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-a", "service-a")
-		c := New(nil, root, nil)
-		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("a", 64)}})
+		c := New(nil, root)
+		path := discovery.Scan(root).Candidates[0].CanonicalPath
+		c.SetRecords([]vault.Approval{{Name: "service-a", Path: path, Hash: strings.Repeat("a", 64)}})
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
-		c.SetRecords([]vault.Approval{{Name: "service-a", Path: discovery.Scan(root).Candidates[0].CanonicalPath, Hash: strings.Repeat("b", 64)}})
+		c.SetRecords([]vault.Approval{{Name: "service-a", Path: path, Hash: strings.Repeat("b", 64)}})
 		c.Refresh()
 		if c.Message() != "review_stale" {
-			t.Fatalf("stale refresh message=%q", c.Message())
+			t.Fatalf("stale refresh=%q", c.Message())
 		}
 		ops := &fakeVaultOps{}
 		c.vault = ops
 		if err := c.ConfirmApprove(); err == nil {
-			t.Fatal("stale approval was accepted")
+			t.Fatal("stale approval accepted")
 		}
 		if ops.approveCalls != 0 {
 			t.Fatal("stale review reached vault")
@@ -122,7 +127,7 @@ func TestPinnedReview(t *testing.T) {
 	t.Run("unchanged refresh preserves pin", func(t *testing.T) {
 		root := t.TempDir()
 		putDescriptor(t, root, "svc-01", "service-a")
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.Refresh()
 		c.Select(0)
 		c.Arm()
@@ -137,7 +142,7 @@ func TestRecordOnlyRevoke(t *testing.T) {
 	t.Run("revokes outside-list approval", func(t *testing.T) {
 		root := t.TempDir()
 		record := vault.Approval{Name: "outside", Path: filepath.Join(t.TempDir(), "missing"), Hash: strings.Repeat("a", 64)}
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{record})
 		c.Refresh()
 		for i, e := range c.Entries() {
@@ -149,7 +154,7 @@ func TestRecordOnlyRevoke(t *testing.T) {
 		c.Revoke()
 		pin, ok := c.Pending()
 		if !ok || pin.Path != record.Path || pin.Replaces != record.Hash {
-			t.Fatalf("record-only revoke pin=%+v ok=%v", pin, ok)
+			t.Fatalf("pin=%+v ok=%v", pin, ok)
 		}
 		ops := &fakeVaultOps{records: []vault.Approval{record}}
 		c.vault = ops
@@ -234,7 +239,7 @@ func TestUnmatchedRecords(t *testing.T) {
 		}
 		for _, name := range []string{"one", "two", "three", "five"} {
 			if !found[name] {
-				t.Fatalf("record %q missing from entries", name)
+				t.Fatalf("record %q missing", name)
 			}
 		}
 	})
@@ -243,7 +248,7 @@ func TestUnmatchedRecords(t *testing.T) {
 func TestSetRecordsUnprintable(t *testing.T) {
 	t.Run("control byte path never renders", func(t *testing.T) {
 		root := t.TempDir()
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{{Name: "safe", Path: filepath.Join(root, "bad\x01"), Hash: strings.Repeat("a", 64)}})
 		c.Refresh()
 		found := false
@@ -251,7 +256,7 @@ func TestSetRecordsUnprintable(t *testing.T) {
 			if e.Record.Name == "safe" {
 				found = true
 				if e.PathSafe || e.Reason != "path_unprintable" {
-					t.Fatalf("unsafe record: %+v", e)
+					t.Fatalf("unsafe=%+v", e)
 				}
 			}
 		}
@@ -261,7 +266,7 @@ func TestSetRecordsUnprintable(t *testing.T) {
 	})
 	t.Run("descriptor reason survives unprintable hash", func(t *testing.T) {
 		root := t.TempDir()
-		c := New(nil, root, nil)
+		c := New(nil, root)
 		c.SetRecords([]vault.Approval{{Name: "safe", Path: filepath.Join(root, "missing"), Hash: "bad\x01hash" + strings.Repeat("a", 56)}})
 		c.Refresh()
 		found := false
@@ -269,7 +274,7 @@ func TestSetRecordsUnprintable(t *testing.T) {
 			if e.Record.Name == "safe" {
 				found = true
 				if e.Reason != "descriptor_missing" || e.DisplayHash != "" {
-					t.Fatalf("descriptor reason overwritten: %+v", e)
+					t.Fatalf("record=%+v", e)
 				}
 			}
 		}
@@ -277,4 +282,200 @@ func TestSetRecordsUnprintable(t *testing.T) {
 			t.Fatal("unmatched record missing")
 		}
 	})
+}
+
+func TestApprovalMutationValidationAndMapping(t *testing.T) {
+	root := t.TempDir()
+	good := Mutation{Kind: "approve", Name: "service-a", Path: filepath.Join(root, "service-a", "bin", "tool"), Hash: strings.Repeat("ab", 32)}
+	for _, tc := range []struct {
+		mutation Mutation
+		want     string
+	}{{good, ""}, {Mutation{Kind: "approve", Name: "bad/name", Path: good.Path}, "name_invalid"}, {Mutation{Kind: "approve", Name: good.Name, Path: "relative"}, "path_invalid"}, {Mutation{Kind: "approve", Name: good.Name, Path: filepath.Join(root, strings.Repeat("x", 600))}, "path_limit_exceeded"}, {Mutation{Kind: "wat"}, "mutation_invalid"}, {Mutation{Kind: "revoke", Name: good.Name}, ""}} {
+		err := ValidateMutation(tc.mutation)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Fatalf("validation=%q want=%q", got, tc.want)
+		}
+	}
+	approve, err := BackendChange(good)
+	if err != nil || approve != (ownerpacket.ApprovalChange{ApplicationName: good.Name, ApplicationPath: good.Path, ReviewedHash: good.Hash, ReplacesHash: ""}) {
+		t.Fatalf("approve=%+v err=%v", approve, err)
+	}
+	live := strings.Repeat("cd", 32)
+	revoke, err := BackendChange(Mutation{Kind: "revoke", Name: good.Name, Replaces: live})
+	if err != nil || revoke != (ownerpacket.ApprovalChange{ApplicationName: good.Name, ApplicationPath: "", ReviewedHash: live, ReplacesHash: live}) {
+		t.Fatalf("revoke=%+v err=%v", revoke, err)
+	}
+	if _, err := BackendChange(Mutation{Kind: "unknown"}); err == nil {
+		t.Fatal("unknown mapping accepted")
+	}
+}
+
+func TestMapWriteError(t *testing.T) {
+	stale := "the reviewed application changed — re-open the approvals menu"
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{{ownerpacket.ErrReviewStale, stale}, {fmt.Errorf("wrap: %w", ownerpacket.ErrReviewStale), stale}, {errors.Join(ownerpacket.ErrReviewStale, errors.New("other")), stale}, {ownerdb.ErrApprovalReview, stale}, {fmt.Errorf("wrap: %w", ownerdb.ErrApprovalReview), stale}, {errors.Join(ownerdb.ErrApprovalReview, errors.New("other")), stale}, {fmt.Errorf("wrap: %w", vault.ErrOwnerRevision), "owner state changed — reopen and retry"}, {errors.New("too many application approvals"), "approval_limit_reached"}, {errors.New("path exceeds 512 bytes"), "path_limit_exceeded"}, {errors.New("replaced approval does not match the reviewed descriptor hash"), "approval_changed_retry"}, {errors.New("application approval already exists"), "approval_exists"}, {errors.New("private failure"), "approval_failed"}} {
+		if got := MapWriteError(tc.err); got != tc.want {
+			t.Fatalf("MapWriteError(%v)=%q want=%q", tc.err, got, tc.want)
+		}
+	}
+}
+
+type backendApprovalFake struct {
+	approve, revoke       []ownerpacket.ApprovalChange
+	approveErr, revokeErr error
+}
+
+func (f *backendApprovalFake) ApproveApplication(c ownerpacket.ApprovalChange) error {
+	f.approve = append(f.approve, c)
+	return f.approveErr
+}
+func (f *backendApprovalFake) RevokeApplication(c ownerpacket.ApprovalChange) error {
+	f.revoke = append(f.revoke, c)
+	return f.revokeErr
+}
+
+func TestRunBackend(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "svc-a")
+	if err := os.MkdirAll(filepath.Join(child, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "bin", "tool"), []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `{"format":"ssjack-app-v1","name":"service-a","launch":{"executable":"bin/tool"}}`
+	if err := os.WriteFile(filepath.Join(child, "ssjack-app.json"), []byte(descriptor), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scan := discovery.Scan(root)
+	if len(scan.Candidates) != 1 {
+		t.Fatalf("candidates=%d", len(scan.Candidates))
+	}
+	path, hash := scan.Candidates[0].CanonicalPath, hex.EncodeToString(scan.Candidates[0].Fingerprint[:])
+	t.Run("candidate row approve", func(t *testing.T) {
+		c := New(nil, root)
+		c.Refresh()
+		c.Select(0)
+		c.Arm()
+		mutation, ok := c.Pending()
+		if !ok {
+			t.Fatal("not armed")
+		}
+		stale := New(nil, root)
+		stale.SetRecords([]vault.Approval{{Name: "service-a", Path: path, Hash: strings.Repeat("cd", 32)}})
+		stale.Refresh()
+		stale.Select(0)
+		stale.Arm()
+		if pin, ok := stale.Pending(); !ok || pin.Replaces != strings.Repeat("cd", 32) {
+			t.Fatalf("replace pin=%+v ok=%v", pin, ok)
+		}
+		stale.records = []vault.Approval{{Name: "service-a", Path: path, Hash: strings.Repeat("ef", 32)}}
+		stale.entries = List(root, stale.records)
+		if err := stale.CheckPin(); err == nil || err.Error() != "review_stale" {
+			t.Fatalf("stale=%v", err)
+		}
+		if stale.Message() != "review_stale" {
+			t.Fatalf("stale message=%q", stale.Message())
+		}
+		if _, ok := stale.Pending(); ok {
+			t.Fatal("stale pin retained")
+		}
+		if err := WriteBackend(mutation, nil); err == nil || err.Error() != "vault_unavailable" {
+			t.Fatalf("nil=%v", err)
+		}
+		f := &backendApprovalFake{}
+		if err := WriteBackend(mutation, f); err != nil {
+			t.Fatal(err)
+		}
+		want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: path, ReviewedHash: hash, ReplacesHash: ""}
+		if len(f.approve) != 1 || f.approve[0] != want || len(f.revoke) != 0 {
+			t.Fatalf("approve=%+v want=%+v", f.approve, want)
+		}
+		if _, ok := c.Pending(); !ok {
+			t.Fatal("WriteBackend unexpectedly changed controller pin")
+		}
+		if err := c.CheckPin(); err != nil {
+			t.Fatalf("WriteBackend altered pin: %v", err)
+		}
+		c.Complete(nil)
+		if _, ok := c.Pending(); ok {
+			t.Fatal("Complete retained pin")
+		}
+	})
+	t.Run("record-only row revoke", func(t *testing.T) {
+		live := strings.Repeat("cd", 32)
+		record := vault.Approval{Name: "service-a", Path: filepath.Join(root, "record-only", "tool"), Hash: live}
+		c := New(nil, root)
+		c.SetRecords([]vault.Approval{record})
+		c.Refresh()
+		for i, e := range c.Entries() {
+			if e.Record.Name == record.Name {
+				c.Select(i)
+				break
+			}
+		}
+		c.Revoke()
+		mutation, ok := c.Pending()
+		if !ok {
+			t.Fatal("not armed")
+		}
+		if err := WriteBackend(mutation, nil); err == nil || err.Error() != "revoke_failed" {
+			t.Fatalf("nil=%v", err)
+		}
+		f := &backendApprovalFake{revokeErr: errors.New("too many application approvals")}
+		if err := WriteBackend(mutation, f); err == nil || err.Error() != "approval_limit_reached" {
+			t.Fatalf("mapped=%v", err)
+		}
+		want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: "", ReviewedHash: live, ReplacesHash: live}
+		if len(f.revoke) != 1 || f.revoke[0] != want || len(f.approve) != 0 {
+			t.Fatalf("revoke=%+v want=%+v", f.revoke, want)
+		}
+	})
+	for _, tc := range []struct {
+		name       string
+		recordHash string
+		changed    bool
+		wantStatus Status
+	}{
+		{name: "candidate row revoke approved", recordHash: hash, wantStatus: StatusApproved},
+		{name: "candidate row revoke changed", recordHash: strings.Repeat("cd", 32), changed: true, wantStatus: StatusChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := vault.Approval{Name: "service-a", Path: path, Hash: tc.recordHash}
+			c := New(nil, root)
+			c.SetRecords([]vault.Approval{record})
+			c.Refresh()
+			for i, entry := range c.Entries() {
+				if entry.Record.Name == record.Name {
+					if entry.Status != tc.wantStatus || entry.HashPrefix != hash[:12] {
+						t.Fatalf("selected status=%q want=%q hashPrefix=%q want candidate %q", entry.Status, tc.wantStatus, entry.HashPrefix, hash[:12])
+					}
+					c.Select(i)
+					break
+				}
+			}
+			c.Revoke()
+			mutation, ok := c.Pending()
+			if !ok {
+				t.Fatal("not armed")
+			}
+			f := &backendApprovalFake{}
+			if err := WriteBackend(mutation, f); err != nil {
+				t.Fatal(err)
+			}
+			want := ownerpacket.ApprovalChange{ApplicationName: "service-a", ApplicationPath: "", ReviewedHash: tc.recordHash, ReplacesHash: tc.recordHash}
+			if len(f.revoke) != 1 || f.revoke[0] != want || len(f.approve) != 0 {
+				t.Fatalf("revoke=%+v want=%+v", f.revoke, want)
+			}
+			if tc.changed && tc.recordHash == hash {
+				t.Fatalf("changed record hash %q matches fingerprint %q", tc.recordHash, hash)
+			}
+		})
+	}
 }
