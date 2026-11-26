@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -410,14 +411,10 @@ var (
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if shared != nil {
-		shared.Discard()
-	}
-	if restartBeforeSaveManager != nil {
-		restartBeforeSaveManager.Discard()
-	}
-	if reopenedManager != nil {
-		reopenedManager.Discard()
+	for _, m := range []*Manager{shared, restartBeforeSaveManager, reopenedManager} {
+		if m != nil {
+			m.Discard()
+		}
 	}
 	for _, dir := range keptDirs {
 		_ = os.RemoveAll(dir)
@@ -507,10 +504,15 @@ func holdSaveLock(t *testing.T, vaultPath string) {
 	t.Cleanup(func() { _ = os.Remove(vaultPath + ".lock") })
 }
 
-// KDF budget: pristine creation 1; sharedManager Open (VerifyRefusals through ReplyLost) 1;
-// SnapshotFailure copy+Open 1; EditAppliedThenSaveFailed copy+Open 1; RestartBeforeSave reopen
-// (its manager is reused by TimeoutAfterEnqueue) 1; RestartAfterDurableSave reopen of the shared vault 1.
-// Total: 6. Each operation is four 1 GiB Argon2id runs, 10-15 s under the race detector on CI.
+// Real vaults: each create/open runs four 1 GiB Argon2id passes (10-30 s on CI), so these tests run only with
+// SSJACK_TEST_FULL_KDF=1 (dedicated CI step). Budget 6: create, shared open, SnapshotFailure, EditApplied, two reopens.
+func requireFullKDF(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SSJACK_TEST_FULL_KDF") != "1" {
+		t.Skip("production KDF runs only in GitHub CI")
+	}
+}
+
 func pristineFixture() (string, error) {
 	fixtureOnce.Do(func() {
 		pristineDir, pristineErr = os.MkdirTemp("", "ownerdb-pristine-")
@@ -546,6 +548,7 @@ func openCopiedManager(t *testing.T) (*Manager, string, []byte) {
 
 func openCopiedManagerWithCleanup(t *testing.T, cleanup bool) (*Manager, string, []byte) {
 	t.Helper()
+	requireFullKDF(t)
 	flakediag.OnFailure(t, func() string { return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024) })
 	dir := t.TempDir()
 	if !cleanup {
@@ -570,6 +573,7 @@ func openCopiedManagerWithCleanup(t *testing.T, cleanup bool) (*Manager, string,
 // Tests sharing this manager run sequentially in source order (no t.Parallel); that ordering is the determinism contract.
 func sharedManager(t *testing.T) (*Manager, string, []byte) {
 	t.Helper()
+	requireFullKDF(t)
 	sharedOnce.Do(func() {
 		flakediag.OnFailure(t, func() string { return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024) })
 		sharedDir, sharedErr = os.MkdirTemp("", "ownerdb-shared-")
@@ -985,12 +989,9 @@ func TestApprovalRestartAfterDurableSave(t *testing.T) {
 	metadata, metadataErr := reopened.Metadata()
 	status = reopened.Status().Database
 	got := approvalNames(t, reopened)
-	exact := false
-	for _, approval := range metadata.Approvals {
-		if approval.Name == "app-rd" && approval.Path == appPath && approval.Hash == approvalHash(1) {
-			exact = true
-		}
-	}
+	exact := slices.ContainsFunc(metadata.Approvals, func(a vault.Approval) bool {
+		return a.Name == "app-rd" && a.Path == appPath && a.Hash == approvalHash(1)
+	})
 	sort.Strings(want)
 	sort.Strings(got)
 	if metadataErr != nil || !exact || strings.Join(got, ",") != strings.Join(want, ",") || status.Revision != status.SavedRevision || len(snapshotFiles(t, path)) == 0 {

@@ -114,6 +114,20 @@ jobs:
             echo 'Owner rotation acceptance reported a skip'
             exit 1
           fi
+      - name: Owner approval composite with production KDF
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestApproval' -count=1 -timeout 900s ./internal/ownerdb | tee "$RUNNER_TEMP/owner-approval.log"
+          for name in TestApprovalVerifyRefusals TestApprovalSnapshotThenApplyAtomic TestApprovalSnapshotFailureKeepsVaultUnchanged TestApprovalSnapshotRetentionBound TestApprovalSnapshotSucceededEditRejected TestApprovalSaveSucceededReplyLost TestApprovalEditAppliedThenSaveFailed TestApprovalRestartBeforeSave TestApprovalTimeoutAfterEnqueue TestApprovalRestartAfterDurableSave; do
+            grep -q -- "^--- PASS: $name " "$RUNNER_TEMP/owner-approval.log" || { echo "Owner approval acceptance did not report PASS: $name"; exit 1; }
+          done
+          if grep -Eq '^[[:space:]]*--- SKIP: TestApproval' "$RUNNER_TEMP/owner-approval.log"; then
+            echo 'Owner approval acceptance reported a skip'
+            exit 1
+          fi
       - name: File transfer acceptance on the real stack (Linux)
         if: runner.os == 'Linux'
         shell: bash
