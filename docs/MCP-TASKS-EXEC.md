@@ -756,7 +756,7 @@ limit.
    never sees an advertised exec tool without a task path. **Landed.**
 4. Acceptance tests: the in-process cases of package `internal/bridge` and
    the launched-bridge cases of `cmd/ssjack/internal/mcptasktest`, with the
-   CI wiring following the diff-selection rule (docs/CI.md).
+   CI wiring following the diff-selection rule (docs/CI.md). **Landed.**
 
 Non-goals: output pages, chunk bytes, base64 or rendered output anywhere in
 the task record or result; a status-only keeper operation; `input_required`
