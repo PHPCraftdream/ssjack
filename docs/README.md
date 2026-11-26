@@ -78,6 +78,7 @@ project-local UI plugin when supported. [UI source and compatibility](../plugins
 
 ## Protocol and design references
 
+[mcp-jack client design](MCP-JACK-CLIENT.md)
 [Application-store format](application-store/FORMAT.md), [wire](application-store/WIRE.md),
 [crypto](application-store/CRYPTO.md), [I/O](application-store/IO.md),
 [failures](application-store/FAILURES.md), [vectors](application-store/VECTOR.md),
