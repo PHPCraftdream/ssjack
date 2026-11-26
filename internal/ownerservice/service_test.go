@@ -2,12 +2,17 @@ package ownerservice
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/PHPCraftdream/ssjack/internal/application"
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 )
@@ -143,5 +148,24 @@ func TestCloseDeadlineDoesNotPretendPeersJoined(t *testing.T) {
 	close(s.done)
 	if err := s.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultVerifierMatchesScannerFingerprint(t *testing.T) {
+	root := t.TempDir()
+	descriptor := `{"format":"ssjack-app-v1","name":"wired","launch":{"executable":"/not-run"}}`
+	if err := os.WriteFile(filepath.Join(root, application.DescriptorFile), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	candidates := discovery.Scan(root).Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("scanner candidates = %d", len(candidates))
+	}
+	hash, err := DefaultVerifier()(candidates[0].CanonicalPath)
+	if err != nil || hash != hex.EncodeToString(candidates[0].Fingerprint[:]) {
+		t.Fatalf("default verifier %q (%v) differs from the scanner fingerprint", hash, err)
+	}
+	if _, err := DefaultVerifier()(filepath.Join(candidates[0].CanonicalPath, "missing")); err == nil {
+		t.Fatal("default verifier accepted a path without a descriptor")
 	}
 }

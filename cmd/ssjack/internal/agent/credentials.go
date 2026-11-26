@@ -277,7 +277,7 @@ func Load(ctx context.Context, path, name string) (*Credentials, error) {
 			}
 			owner.SetSSHStatus(credentials.ssh.Status)
 		}
-		service, err := ownerservice.Start(ctx, owner)
+		service, err := ownerservice.Start(ctx, owner, ownerservice.DefaultVerifier())
 		if err != nil {
 			return credentials, err
 		}

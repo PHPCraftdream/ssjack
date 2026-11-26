@@ -94,7 +94,7 @@ func Open(ctx context.Context, path string, password []byte) (*Control, error) {
 	if err != nil {
 		return nil, ErrControl
 	}
-	c.service, err = ownerservice.Start(ctx, c.manager)
+	c.service, err = ownerservice.Start(ctx, c.manager, ownerservice.DefaultVerifier())
 	if err != nil {
 		cleanup, release := context.WithTimeout(context.Background(), time.Minute)
 		defer release()

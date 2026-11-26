@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdispatch"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
@@ -35,6 +36,10 @@ type Service struct {
 	peers      map[*peerConnection]struct{}
 	fatal      bool
 }
+
+// DefaultVerifier re-derives an approval's descriptor fingerprint from the file on the keeper machine,
+// so the keeper never trusts the hash a client sends (OWNER-VAULT-SNAPSHOT section 4.2.1).
+func DefaultVerifier() ownerdb.DescriptorVerifier { return discovery.DescriptorHash }
 
 // Start borrows the Manager and its writer claim, without another unlock/listener.
 // Close must complete before the caller closes the Manager or its key context.

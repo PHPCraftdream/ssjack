@@ -64,7 +64,7 @@ func startTextOwner(ctx context.Context, path string, loaded *vault.Vault) (*own
 		return nil, nil, err
 	}
 	credentials := agent.NewOwnerCredentials(owner)
-	service, err := ownerservice.Start(ctx, owner)
+	service, err := ownerservice.Start(ctx, owner, ownerservice.DefaultVerifier())
 	if err != nil {
 		return owner, credentials, err
 	}
