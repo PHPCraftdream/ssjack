@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -636,6 +637,165 @@ func TestDiscoveryHelperProcess(t *testing.T) {
 		return
 	}
 	_ = os.WriteFile(os.Getenv("SSJACK_DISCOVERY_HELPER"), []byte("ran"), 0600)
+}
+
+func TestDescriptorHash(t *testing.T) {
+	t.Run("matches scanner fingerprint at root and child", func(t *testing.T) {
+		root := canonicalTemp(t)
+		writeDescriptor(t, root, "root")
+		child := filepath.Join(root, "child")
+		writeDescriptor(t, child, "child")
+		got := Scan(root)
+		for _, candidate := range got.Candidates {
+			hash, err := DescriptorHash(candidate.CanonicalPath)
+			if err != nil {
+				t.Fatalf("descriptor_hash_failed: %s", err)
+			}
+			if hash != hex.EncodeToString(candidate.Fingerprint[:]) {
+				t.Fatal("scanner_fingerprint_mismatch")
+			}
+			if len(hash) != 64 || strings.ToLower(hash) != hash {
+				t.Fatal("hash_not_64_lowercase_hex")
+			}
+		}
+		if len(got.Candidates) != 2 {
+			t.Fatalf("candidate_count=%d", len(got.Candidates))
+		}
+	})
+	t.Run("canonical json ignores formatting", func(t *testing.T) {
+		dir := canonicalTemp(t)
+		writeDescriptor(t, dir, "formatting")
+		original, err := DescriptorHash(dir)
+		if err != nil {
+			t.Fatalf("descriptor_hash_failed: %s", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, application.DescriptorFile))
+		if err != nil {
+			t.Fatal("fixture_read_failed")
+		}
+		var value any
+		if err := json.Unmarshal(data, &value); err != nil {
+			t.Fatal("fixture_unmarshal_failed")
+		}
+		reformatted, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			t.Fatal("fixture_marshal_failed")
+		}
+		if err := os.WriteFile(filepath.Join(dir, application.DescriptorFile), reformatted, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		got, err := DescriptorHash(dir)
+		if err != nil || got != original {
+			t.Fatal("formatting_changed_hash")
+		}
+	})
+	t.Run("changed field changes hash", func(t *testing.T) {
+		dir := canonicalTemp(t)
+		writeDescriptor(t, dir, "before")
+		before, err := DescriptorHash(dir)
+		if err != nil {
+			t.Fatalf("descriptor_hash_failed: %s", err)
+		}
+		writeDescriptor(t, dir, "after")
+		after, err := DescriptorHash(dir)
+		if err != nil || after == before {
+			t.Fatal("changed_field_hash_unchanged")
+		}
+	})
+	checkError := func(t *testing.T, dir, reason string) {
+		t.Helper()
+		_, err := DescriptorHash(dir)
+		if err == nil || err.Error() != reason {
+			t.Fatalf("reason=%v want=%s", err, reason)
+		}
+		if strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), application.DescriptorFile) {
+			t.Fatal("error_contains_path_or_descriptor_name")
+		}
+	}
+	t.Run("missing descriptor errors", func(t *testing.T) {
+		dir := canonicalTemp(t)
+		checkError(t, dir, "descriptor_missing")
+	})
+	t.Run("oversized descriptor errors", func(t *testing.T) {
+		dir := canonicalTemp(t)
+		valid, err := json.Marshal(map[string]any{"format": "ssjack-app-v1", "name": "pad", "launch": map[string]any{"executable": "/not-run"}})
+		if err != nil {
+			t.Fatal("fixture_marshal_failed")
+		}
+		data := append(valid, bytes.Repeat([]byte(" "), 16*1024)...) // every field stays legal; only the file size is over the cap
+		if len(data) <= 16*1024 {
+			t.Fatal("fixture_not_oversized")
+		}
+		if err := os.WriteFile(filepath.Join(dir, application.DescriptorFile), data, 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		checkError(t, dir, "descriptor_oversize")
+	})
+	t.Run("invalid json errors", func(t *testing.T) {
+		dir := canonicalTemp(t)
+		if err := os.WriteFile(filepath.Join(dir, application.DescriptorFile), []byte("{not json"), 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		checkError(t, dir, "descriptor_invalid")
+	})
+	t.Run("symlinked descriptor errors", func(t *testing.T) {
+		parent := canonicalTemp(t)
+		dir := filepath.Join(parent, "app")
+		writeDescriptor(t, dir, "link")
+		target := filepath.Join(parent, "target")
+		if err := os.WriteFile(target, []byte(`{"format":"ssjack-app-v1","name":"target","launch":{"executable":"/not-run"}}`), 0600); err != nil {
+			t.Fatal("fixture_write_failed")
+		}
+		if err := os.Remove(filepath.Join(dir, application.DescriptorFile)); err != nil {
+			t.Fatal("fixture_remove_failed")
+		}
+		if err := os.Symlink(target, filepath.Join(dir, application.DescriptorFile)); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		checkError(t, dir, "descriptor_unsafe")
+	})
+	t.Run("symlinked directory is not canonical", func(t *testing.T) {
+		parent := canonicalTemp(t)
+		real := filepath.Join(parent, "real")
+		writeDescriptor(t, real, "real")
+		link := filepath.Join(parent, "link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		if _, err := DescriptorHash(link); err == nil || err.Error() != "path_not_canonical" {
+			t.Fatalf("reason=%v want=path_not_canonical", err)
+		}
+		hash, err := DescriptorHash(real)
+		if err != nil || len(hash) != 64 || strings.ToLower(hash) != hash {
+			t.Fatal("canonical_directory_hash_invalid")
+		}
+	})
+	t.Run("linked ancestor is not canonical", func(t *testing.T) {
+		parent := canonicalTemp(t)
+		real := filepath.Join(parent, "real")
+		app := filepath.Join(real, "app")
+		writeDescriptor(t, app, "ancestor")
+		link := filepath.Join(parent, "link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlink_unavailable")
+		}
+		if _, err := DescriptorHash(filepath.Join(link, "app")); err == nil || err.Error() != "path_not_canonical" {
+			t.Fatalf("reason=%v want=path_not_canonical", err)
+		}
+		if _, err := DescriptorHash(app); err != nil {
+			t.Fatalf("canonical_path_failed: %s", err)
+		}
+	})
+}
+
+// canonicalTemp returns a temp directory in the resolved form the scanner stores (macOS /var and Windows 8.3 names are aliases).
+func canonicalTemp(t *testing.T) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal("temp_resolve_failed")
+	}
+	return resolved
 }
 
 func writeDescriptor(t *testing.T, dir, name string) {

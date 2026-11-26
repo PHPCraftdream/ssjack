@@ -57,6 +57,21 @@ func TestScanRootJunctionResolved(t *testing.T) {
 	})
 }
 
+func TestDescriptorHashRejectsJunction(t *testing.T) {
+	t.Run("junction is not canonical", func(t *testing.T) {
+		parent := canonicalTemp(t)
+		target := filepath.Join(parent, "ordinary")
+		writeDescriptor(t, target, "realroot")
+		junction := filepath.Join(parent, "junctionroot")
+		if err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).Run(); err != nil {
+			t.Skip("directory junction fixture unavailable")
+		}
+		if _, err := DescriptorHash(junction); err == nil || err.Error() != "path_not_canonical" {
+			t.Fatalf("reason=%v want=path_not_canonical", err)
+		}
+	})
+}
+
 func TestScanRejectsDirectoryJunction(t *testing.T) {
 	t.Run("directory junction", func(t *testing.T) {
 		root := t.TempDir()

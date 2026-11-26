@@ -53,48 +53,49 @@ var ignored = map[string]bool{
 	"__pycache__": true,
 }
 
-func Scan(rootPath string) Result {
-	result := Result{Candidates: []Candidate{}, Diagnostics: []Diagnostic{}}
-	abs, err := filepath.Abs(rootPath)
+func openRootGuarded(path string) (root *os.Root, rootDir *os.File, rootPath string, rootInfo os.FileInfo, reason string) {
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		addDiagnostic(&result, ".", "root_unavailable")
-		finish(&result)
-		return result
+		return nil, nil, "", nil, "root_unavailable"
 	}
 	rootPath = filepath.Clean(abs)
 	resolved, err := resolveRoot(rootPath)
 	if err != nil {
-		addDiagnostic(&result, ".", "root_inaccessible")
-		finish(&result)
-		return result
+		return nil, nil, "", nil, "root_inaccessible"
 	}
 	rootPath = filepath.Clean(resolved)
 	initial, err := os.Lstat(rootPath)
 	if err != nil || !initial.IsDir() || isReparse(initial) {
-		addDiagnostic(&result, ".", "root_unsafe")
-		finish(&result)
-		return result
+		return nil, nil, "", nil, "root_unsafe"
 	}
-	root, err := os.OpenRoot(rootPath)
+	root, err = os.OpenRoot(rootPath)
 	if err != nil {
-		addDiagnostic(&result, ".", "root_inaccessible")
+		return nil, nil, "", nil, "root_inaccessible"
+	}
+	rootDir, err = root.Open(".")
+	if err != nil {
+		_ = root.Close()
+		return nil, nil, "", nil, "root_unsafe"
+	}
+	rootInfo, err = rootDir.Stat()
+	if err != nil || !rootInfo.IsDir() || !os.SameFile(initial, rootInfo) || handleIsReparse(rootDir) {
+		_ = rootDir.Close()
+		_ = root.Close()
+		return nil, nil, "", nil, "root_unsafe"
+	}
+	return root, rootDir, rootPath, rootInfo, ""
+}
+
+func Scan(rootPath string) Result {
+	result := Result{Candidates: []Candidate{}, Diagnostics: []Diagnostic{}}
+	root, rootDir, rootPath, rootInfo, reason := openRootGuarded(rootPath)
+	if reason != "" {
+		addDiagnostic(&result, ".", reason)
 		finish(&result)
 		return result
 	}
 	defer root.Close()
-	rootDir, err := root.Open(".")
-	if err != nil {
-		addDiagnostic(&result, ".", "root_unsafe")
-		finish(&result)
-		return result
-	}
 	defer rootDir.Close()
-	rootInfo, err := rootDir.Stat()
-	if err != nil || !rootInfo.IsDir() || !os.SameFile(initial, rootInfo) || handleIsReparse(rootDir) {
-		addDiagnostic(&result, ".", "root_unsafe")
-		finish(&result)
-		return result
-	}
 	seen := []directoryIdentity{}
 	addCandidateFromRoot(&result, rootPath, root, rootInfo, ".", &seen, nil)
 
@@ -241,24 +242,30 @@ type directoryIdentity struct {
 	info os.FileInfo
 }
 
+func readValidatedDescriptor(root *os.Root) (data []byte, name string, digest [32]byte, reason string) {
+	data, reason = readBoundedDescriptor(root)
+	if reason != "" {
+		return nil, "", [32]byte{}, reason
+	}
+	name, err := application.ValidateDiscoveryDescriptor(data)
+	if err != nil {
+		return data, "", [32]byte{}, "descriptor_invalid"
+	}
+	digest, ok := descriptorFingerprint(data)
+	if !ok {
+		return data, name, [32]byte{}, "fingerprint_unavailable"
+	}
+	return data, name, digest, ""
+}
+
 func addCandidateFromRoot(result *Result, canonicalRoot string, directory *os.Root, identity os.FileInfo, rel string, seen *[]directoryIdentity, validate func() bool) {
-	data, reason := readBoundedDescriptor(directory)
+	data, name, digest, reason := readValidatedDescriptor(directory)
 	if reason == "descriptor_missing" {
 		result.Undescribed = append(result.Undescribed, normalizedDiagnosticPath(rel))
 		return
 	}
 	if reason != "" {
 		addDiagnostic(result, rel, reason)
-		return
-	}
-	name, err := application.ValidateDiscoveryDescriptor(data)
-	if err != nil {
-		addDiagnostic(result, rel, "descriptor_invalid")
-		return
-	}
-	digest, hashable := descriptorFingerprint(data)
-	if !hashable {
-		addDiagnostic(result, rel, "fingerprint_unavailable")
 		return
 	}
 	if validate != nil && !validate() {
