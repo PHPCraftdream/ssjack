@@ -234,7 +234,7 @@ func verifyApprovalReview(db *vault.Session, expected uint64, mut ApprovalMutati
 		}
 	case "revoke":
 		for _, record := range metadata.Approvals {
-			if record.Name == mut.Name && filepath.Clean(record.Path) == filepath.Clean(mut.Path) && record.Hash == mut.Replaces {
+			if record.Name == mut.Name && record.Hash == mut.Replaces {
 				return nil
 			}
 		}
@@ -267,7 +267,7 @@ func applyApprovalMutation(v *vault.Vault, mut ApprovalMutation) error {
 			if record.Name != mut.Name {
 				continue
 			}
-			if filepath.Clean(record.Path) != filepath.Clean(mut.Path) || record.Hash != mut.Replaces {
+			if record.Hash != mut.Replaces {
 				return errors.New("revoke_stale")
 			}
 			found = true

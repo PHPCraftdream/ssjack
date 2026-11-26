@@ -28,6 +28,7 @@ type manager interface {
 	ResumeImportPlanAt(uint64, uint64) error
 	AbortImportPlanAt(uint64, uint64) error
 	ReleaseImportPlan(uint64) error
+	ApproveWithSnapshot(context.Context, uint64, ownerdb.ApprovalMutation) error
 	RetryDatabaseAt(uint64) error
 	ReconcileAt(uint64) error
 	ResumeDraftAt(uint64) error
@@ -68,6 +69,10 @@ func (d *Dispatcher) route(ctx context.Context, c *ownerpacket.Command) error {
 	switch c.Operation {
 	case "rotation":
 		return ownerpacket.ErrProtocol
+	case "approve_application":
+		return d.manager.ApproveWithSnapshot(ctx, revision, ownerdb.ApprovalMutation{Kind: "approve", Name: c.Approval.ApplicationName, Path: c.Approval.ApplicationPath, Hash: c.Approval.ReviewedHash, Replaces: c.Approval.ReplacesHash})
+	case "revoke_application":
+		return d.manager.ApproveWithSnapshot(ctx, revision, ownerdb.ApprovalMutation{Kind: "revoke", Name: c.Approval.ApplicationName, Hash: c.Approval.ReviewedHash, Replaces: c.Approval.ReplacesHash})
 	case "directory":
 		return d.manager.EditAt(revision, func(v *vault.Vault) error { return owneredit.Apply(v, *c.Directory) })
 	case "secret":

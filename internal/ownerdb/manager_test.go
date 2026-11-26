@@ -443,7 +443,7 @@ func approveMutation(name, path, hash string) ApprovalMutation {
 }
 
 func revokeMutation(name, path, hash string) ApprovalMutation {
-	return ApprovalMutation{Kind: "revoke", Name: name, Path: path, Hash: hash, Replaces: hash}
+	return ApprovalMutation{Kind: "revoke", Name: name, Hash: hash, Replaces: hash} // the wire carries no path on revoke
 }
 
 func snapshotFiles(t *testing.T, vaultPath string) []string {

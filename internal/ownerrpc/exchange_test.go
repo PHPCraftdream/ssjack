@@ -3,8 +3,13 @@ package ownerrpc
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -66,6 +71,130 @@ func frames(parts ...string) *bytes.Reader {
 	}
 	return bytes.NewReader(b.Bytes())
 }
+
+func TestMixedProtocolVersionHandshakeRefusesBeforeAuth(t *testing.T) {
+	block, err := aes.NewCipher(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := &mixedVersionBox{AEAD: aead}
+	legacyHello, err := key.seal(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	clientConn := &exchangeConnection{input: frames(string(legacyHello))}
+	oldClient := &mixedVersionClient{key: key, acceptedVersion: 2}
+	client := newClient(clientConn, oldClient)
+	if err := client.authenticate(ctx); !errors.Is(err, ownerpacket.ErrAuthentication) {
+		t.Fatalf("legacy hello was not refused: %v", err)
+	}
+	client.Close()
+	if clientConn.writes != 0 || clientConn.closes != 1 || !oldClient.closed {
+		t.Fatal("legacy hello elicited authentication bytes or leaked client ownership")
+	}
+
+	serverConn := &exchangeConnection{input: frames()}
+	newHello, err := key.seal(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &mixedVersionServer{hello: newHello}
+	calls := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- servePeer(ctx, serverConn, server, handlerFunc(func(context.Context, *ownerpacket.Command) ownerpacket.Reply {
+			calls++
+			return ownerpacket.Reply{}
+		}))
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("server accepted an old client's refusal")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not exit after old client withheld authentication")
+	}
+	if calls != 0 || serverConn.writes != 2 || serverConn.closes != 1 || server.closes != 1 { // two writes: the Hello frame header and body
+		t.Fatal("old client reached dispatch or server ownership was not closed")
+	}
+}
+
+type mixedVersionBox struct{ cipher.AEAD }
+
+func (b *mixedVersionBox) Seal(data []byte) ([]byte, error) {
+	nonce := make([]byte, b.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return b.AEAD.Seal(nonce, nonce, data, nil), nil
+}
+func (b *mixedVersionBox) Open(data []byte) ([]byte, error) {
+	if len(data) < b.NonceSize() {
+		return nil, ownerpacket.ErrAuthentication
+	}
+	return b.AEAD.Open(nil, data[:b.NonceSize()], data[b.NonceSize():], nil)
+}
+func (b *mixedVersionBox) seal(version uint8) ([]byte, error) {
+	return b.Seal([]byte(fmt.Sprintf(`{"domain":"ssjack/owner-ipc/v1","version":%d}`, version)))
+}
+
+type mixedVersionEnvelope struct {
+	Domain  string `json:"domain"`
+	Version uint8  `json:"version"`
+}
+type mixedVersionClient struct {
+	key             *mixedVersionBox
+	acceptedVersion uint8
+	closed          bool
+}
+
+func (p *mixedVersionClient) AcceptHello(data []byte) ([]byte, error) {
+	plain, err := p.key.Open(data)
+	if err != nil {
+		return nil, ownerpacket.ErrAuthentication
+	}
+	var envelope mixedVersionEnvelope
+	if json.Unmarshal(plain, &envelope) != nil || envelope.Version != p.acceptedVersion {
+		p.closed = true
+		return nil, ownerpacket.ErrAuthentication
+	}
+	return []byte("auth"), nil
+}
+func (*mixedVersionClient) AcceptReady([]byte) error { return nil }
+func (*mixedVersionClient) Command(ownerpacket.Command) ([]byte, error) {
+	return nil, ownerpacket.ErrAuthentication
+}
+func (*mixedVersionClient) OpenReply([]byte) (ownerpacket.Reply, error) {
+	return ownerpacket.Reply{}, ownerpacket.ErrAuthentication
+}
+func (*mixedVersionClient) Deadline() time.Time { return time.Now().Add(time.Minute) }
+func (p *mixedVersionClient) Close()            { p.closed = true }
+
+type mixedVersionServer struct {
+	hello  []byte
+	closes int
+}
+
+func (p *mixedVersionServer) Hello() ([]byte, error) { return p.hello, nil }
+func (*mixedVersionServer) Authenticate([]byte) ([]byte, error) {
+	return nil, ownerpacket.ErrAuthentication
+}
+func (*mixedVersionServer) OpenCommand([]byte) (*ownerpacket.Command, error) {
+	return nil, ownerpacket.ErrProtocol
+}
+func (*mixedVersionServer) Reply(ownerpacket.Reply) ([]byte, error) {
+	return nil, ownerpacket.ErrProtocol
+}
+func (*mixedVersionServer) Deadline() time.Time { return time.Now().Add(time.Minute) }
+func (p *mixedVersionServer) Close()            { p.closes++ }
 
 func TestClientNeverReplaysAnUncertainExchange(t *testing.T) {
 	for _, mode := range []string{"write-header", "write-body", "read", "bad-reply", "success"} {

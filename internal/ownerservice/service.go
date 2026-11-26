@@ -38,9 +38,14 @@ type Service struct {
 
 // Start borrows the Manager and its writer claim, without another unlock/listener.
 // Close must complete before the caller closes the Manager or its key context.
-func Start(ctx context.Context, manager *ownerdb.Manager) (*Service, error) {
+func Start(ctx context.Context, manager *ownerdb.Manager, verifier ...ownerdb.DescriptorVerifier) (*Service, error) {
 	if ctx == nil || ctx.Err() != nil || manager == nil {
 		return nil, ErrService
+	}
+	if len(verifier) != 0 {
+		if err := manager.SetDescriptorVerifier(verifier[0]); err != nil {
+			return nil, ErrService
+		}
 	}
 	binding, err := manager.OwnerBinding()
 	if err != nil {

@@ -26,9 +26,14 @@ type recorder struct {
 	change   vault.OwnerChange
 	path     string
 	value    []byte
+	mutation ownerdb.ApprovalMutation
 	export   ownerdb.ExportRequest
 }
 
+func (r *recorder) ApproveWithSnapshot(_ context.Context, revision uint64, mut ownerdb.ApprovalMutation) error {
+	r.mutation = mut
+	return r.record("approve_application", revision, 0)
+}
 func (r *recorder) Snapshot() (ownerdb.Snapshot, error) { r.reads++; return r.snapshot, nil }
 func (r *recorder) record(action string, revision, plan uint64) error {
 	r.action, r.revision, r.plan = action, revision, plan
@@ -209,5 +214,86 @@ func TestInvalidExpiredOrUnboundedPeerCannotReachManager(t *testing.T) {
 	p.deadline = time.Now().Add(-time.Second)
 	if reply := p.Dispatch(ctx, &ownerpacket.Command{Operation: "snapshot"}); reply.ErrorCode != "authentication" || r.reads != 0 {
 		t.Fatal("expired lease reached the manager")
+	}
+}
+
+func TestUnknownApprovalOperationRejected(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	command := ownerpacket.Command{Operation: "approve_everything", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+	if command.Valid() {
+		t.Fatal("unknown approval-like operation was wire-valid")
+	}
+	if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "invalid" || r.reads != 0 || r.action != "" || r.mutation != (ownerdb.ApprovalMutation{}) {
+		t.Fatal("unknown approval-like operation reached the manager")
+	}
+}
+
+func TestApprovalOperationRequiresRevision(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	command := ownerpacket.Command{Operation: "approve_application", Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+	if command.Valid() {
+		t.Fatal("approval without a revision was valid")
+	}
+	if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "invalid" || r.reads != 0 {
+		t.Fatal("approval without a revision reached the manager")
+	}
+}
+
+func TestApprovalOperationRequiresOwnerChannel(t *testing.T) {
+	t.Run("closed-peer", func(t *testing.T) {
+		_, r, p, ctx := fixture(t)
+		p.closed.Store(true)
+		command := ownerpacket.Command{Operation: "approve_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+		if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "authentication" || r.reads != 0 {
+			t.Fatal("closed peer reached the manager")
+		}
+	})
+	t.Run("expired-lease", func(t *testing.T) {
+		_, r, p, ctx := fixture(t)
+		p.deadline = time.Now().Add(-time.Second)
+		command := ownerpacket.Command{Operation: "approve_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+		if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "authentication" || r.reads != 0 {
+			t.Fatal("expired lease reached the manager")
+		}
+	})
+}
+
+func TestApproveApplicationReachesManagerWithExactMutation(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	reviewed, live := strings.Repeat("0a", 32), strings.Repeat("0b", 32) // distinct, so swapped fields are detected
+	command := ownerpacket.Command{Operation: "approve_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: reviewed, ReplacesHash: live}}
+	reply := p.Dispatch(ctx, &command)
+	want := ownerdb.ApprovalMutation{Kind: "approve", Name: "editor", Path: "/opt/editor", Hash: reviewed, Replaces: live}
+	if r.mutation != want || r.action != "approve_application" || r.revision != 42 || reply.ErrorCode != "" {
+		t.Fatal("approval mutation did not reach manager exactly")
+	}
+}
+
+func TestRevokeApplicationReachesManagerWithExactMutation(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	reviewed, live := strings.Repeat("0a", 32), strings.Repeat("0b", 32)
+	command := ownerpacket.Command{Operation: "revoke_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ReviewedHash: reviewed, ReplacesHash: live}}
+	reply := p.Dispatch(ctx, &command)
+	want := ownerdb.ApprovalMutation{Kind: "revoke", Name: "editor", Hash: reviewed, Replaces: live}
+	if r.mutation != want || r.action != "approve_application" || r.revision != 42 || reply.ErrorCode != "" {
+		t.Fatal("revoke mutation did not reach manager exactly (the wire carries no path)")
+	}
+}
+
+func TestApprovalReviewStaleCrossesWireAsReview(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	r.failure = ownerdb.ErrApprovalReview
+	command := ownerpacket.Command{Operation: "approve_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+	if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "review" {
+		t.Fatal("approval review error was not preserved")
+	}
+}
+
+func TestApprovalStaleRevisionMapsToStale(t *testing.T) {
+	_, r, p, ctx := fixture(t)
+	r.failure = vault.ErrOwnerRevision
+	command := ownerpacket.Command{Operation: "approve_application", Revision: revisionPtr(42), Approval: &ownerpacket.ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: strings.Repeat("0a", 32)}}
+	if reply := p.Dispatch(ctx, &command); reply.ErrorCode != "stale" {
+		t.Fatal("stale owner revision was not preserved")
 	}
 }

@@ -199,6 +199,28 @@ func TestSnapshotErrorsAreFixedCodesWithoutPrivateDiagnostics(t *testing.T) {
 	}
 }
 
+func TestApprovalReviewCodeCrossesWire(t *testing.T) {
+	reply := encodeSnapshot(ownerdb.Snapshot{}, ownerdb.ErrApprovalReview)
+	if reply.ErrorCode != "review" {
+		t.Fatalf("review error encoded as %q", reply.ErrorCode)
+	}
+	if _, err := decodeSnapshot(reply); !errors.Is(err, ownerpacket.ErrReviewStale) {
+		t.Fatalf("review reply decoded as %v", err)
+	}
+	if got := encodeSnapshot(ownerdb.Snapshot{}, vault.ErrOwnerRevision).ErrorCode; got != "stale" {
+		t.Fatalf("owner revision encoded as %q", got)
+	}
+	if !errors.Is(codeError("stale"), vault.ErrOwnerRevision) || !errors.Is(codeError("pending"), ownerdb.ErrPending) || !errors.Is(codeError("operation"), errOperation) {
+		t.Fatal("existing fixed error codes changed")
+	}
+	if _, err := decodeSnapshot(ownerpacket.Reply{ErrorCode: "stale"}); !errors.Is(err, vault.ErrOwnerRevision) {
+		t.Fatalf("stale reply decoded as %v", err)
+	}
+	if codeError("review") != ownerpacket.ErrReviewStale {
+		t.Fatal("review code did not map to its typed refusal")
+	}
+}
+
 func TestSnapshotSSHStatusRoundTripAndCloning(t *testing.T) {
 	cases := []struct {
 		name   string

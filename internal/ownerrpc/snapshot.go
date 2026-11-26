@@ -33,6 +33,8 @@ func errorCode(err error) string {
 		return "stale"
 	case errors.Is(err, ownerdb.ErrPending):
 		return "pending"
+	case errors.Is(err, ownerdb.ErrApprovalReview):
+		return "review"
 	case errors.Is(err, ownerpacket.ErrUncertain):
 		return "uncertain"
 	case errors.Is(err, ownerrotation.ErrUncertain):
@@ -54,6 +56,8 @@ func codeError(code string) error {
 		return vault.ErrOwnerRevision
 	case "pending", "busy":
 		return ownerdb.ErrPending
+	case "review":
+		return ownerpacket.ErrReviewStale
 	case "uncertain":
 		return ownerpacket.ErrUncertain
 	case "rotation-uncertain":

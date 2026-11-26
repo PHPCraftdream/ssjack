@@ -25,6 +25,7 @@ var (
 	ErrProtocol       = errors.New("invalid owner channel message")
 	ErrExpired        = errors.New("owner channel expired")
 	ErrUncertain      = errors.New("owner operation outcome unknown; inspect state before retrying")
+	ErrReviewStale    = errors.New("reviewed application changed; re-open the approvals menu")
 )
 
 type DirectoryChange struct {
