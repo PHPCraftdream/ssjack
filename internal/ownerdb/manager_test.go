@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -391,20 +392,39 @@ func TestDiscardWaitsForRotationToEnd(t *testing.T) {
 	}
 }
 
-func approvalManager(t *testing.T) (*Manager, string, []byte) {
-	t.Helper()
-	flakediag.OnFailure(t, func() string { return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024) })
-	path := filepath.Join(t.TempDir(), "vault")
-	password := []byte("test-password")
-	if err := vault.CreateWithRecords(context.Background(), path, vault.NewDirectory(), password); err != nil {
-		t.Fatal(err)
+var (
+	fixtureOnce              sync.Once
+	pristineDir              string
+	pristinePath             string
+	pristineErr              error
+	sharedOnce               sync.Once
+	sharedDir                string
+	sharedPath               string
+	shared                   *Manager
+	sharedErr                error
+	fakeHashes               = map[string]string{}
+	restartBeforeSaveManager *Manager
+	keptDirs                 []string
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if shared != nil {
+		shared.Discard()
 	}
-	m, err := Open(context.Background(), path, password)
-	if err != nil {
-		t.Fatal(err)
+	if restartBeforeSaveManager != nil {
+		restartBeforeSaveManager.Discard()
 	}
-	t.Cleanup(m.Discard)
-	return m, path, password
+	for _, dir := range keptDirs {
+		_ = os.RemoveAll(dir)
+	}
+	if pristineDir != "" {
+		_ = os.RemoveAll(pristineDir)
+	}
+	if sharedDir != "" {
+		_ = os.RemoveAll(sharedDir)
+	}
+	os.Exit(code)
 }
 
 func setVerifier(t *testing.T, m *Manager, hash string, verifyErr error) {
@@ -439,6 +459,16 @@ func snapshotFiles(t *testing.T, vaultPath string) []string {
 	return files
 }
 
+// clearSnapshots deletes evidence snapshots only; it never touches the vault file or session.
+func clearSnapshots(t *testing.T, vaultPath string) {
+	t.Helper()
+	for _, name := range snapshotFiles(t, vaultPath) {
+		if err := os.Remove(filepath.Join(filepath.Dir(vaultPath), name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func fileDigest(t *testing.T, path string) [32]byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -453,98 +483,203 @@ func holdSaveLock(t *testing.T, vaultPath string) {
 	if err := os.WriteFile(vaultPath+".lock", nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Remove(vaultPath + ".lock") })
+	t.Cleanup(func() { _ = os.Remove(vaultPath + ".lock") })
+}
+
+// KDF budget: TestMain pristine creation 1; sharedManager Open for tests 1-5 1;
+// SnapshotFailure 1; EditAppliedThenSaveFailed 1; RestartBeforeSave reopen 1;
+// TimeoutAfterEnqueue 1; RestartAfterDurableSave Open + reopen 2. Total: 8.
+func pristineFixture() (string, error) {
+	fixtureOnce.Do(func() {
+		pristineDir, pristineErr = os.MkdirTemp("", "ownerdb-pristine-")
+		if pristineErr != nil {
+			return
+		}
+		pristinePath = filepath.Join(pristineDir, "vault")
+		pristineErr = vault.CreateWithRecords(context.Background(), pristinePath, vault.NewDirectory(), []byte("test-password"))
+	})
+	return pristinePath, pristineErr
+}
+
+func copyPristine(t *testing.T, dir string) string {
+	t.Helper()
+	src, err := pristineFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "vault")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func openCopiedManager(t *testing.T) (*Manager, string, []byte) {
+	return openCopiedManagerWithCleanup(t, true)
+}
+
+func openCopiedManagerWithCleanup(t *testing.T, cleanup bool) (*Manager, string, []byte) {
+	t.Helper()
+	flakediag.OnFailure(t, func() string { return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024) })
+	dir := t.TempDir()
+	if !cleanup {
+		var err error
+		if dir, err = os.MkdirTemp("", "ownerdb-kept-"); err != nil {
+			t.Fatal(err)
+		}
+		keptDirs = append(keptDirs, dir)
+	}
+	path := copyPristine(t, dir)
+	password := []byte("test-password")
+	m, err := Open(context.Background(), path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanup {
+		t.Cleanup(m.Discard)
+	}
+	return m, path, password
+}
+
+// Tests sharing this manager run sequentially in source order (no t.Parallel); that ordering is the determinism contract.
+func sharedManager(t *testing.T) (*Manager, string, []byte) {
+	t.Helper()
+	sharedOnce.Do(func() {
+		flakediag.OnFailure(t, func() string { return "goroutine dump:\n" + flakediag.GoroutineDump(64*1024) })
+		sharedDir, sharedErr = os.MkdirTemp("", "ownerdb-shared-")
+		if sharedErr != nil {
+			return
+		}
+		sharedPath = copyPristine(t, sharedDir)
+		shared, sharedErr = Open(context.Background(), sharedPath, []byte("test-password"))
+	})
+	if sharedErr != nil {
+		t.Fatal(sharedErr)
+	}
+	return shared, sharedPath, []byte("test-password")
+}
+
+func fakeDescriptor(path string) (string, error) {
+	if hash, ok := fakeHashes[path]; ok {
+		return hash, nil
+	}
+	return "", errors.New("descriptor missing")
 }
 
 func waitDurable(t *testing.T, m *Manager) {
 	t.Helper()
-	flakediag.WaitFor(t, "database reaches saved == revision", 10*time.Second, func() (string, bool) {
-		status := m.Status().Database
-		return fmt.Sprintf("revision=%d saved=%d err=%v", status.Revision, status.SavedRevision, status.Err), !status.Pending && status.Err == nil && status.Revision == status.SavedRevision
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.db.Flush(ctx); err != nil {
+		t.Fatalf("database flush = %v", err)
+	}
 	status := m.Status().Database
-	if status.Err != nil || status.Revision != status.SavedRevision {
+	if status.Err != nil || status.Revision != status.SavedRevision || status.Pending {
 		t.Fatalf("database not durable: %+v", status)
 	}
 }
 
 func approvalHash(seed byte) string { return fmt.Sprintf("%064x", seed) }
 
+func approvalNames(t *testing.T, m *Manager) []string {
+	t.Helper()
+	metadata, err := m.Metadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(metadata.Approvals))
+	for _, approval := range metadata.Approvals {
+		names = append(names, approval.Name)
+	}
+	return names
+}
+
+func hasName(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
+// unchangedApproval asserts a refused composite left the vault, revision and approval list as they were.
+func unchangedApproval(t *testing.T, m *Manager, path string, before [32]byte, revision uint64, count int, message string) {
+	t.Helper()
+	if len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != before || m.Status().Database.Revision != revision || len(approvalNames(t, m)) != count {
+		t.Fatal(message)
+	}
+}
+
 func TestApprovalVerifyRefusals(t *testing.T) {
-	t.Run("mismatch refuses with review", func(t *testing.T) {
-		m, path, _ := approvalManager(t)
-		setVerifier(t, m, approvalHash(9), nil)
-		before, revision := fileDigest(t, path), m.Status().Database.Revision
-		mut := approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1))
-		if err := m.SetDescriptorVerifier(nil); err == nil {
-			t.Fatal("nil verifier replacement succeeded")
-		}
-		if err := m.ApproveWithSnapshot(context.Background(), revision, mut); !errors.Is(err, ErrApprovalReview) {
-			t.Fatalf("mismatch error = %v", err)
-		}
-		metadata, metaErr := m.Metadata()
-		if len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != before || m.Status().Database.Revision != revision || metaErr != nil || len(metadata.Approvals) != 0 {
-			t.Fatal("mismatch changed approval state")
-		}
-		setVerifier(t, m, approvalHash(1), nil)
-		if err := m.ApproveWithSnapshot(context.Background(), revision, mut); err != nil {
-			t.Fatal(err)
-		}
-		if err := m.SetDescriptorVerifier(func(string) (string, error) { return approvalHash(1), nil }); err == nil {
-			t.Fatal("verifier replacement after approval succeeded")
-		}
-		if len(snapshotFiles(t, path)) != 1 {
-			t.Fatal("recovered approval snapshot missing")
-		}
-	})
-	t.Run("verifier error refuses with review", func(t *testing.T) {
-		m, path, _ := approvalManager(t)
-		setVerifier(t, m, approvalHash(1), errors.New("descriptor missing"))
-		before, revision := fileDigest(t, path), m.Status().Database.Revision
-		mut := approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1))
-		if err := m.ApproveWithSnapshot(context.Background(), revision, mut); !errors.Is(err, ErrApprovalReview) {
-			t.Fatalf("verifier error = %v", err)
-		}
-		metadata, metaErr := m.Metadata()
-		if len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != before || m.Status().Database.Revision != revision || metaErr != nil || len(metadata.Approvals) != 0 {
-			t.Fatal("verifier error changed approval state")
-		}
-	})
+	m, path, _ := sharedManager(t)
+	dir := filepath.Dir(path)
 	t.Run("unconfigured keeper refuses", func(t *testing.T) {
-		m, path, _ := approvalManager(t)
-		before, revision := fileDigest(t, path), m.Status().Database.Revision
-		mut := approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1))
-		if err := m.ApproveWithSnapshot(context.Background(), revision, mut); !errors.Is(err, ErrApprovalReview) {
+		before, revision, count := fileDigest(t, path), m.Status().Database.Revision, len(approvalNames(t, m))
+		mutationPath := filepath.Join(dir, "app-v0")
+		if err := m.ApproveWithSnapshot(context.Background(), revision, approveMutation("app-v0", mutationPath, approvalHash(1))); !errors.Is(err, ErrApprovalReview) {
 			t.Fatalf("unconfigured verifier error = %v", err)
 		}
-		metadata, metaErr := m.Metadata()
-		if len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != before || m.Status().Database.Revision != revision || metaErr != nil || len(metadata.Approvals) != 0 {
-			t.Fatal("unconfigured keeper changed approval state")
+		unchangedApproval(t, m, path, before, revision, count, "unconfigured keeper changed approval state")
+		// This zero value is a throwaway guard check and is never used for approvals.
+		if err := (&Manager{}).SetDescriptorVerifier(nil); err == nil {
+			t.Fatal("nil verifier replacement succeeded")
+		}
+	})
+	if err := m.SetDescriptorVerifier(fakeDescriptor); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("verifier error refuses with review", func(t *testing.T) {
+		before, revision, count := fileDigest(t, path), m.Status().Database.Revision, len(approvalNames(t, m))
+		mutationPath := filepath.Join(dir, "app-v1")
+		if err := m.ApproveWithSnapshot(context.Background(), revision, approveMutation("app-v1", mutationPath, approvalHash(1))); !errors.Is(err, ErrApprovalReview) {
+			t.Fatalf("verifier error = %v", err)
+		}
+		unchangedApproval(t, m, path, before, revision, count, "verifier error changed approval state")
+	})
+	t.Run("mismatch refuses with review", func(t *testing.T) {
+		mutationPath := filepath.Join(dir, "app-v2")
+		before, revision, count := fileDigest(t, path), m.Status().Database.Revision, len(approvalNames(t, m))
+		fakeHashes[mutationPath] = approvalHash(9)
+		mutation := approveMutation("app-v2", mutationPath, approvalHash(1))
+		if err := m.ApproveWithSnapshot(context.Background(), revision, mutation); !errors.Is(err, ErrApprovalReview) {
+			t.Fatalf("mismatch error = %v", err)
+		}
+		unchangedApproval(t, m, path, before, revision, count, "mismatch changed approval state")
+		fakeHashes[mutationPath] = approvalHash(1)
+		if err := m.ApproveWithSnapshot(context.Background(), revision, mutation); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.SetDescriptorVerifier(fakeDescriptor); err == nil {
+			t.Fatal("verifier replacement after approval succeeded")
+		}
+		if len(snapshotFiles(t, path)) != 1 || fileDigest(t, path) == before {
+			t.Fatal("first approval was not persisted with one snapshot")
 		}
 	})
 }
 
 func TestApprovalSnapshotThenApplyAtomic(t *testing.T) {
-	m, path, _ := approvalManager(t)
-	if err := m.SetDescriptorVerifier(func(p string) (string, error) {
-		if strings.HasSuffix(p, "app-one") {
-			return approvalHash(1), nil
-		}
-		return approvalHash(2), nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	status := m.Status().Database
-	if status.Revision != status.SavedRevision {
-		t.Fatal("initial database is not saved")
-	}
-	expected, before := status.Revision, fileDigest(t, path)
+	m, path, _ := sharedManager(t)
+	clearSnapshots(t, path)
 	dir := filepath.Dir(path)
-	mutA := approveMutation("app-one", filepath.Join(dir, "app-one"), approvalHash(1))
-	mutB := approveMutation("app-two", filepath.Join(dir, "app-two"), approvalHash(2))
+	pathA, pathB := filepath.Join(dir, "app-a1"), filepath.Join(dir, "app-a2")
+	fakeHashes[pathA], fakeHashes[pathB] = approvalHash(1), approvalHash(2)
+	waitDurable(t, m)
+	status := m.Status().Database
+	expected, before, baseline := status.Revision, fileDigest(t, path), len(approvalNames(t, m))
+	if status.Revision != status.SavedRevision || status.Pending || status.Err != nil {
+		t.Fatalf("database not saved before the race: %+v", status)
+	}
 	loser := make(chan error, 1)
-	go func() { loser <- m.ApproveWithSnapshot(context.Background(), expected, mutB) }()
-	err := m.ApproveWithSnapshot(context.Background(), expected, mutA)
+	go func() {
+		loser <- m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-a2", pathB, approvalHash(2)))
+	}()
+	err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-a1", pathA, approvalHash(1)))
 	loserErr := <-loser
 	if (err == nil) == (loserErr == nil) {
 		t.Fatalf("composite outcomes = %v, %v", err, loserErr)
@@ -552,77 +687,60 @@ func TestApprovalSnapshotThenApplyAtomic(t *testing.T) {
 	if err != nil && !errors.Is(err, vault.ErrOwnerRevision) || loserErr != nil && !errors.Is(loserErr, vault.ErrOwnerRevision) {
 		t.Fatalf("losing composite error = %v, %v", err, loserErr)
 	}
-	if files := snapshotFiles(t, path); len(files) != 1 || fileDigest(t, filepath.Join(dir, files[0])) != before {
+	files := snapshotFiles(t, path)
+	if len(files) != 1 || fileDigest(t, filepath.Join(dir, files[0])) != before {
 		t.Fatal("snapshot did not preserve pre-write ciphertext")
 	}
 	if fileDigest(t, path) == before {
 		t.Fatal("database ciphertext did not change")
 	}
 	status = m.Status().Database
-	metadata, metadataErr := m.Metadata()
-	winner := "app-one"
+	names := approvalNames(t, m)
+	winner, lost := "app-a1", "app-a2"
 	if err != nil {
-		winner = "app-two"
+		winner, lost = lost, winner
 	}
-	if metadataErr != nil || status.Pending || status.Err != nil || status.Revision != expected+1 || status.SavedRevision != expected+1 || len(metadata.Approvals) != 1 || metadata.Approvals[0].Name != winner {
-		t.Fatalf("unexpected composite result: %+v, %+v, %v", status, metadata, metadataErr)
-	}
-}
-
-func TestApprovalSnapshotFailureKeepsVaultUnchanged(t *testing.T) {
-	m, path, _ := approvalManager(t)
-	setVerifier(t, m, approvalHash(1), nil)
-	if err := os.WriteFile(path, []byte("corrupted ciphertext fixture"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	corrupted, expected := fileDigest(t, path), m.Status().Database.Revision
-	err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1)))
-	status := m.Status().Database
-	metadata, metadataErr := m.Metadata()
-	if err == nil || len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != corrupted || status.Revision != expected || status.SavedRevision != expected || status.Err != nil || status.Pending || metadataErr != nil || len(metadata.Approvals) != 0 {
-		t.Fatal("snapshot failure changed the live approval state")
+	if status.Pending || status.Err != nil || status.Revision != expected+1 || status.SavedRevision != expected+1 || len(names) != baseline+1 || !hasName(names, winner) || hasName(names, lost) {
+		t.Fatalf("unexpected composite result: %+v, approvals %v", status, names)
 	}
 }
 
 func TestApprovalSnapshotRetentionBound(t *testing.T) {
+	m, path, _ := sharedManager(t)
+	var passZeroSnapshot string
+	dir := filepath.Dir(path)
 	t.Run("retains newest snapshots", func(t *testing.T) {
-		m, path, _ := approvalManager(t)
-		expected, dir := m.Status().Database.Revision, filepath.Dir(path)
+		clearSnapshots(t, path)
+		expected := m.Status().Database.Revision
 		standins := make([]string, 10)
 		baseTime := time.Now()
 		for i := range standins {
 			standins[i] = fmt.Sprintf("%s.%s-%02d-standin.ssjack.ktav", filepath.Base(path), approvalSnapshotLabel, i)
-			standinPath := filepath.Join(dir, standins[i])
-			if err := os.WriteFile(standinPath, []byte("stand-in"), 0600); err != nil {
+			p := filepath.Join(dir, standins[i])
+			if err := os.WriteFile(p, []byte("stand-in"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			stamp := baseTime.Add(-time.Duration(100-i) * time.Hour)
-			if err := os.Chtimes(standinPath, stamp, stamp); err != nil {
+			if err := os.Chtimes(p, stamp, stamp); err != nil {
 				t.Fatal(err)
 			}
 		}
-		fakeHashes := map[string]string{
-			filepath.Join(dir, "app-0"): approvalHash(1),
-			filepath.Join(dir, "app-1"): approvalHash(2),
-		}
-		if err := m.SetDescriptorVerifier(func(p string) (string, error) { return fakeHashes[p], nil }); err != nil {
-			t.Fatal(err)
-		}
-		var passZeroSnapshot string
-		for pass := 0; pass < 2; pass++ {
-			name := fmt.Sprintf("app-%d", pass)
-			hash := fakeHashes[filepath.Join(dir, name)]
-			if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation(name, filepath.Join(dir, name), hash)); err != nil {
-				t.Fatalf("pass %d: %v", pass, err)
+		for i := 0; i < 2; i++ {
+			name := fmt.Sprintf("app-r%d", i)
+			p := filepath.Join(dir, name)
+			hash := approvalHash(byte(i + 1))
+			fakeHashes[p] = hash
+			if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation(name, p, hash)); err != nil {
+				t.Fatalf("pass %d: %v", i, err)
 			}
 			expected++
 			files := snapshotFiles(t, path)
 			if len(files) != 10 {
-				t.Fatalf("pass %d snapshot count = %d", pass, len(files))
+				t.Fatalf("pass %d snapshot count = %d", i, len(files))
 			}
-			if pass == 0 {
+			if i == 0 {
 				for _, file := range files {
-					if !strings.Contains(filepath.Base(file), "-standin.") {
+					if !strings.Contains(file, "-standin.") {
 						passZeroSnapshot = file
 						break
 					}
@@ -633,32 +751,58 @@ func TestApprovalSnapshotRetentionBound(t *testing.T) {
 			} else if _, err := os.Stat(filepath.Join(dir, passZeroSnapshot)); err != nil {
 				t.Fatalf("pass 0 real snapshot missing after pass 1: %v", err)
 			}
-			for i, name := range standins {
+			for j, name := range standins {
 				_, statErr := os.Stat(filepath.Join(dir, name))
-				removed := i <= pass
+				removed := j <= i
 				if removed && statErr == nil {
-					t.Fatalf("oldest stand-in %d remains after pass %d", i, pass)
+					t.Fatalf("oldest stand-in %d remains after pass %d", j, i)
 				}
 				if !removed && statErr != nil {
-					t.Fatalf("newer stand-in %d missing after pass %d: %v", i, pass, statErr)
+					t.Fatalf("newer stand-in %d missing after pass %d: %v", j, i, statErr)
 				}
 			}
 		}
 		waitDurable(t, m)
 	})
+	t.Run("approve revoke round trip", func(t *testing.T) {
+		name, p := "app-rr", filepath.Join(dir, "app-rr")
+		fakeHashes[p] = approvalHash(1)
+		expected, baseline := m.Status().Database.Revision, len(approvalNames(t, m))
+		if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation(name, p, approvalHash(1))); err != nil {
+			t.Fatal(err)
+		}
+		expected++
+		names := approvalNames(t, m)
+		if len(names) != baseline+1 || !hasName(names, name) || m.Status().Database.Revision != expected || len(snapshotFiles(t, path)) != 10 {
+			t.Fatal("approve round trip state mismatch")
+		}
+		if err := m.ApproveWithSnapshot(context.Background(), expected, revokeMutation(name, p, approvalHash(1))); err != nil {
+			t.Fatal(err)
+		}
+		expected++
+		waitDurable(t, m)
+		names = approvalNames(t, m)
+		if len(names) != baseline || hasName(names, name) || m.Status().Database.Revision != expected || len(snapshotFiles(t, path)) != 10 {
+			t.Fatal("revoke round trip state mismatch")
+		}
+	})
 	t.Run("prune failure refuses", func(t *testing.T) {
-		m, path, _ := approvalManager(t)
-		dir := filepath.Dir(path)
-		setVerifier(t, m, approvalHash(1), nil)
+		// Start with only the nine stand-ins so the oldest blocker is the sole prune candidate.
+		for _, name := range snapshotFiles(t, path) {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
 		standins := make([]string, 9)
 		baseTime := time.Now()
 		for i := range standins {
 			standins[i] = fmt.Sprintf("%s.%s-%02d-standin.ssjack.ktav", filepath.Base(path), approvalSnapshotLabel, i)
-			if err := os.WriteFile(filepath.Join(dir, standins[i]), []byte("stand-in"), 0600); err != nil {
+			p := filepath.Join(dir, standins[i])
+			if err := os.WriteFile(p, []byte("stand-in"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			stamp := baseTime.Add(time.Duration(i) * time.Hour)
-			if err := os.Chtimes(filepath.Join(dir, standins[i]), stamp, stamp); err != nil {
+			if err := os.Chtimes(p, stamp, stamp); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -675,7 +819,9 @@ func TestApprovalSnapshotRetentionBound(t *testing.T) {
 			t.Fatal(err)
 		}
 		before, revision := fileDigest(t, path), m.Status().Database.Revision
-		if err := m.ApproveWithSnapshot(context.Background(), revision, approveMutation("app", filepath.Join(dir, "app"), approvalHash(1))); err == nil || errors.Is(err, vault.ErrOwnerRevision) || errors.Is(err, ErrApprovalReview) || errors.Is(err, ErrPending) {
+		p := filepath.Join(dir, "app-prune")
+		fakeHashes[p] = approvalHash(1)
+		if err := m.ApproveWithSnapshot(context.Background(), revision, approveMutation("app-prune", p, approvalHash(1))); err == nil || errors.Is(err, vault.ErrOwnerRevision) || errors.Is(err, ErrApprovalReview) || errors.Is(err, ErrPending) {
 			t.Fatalf("prune failure error = %v", err)
 		}
 		status := m.Status().Database
@@ -686,27 +832,76 @@ func TestApprovalSnapshotRetentionBound(t *testing.T) {
 }
 
 func TestApprovalSnapshotSucceededEditRejected(t *testing.T) {
-	m, path, _ := approvalManager(t)
-	setVerifier(t, m, approvalHash(1), nil)
-	dir, expected := filepath.Dir(path), m.Status().Database.Revision
-	appPath := filepath.Join(dir, "app-one")
-	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-one", appPath, approvalHash(1))); err != nil {
+	m, path, _ := sharedManager(t)
+	clearSnapshots(t, path)
+	dir := filepath.Dir(path)
+	appPath := filepath.Join(dir, "app-e-shared")
+	fakeHashes[appPath] = approvalHash(1)
+	expected, baseline := m.Status().Database.Revision, len(approvalNames(t, m))
+	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-e1", appPath, approvalHash(1))); err != nil {
 		t.Fatal(err)
 	}
 	firstDigest := fileDigest(t, path)
 	expected++
-	err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-two", appPath, approvalHash(1)))
-	if err == nil || err.Error() != "another approved application already uses this path" {
+	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-e2", appPath, approvalHash(1))); err == nil || err.Error() != "another approved application already uses this path" {
 		t.Fatalf("unexpected path-conflict error: %v", err)
 	}
-	metadata, metadataErr := m.Metadata()
-	if err == nil || errors.Is(err, vault.ErrOwnerRevision) || errors.Is(err, ErrApprovalReview) || len(snapshotFiles(t, path)) != 2 || metadataErr != nil || len(metadata.Approvals) != 1 || metadata.Approvals[0].Name != "app-one" || fileDigest(t, path) != firstDigest || m.Status().Database.Revision != expected {
+	names := approvalNames(t, m)
+	if len(snapshotFiles(t, path)) != 2 || len(names) != baseline+1 || !hasName(names, "app-e1") || hasName(names, "app-e2") || fileDigest(t, path) != firstDigest || m.Status().Database.Revision != expected {
 		t.Fatal("rejected edit did not retain only the first approval")
 	}
 }
 
+func TestApprovalSaveSucceededReplyLost(t *testing.T) {
+	// Proves only that a durable success is readable afterwards and that one composite yields exactly one approval and snapshot; it does not model a lost reply (the no-replay rule is pinned in internal/ownerrpc/exchange_test.go).
+	m, path, _ := sharedManager(t)
+	dir := filepath.Dir(path)
+	p := filepath.Join(dir, "app-reply")
+	fakeHashes[p] = approvalHash(1)
+	before, expected := fileDigest(t, path), m.Status().Database.Revision
+	beforeFiles := len(snapshotFiles(t, path))
+	beforeMetadata, err := m.Metadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-reply", p, approvalHash(1)))
+	}()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	metadata, metadataErr := m.Metadata()
+	status := m.Status().Database
+	found := false
+	for _, approval := range metadata.Approvals {
+		if approval.Name == "app-reply" && approval.Path == p && approval.Hash == approvalHash(1) {
+			found = true
+		}
+	}
+	if metadataErr != nil || status.SavedRevision != expected+1 || status.Revision != expected+1 || len(metadata.Approvals) != len(beforeMetadata.Approvals)+1 || !found || fileDigest(t, path) == before || len(snapshotFiles(t, path)) != beforeFiles+1 {
+		t.Fatal("durable approval state was not confirmed")
+	}
+}
+
+func TestApprovalSnapshotFailureKeepsVaultUnchanged(t *testing.T) {
+	m, path, _ := openCopiedManager(t)
+	setVerifier(t, m, approvalHash(1), nil)
+	if err := os.WriteFile(path, []byte("corrupted ciphertext fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	corrupted, expected := fileDigest(t, path), m.Status().Database.Revision
+	err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1)))
+	status := m.Status().Database
+	metadata, metadataErr := m.Metadata()
+	if err == nil || len(snapshotFiles(t, path)) != 0 || fileDigest(t, path) != corrupted || status.Revision != expected || status.SavedRevision != expected || status.Err != nil || status.Pending || metadataErr != nil || len(metadata.Approvals) != 0 {
+		t.Fatal("snapshot failure changed the live approval state")
+	}
+}
+
 func TestApprovalEditAppliedThenSaveFailed(t *testing.T) {
-	m, path, _ := approvalManager(t)
+	m, path, _ := openCopiedManagerWithCleanup(t, false)
+	restartBeforeSaveManager = m
 	setVerifier(t, m, approvalHash(1), nil)
 	holdSaveLock(t, path)
 	before, expected := fileDigest(t, path), m.Status().Database.Revision
@@ -718,19 +913,42 @@ func TestApprovalEditAppliedThenSaveFailed(t *testing.T) {
 	}
 }
 
+func TestApprovalRestartBeforeSave(t *testing.T) {
+	// Depends on TestApprovalEditAppliedThenSaveFailed running first in source order; its manager is applied in memory but not durable.
+	m := restartBeforeSaveManager
+	if m == nil {
+		t.Skip("needs TestApprovalEditAppliedThenSaveFailed in the same run")
+	}
+	restartBeforeSaveManager = nil
+	path := m.path
+	password := []byte("test-password")
+	m.Discard()
+	reopened, err := Open(context.Background(), path, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Discard)
+	status := reopened.Status().Database
+	metadata, metadataErr := reopened.Metadata()
+	if status.Revision != status.SavedRevision || metadataErr != nil || len(metadata.Approvals) != 0 || len(snapshotFiles(t, path)) != 1 {
+		t.Fatal("restart before save did not reopen the prior state")
+	}
+}
+
 func TestApprovalTimeoutAfterEnqueue(t *testing.T) {
-	// Proves the operation-failure contract after enqueue with the O_EXCL .lock seam pinning the save: in-memory state is retained, nothing is durable, and an explicit retry—not a replay—completes it. The seam cannot pause the save worker mid-save, so the wait surfaces the save error rather than a context deadline; the timeout branch itself is not exercised here.
-	m, path, _ := approvalManager(t)
+	// Proves operation-failure after enqueue using the .lock seam to make save fail. It cannot pause the worker mid-save, so the timeout branch is not exercised; a queued save may complete after explicit retry, never by replaying the operation.
+	m, path, _ := openCopiedManager(t)
 	setVerifier(t, m, approvalHash(1), nil)
 	holdSaveLock(t, path)
 	before, expected := fileDigest(t, path), m.Status().Database.Revision
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	err := m.ApproveWithSnapshot(ctx, expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1)))
+	err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1)))
 	status := m.Status().Database
 	metadata, metadataErr := m.Metadata()
-	if err == nil || status.Revision != expected+1 || !status.Pending || metadataErr != nil || len(metadata.Approvals) != 1 || fileDigest(t, path) != before {
-		t.Fatal("timeout did not preserve the applied pending state")
+	if err == nil || errors.Is(err, vault.ErrOwnerRevision) || errors.Is(err, ErrApprovalReview) || errors.Is(err, ErrPending) {
+		t.Fatalf("save failure outcome class = %v", err)
+	}
+	if status.Revision != expected+1 || !status.Pending || metadataErr != nil || len(metadata.Approvals) != 1 || fileDigest(t, path) != before {
+		t.Fatal("save failure after enqueue did not preserve the applied pending state")
 	}
 	if err := os.Remove(path + ".lock"); err != nil {
 		t.Fatal(err)
@@ -745,48 +963,8 @@ func TestApprovalTimeoutAfterEnqueue(t *testing.T) {
 	}
 }
 
-func TestApprovalSaveSucceededReplyLost(t *testing.T) {
-	// Proves the composite confirms durability before returning, and that the caller re-reads state instead of replaying. The seam cannot drop a real reply (covered by internal/ownerrpc exchange tests); this models only caller-side discipline.
-	m, path, _ := approvalManager(t)
-	setVerifier(t, m, approvalHash(1), nil)
-	before, expected := fileDigest(t, path), m.Status().Database.Revision
-	result := make(chan error, 1)
-	go func() {
-		result <- m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1)))
-	}()
-	if err := <-result; err != nil {
-		t.Fatal(err)
-	}
-	metadata, metadataErr := m.Metadata()
-	status := m.Status().Database
-	if metadataErr != nil || status.SavedRevision != expected+1 || status.Revision != expected+1 || len(metadata.Approvals) != 1 || fileDigest(t, path) == before || len(snapshotFiles(t, path)) != 1 {
-		t.Fatal("durable approval state was not confirmed")
-	}
-}
-
-func TestApprovalRestartBeforeSave(t *testing.T) {
-	m, path, password := approvalManager(t)
-	setVerifier(t, m, approvalHash(1), nil)
-	holdSaveLock(t, path)
-	expected := m.Status().Database.Revision
-	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", filepath.Join(filepath.Dir(path), "app"), approvalHash(1))); err == nil {
-		t.Fatal("locked save unexpectedly succeeded")
-	}
-	m.Discard()
-	reopened, err := Open(context.Background(), path, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(reopened.Discard)
-	status := reopened.Status().Database
-	metadata, metadataErr := reopened.Metadata()
-	if status.Revision != status.SavedRevision || metadataErr != nil || len(metadata.Approvals) != 0 || len(snapshotFiles(t, path)) != 1 {
-		t.Fatal("restart before save did not reopen the prior state")
-	}
-}
-
 func TestApprovalRestartAfterDurableSave(t *testing.T) {
-	m, path, password := approvalManager(t)
+	m, path, password := openCopiedManager(t)
 	setVerifier(t, m, approvalHash(1), nil)
 	expected := m.Status().Database.Revision
 	appPath := filepath.Join(filepath.Dir(path), "app")
