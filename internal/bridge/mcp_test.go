@@ -2,17 +2,21 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/PHPCraftdream/ssjack/internal/application"
 	"github.com/PHPCraftdream/ssjack/internal/apptransport"
 	"github.com/PHPCraftdream/ssjack/internal/broker"
+	"github.com/PHPCraftdream/ssjack/internal/flakediag"
 	"github.com/PHPCraftdream/ssjack/internal/remote"
 	"github.com/PHPCraftdream/ssjack/internal/transfer"
 	"github.com/PHPCraftdream/ssjack/internal/wire"
@@ -351,4 +355,307 @@ func TestCancelToolsReportTheKeeperAnswer(t *testing.T) {
 			t.Fatalf("unexpected cancellation result %q: %v", text, err)
 		}
 	})
+}
+
+func (k *taskKeeper) setExecRead(fn func(call int, input remote.ReadInput) remote.ReadOutput) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.execReadFn = fn
+}
+
+func TestExecTaskRunningDoneAndCancellation(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	keeper := &taskKeeper{}
+	keeper.setExecRead(func(call int, input remote.ReadInput) remote.ReadOutput {
+		if call == 1 {
+			return remote.ReadOutput{JobID: input.JobID, Done: false}
+		}
+		return remote.ReadOutput{JobID: input.JobID, Done: true, ExitCode: 0}
+	})
+	session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+	started := callTaskTool(t, ctx, session, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+	if started.IsError || len(started.Content) != 0 {
+		t.Fatalf("remote_exec did not return task handle: %+v", started)
+	}
+	id := keeper.started()[0]
+	running, err := taskGet(ctx, session, id)
+	if err != nil || running.Status != "working" || running.StatusMessage != "" {
+		t.Fatalf("running task: %+v, %v; want working with empty statusMessage", running, err)
+	}
+	done, err := taskGet(ctx, session, id)
+	if err != nil || done.Status != "completed" {
+		t.Fatalf("completed task: %+v, %v", done, err)
+	}
+	want := "Status: finished · exit code 0\nResume: stdout_offset=0 stderr_offset=0 · more: stdout=no stderr=no · lost: stdout=no stderr=no · job " + id
+	if got := answerText(t, done.Result); got != want {
+		t.Fatalf("completed result %q, want %q", got, want)
+	}
+
+	cancelKeeper := &taskKeeper{}
+	cancelSession, _ := newTaskBridge(t, ctx, cancelKeeper, nil, true, "2026-07-28")
+	cancelStarted := callTaskTool(t, ctx, cancelSession, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+	if cancelStarted.IsError || len(cancelStarted.Content) != 0 {
+		t.Fatalf("remote_exec did not return task handle for cancellation: %+v", cancelStarted)
+	}
+	cancelID := cancelKeeper.started()[0]
+	if _, err := taskCancel(ctx, cancelSession, cancelID); err != nil {
+		t.Fatalf("tasks/cancel: %v", err)
+	}
+	if got := cancelKeeper.execCancels; len(got) != 1 || got[0] != "cancel:"+cancelID {
+		t.Fatalf("tasks/cancel keeper operations %v, want cancel:%s", got, cancelID)
+	}
+
+	appKeeper := &taskKeeper{}
+	appSession, _ := newTaskBridge(t, ctx, appKeeper, nil, true, "2026-07-28")
+	appStarted := callTaskTool(t, ctx, appSession, "app_exec", map[string]any{"application": "allowed", "arguments": []string{"status"}})
+	if appStarted.IsError || len(appStarted.Content) != 0 {
+		t.Fatalf("app_exec did not return task handle: %+v", appStarted)
+	}
+	appID := appKeeper.started()[0]
+	if result, err := appSession.CallTool(ctx, &mcp.CallToolParams{Name: "app_cancel", Arguments: map[string]any{"job_id": appID}}); err != nil || result.IsError || answerText(t, result) != "Cancelled job "+appID {
+		t.Fatalf("app_cancel: %+v, %v", result, err)
+	}
+	if got := appKeeper.execCancels; len(got) != 1 || got[0] != "app_cancel:"+appID {
+		t.Fatalf("app task cancellation operations %v", got)
+	}
+}
+
+func TestExecTaskInterceptionEligibilityAndFallback(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	testEligibleStart := func(t *testing.T, tool string, args map[string]any) {
+		t.Helper()
+		keeper := &taskKeeper{}
+		recorded := &recorder{}
+		session, _ := newTaskBridgeWith(t, ctx, keeper, nil, true, "2026-07-28", nil, func(inner mcp.Transport) mcp.Transport {
+			return &recordingTransport{inner: inner, recorder: recorded}
+		})
+		result := callTaskTool(t, ctx, session, tool, args)
+		if result.IsError || len(result.Content) != 0 {
+			t.Fatalf("eligible start did not return a handle: %+v", result)
+		}
+		id := keeper.started()[0]
+		var rawHandle string
+		for _, frame := range recorded.all() {
+			var response struct {
+				Result struct {
+					TaskID string `json:"taskId"`
+				} `json:"result"`
+			}
+			if json.Unmarshal(frame, &response) == nil && response.Result.TaskID != "" {
+				rawHandle = response.Result.TaskID
+			}
+		}
+		if rawHandle != id {
+			t.Fatalf("raw tools/call handle taskId %q, want keeper job id %q: %q", rawHandle, id, recorded.all())
+		}
+		if got := keeper.ops(); len(got) != 1 || got[0] != map[string]string{"remote_exec": "start", "app_exec": "app_start"}[tool] {
+			t.Fatalf("start operations %v", got)
+		}
+		answer, err := taskGet(ctx, session, id)
+		if err != nil || answer.TaskID != id || answer.Status != "working" {
+			t.Fatalf("task handle id/status: %+v, %v", answer, err)
+		}
+	}
+	t.Run("remote_exec", func(t *testing.T) {
+		testEligibleStart(t, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+	})
+	t.Run("app_exec", func(t *testing.T) {
+		testEligibleStart(t, "app_exec", map[string]any{"application": "allowed", "arguments": []string{"status"}})
+	})
+	t.Run("non-declaring", func(t *testing.T) {
+		runFallback := func(tool string) {
+			keeper := &taskKeeper{}
+			session, _ := newTaskBridge(t, ctx, keeper, nil, false, "2026-07-28")
+			args := map[string]any{"target": "allowed", "command": "true"}
+			want := func(id string) string {
+				return "Started job " + id + "\nRead output with remote_read job_id=" + id + "; use wait_seconds 20 to wait for it."
+			}
+			if tool == "app_exec" {
+				args = map[string]any{"application": "allowed", "arguments": []string{"status"}}
+				want = func(id string) string {
+					return "Started job " + id + "\nRead output with app_read job_id=" + id + "; use wait_seconds 20 to wait for it."
+				}
+			}
+			result := callTaskTool(t, ctx, session, tool, args)
+			id := keeper.started()[0]
+			if got := answerText(t, result); got != want(id) {
+				t.Fatalf("fallback %q, want %q", got, want(id))
+			}
+			if _, err := taskGet(ctx, session, id); err == nil || rpcError(t, err).Code != -32602 {
+				t.Fatalf("fallback unexpectedly created task %q: %v", id, err)
+			}
+		}
+		t.Run("remote_exec", func(t *testing.T) { runFallback("remote_exec") })
+		t.Run("app_exec", func(t *testing.T) { runFallback("app_exec") })
+	})
+	t.Run("legacy_revision", func(t *testing.T) {
+		keeper := &taskKeeper{}
+		session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2025-11-25")
+		result := callTaskTool(t, ctx, session, "app_exec", map[string]any{"application": "allowed", "arguments": []string{"status"}})
+		if !strings.HasPrefix(answerText(t, result), "Started job ") || strings.Contains(answerText(t, result), "task") {
+			t.Fatalf("legacy fallback %q", answerText(t, result))
+		}
+	})
+	t.Run("legacy_pre_revision", func(t *testing.T) {
+		keeper := &taskKeeper{}
+		session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-27")
+		result := callTaskTool(t, ctx, session, "app_exec", map[string]any{"application": "allowed", "arguments": []string{"status"}})
+		if !strings.HasPrefix(answerText(t, result), "Started job ") || strings.Contains(answerText(t, result), "task") {
+			t.Fatalf("legacy fallback %q", answerText(t, result))
+		}
+	})
+	t.Run("refused start", func(t *testing.T) {
+		runRefusedStart := func(tool string) {
+			keeper := &taskKeeper{execStartError: "refused"}
+			session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+			args := map[string]any{"target": "allowed", "command": "true"}
+			if tool == "app_exec" {
+				args = map[string]any{"application": "allowed", "arguments": []string{"status"}}
+			}
+			result := callTaskTool(t, ctx, session, tool, args)
+			if !result.IsError || answerText(t, result) != "refused" {
+				t.Fatalf("refusal changed: %+v", result)
+			}
+			if _, err := taskGet(ctx, session, strings.Repeat("ab", 32)); err == nil || rpcError(t, err).Code != -32602 {
+				t.Fatalf("refused start created a task: %v", err)
+			}
+		}
+		t.Run("remote_exec", func(t *testing.T) { runRefusedStart("remote_exec") })
+		t.Run("app_exec", func(t *testing.T) { runRefusedStart("app_exec") })
+	})
+}
+
+func TestExecToolsUseSharedBrokerAndPreserveErrorsAndBytes(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	keeper := &taskKeeper{execRead: remote.ReadOutput{Done: true, ExitCode: 0, Stdout: []byte{0xff}, StdoutOffset: 10}}
+	session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+	testTool := func(t *testing.T, tool, op string) {
+		t.Helper()
+		args := map[string]any{"target": "allowed", "command": "true"}
+		if tool == "app_exec" {
+			args = map[string]any{"application": "allowed", "arguments": []string{"status"}}
+		}
+		result := callTaskTool(t, ctx, session, tool, args)
+		if result.IsError || len(result.Content) != 0 {
+			t.Fatalf("start: %+v", result)
+		}
+		started := keeper.started()
+		id := started[len(started)-1]
+		if _, err := taskCancel(ctx, session, id); err != nil {
+			t.Fatalf("task cancel: %v", err)
+		}
+		wantCancel := "cancel:" + id
+		if tool == "app_exec" {
+			wantCancel = "app_cancel:" + id
+		}
+		if keeper.execCancels[len(keeper.execCancels)-1] != wantCancel {
+			t.Fatalf("cancel operation %q, want %q", keeper.execCancels[len(keeper.execCancels)-1], wantCancel)
+		}
+		answer, err := taskGet(ctx, session, id)
+		if err != nil || answer.Status != "completed" {
+			t.Fatalf("get: %+v %v", answer, err)
+		}
+		want := "Status: finished · exit code 0\nResume: stdout_offset=9 stderr_offset=0 · more: stdout=yes stderr=no · lost: stdout=no stderr=no · job " + id
+		if got := answerText(t, answer.Result); got != want {
+			t.Fatalf("raw-byte resume result %q, want %q", got, want)
+		}
+		if got := countOps(keeper.ops(), op); got != 1 {
+			t.Fatalf("selected read operation %q count=%d", op, got)
+		}
+	}
+	t.Run("remote_task_tools", func(t *testing.T) { testTool(t, "remote_exec", "read") })
+	t.Run("application_task_tools", func(t *testing.T) { testTool(t, "app_exec", "app_read") })
+	keeper.mu.Lock()
+	reads := append([]remote.ReadInput(nil), keeper.execReads...)
+	keeper.mu.Unlock()
+	if len(reads) != 2 {
+		t.Fatalf("read inputs: %+v", reads)
+	}
+	for _, input := range reads {
+		if input.StdoutOffset != 0 || input.StderrOffset != 0 || input.WaitSeconds != 0 || input.JobID == "" {
+			t.Fatalf("read did not use zero offsets/wait and job ID: %+v", input)
+		}
+	}
+	t.Run("session closed", func(t *testing.T) {
+		keeper := &taskKeeper{}
+		session, server := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+		result := callTaskTool(t, ctx, session, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+		if result.IsError || len(result.Content) != 0 {
+			t.Fatalf("start: %+v", result)
+		}
+		server.Close()
+		id := keeper.started()[0]
+		answer, err := taskGet(ctx, session, id)
+		if err != nil || answer.Status != "failed" {
+			t.Fatalf("closed attachment mapping: %+v %v", answer, err)
+		}
+	})
+	t.Run("unknown operation", func(t *testing.T) {
+		keeper := &taskKeeper{execErr: "unknown operation"}
+		session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+		callTaskTool(t, ctx, session, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+		id := keeper.started()[0]
+		answer, err := taskGet(ctx, session, id)
+		if err != nil || answer.Status != "failed" {
+			t.Fatalf("unknown-operation mapping: %+v %v", answer, err)
+		}
+	})
+	t.Run("ordinary error", func(t *testing.T) {
+		keeper := &taskKeeper{execErr: "temporary"}
+		session, _ := newTaskBridge(t, ctx, keeper, nil, true, "2026-07-28")
+		callTaskTool(t, ctx, session, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
+		id := keeper.started()[0]
+		answer, err := taskGet(ctx, session, id)
+		if answer != nil || err == nil {
+			t.Fatalf("ordinary error should be returned: %+v %v", answer, err)
+		}
+		var rpcErr *jsonrpc.Error
+		if !errors.As(err, &rpcErr) || rpcErr.Code != -32603 || rpcErr.Message != "the task could not be read" {
+			t.Fatalf("ordinary error mapping: %v", err)
+		}
+	})
+}
+
+func TestTaskStartWithoutAJobIDAnswersTodaysText(t *testing.T) {
+	flakediag.Begin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	clock := newTestClock()
+	args := map[string]any{"target": "allowed", "local": "a.bin", "remote": "/srv/a.bin"}
+	noJobID := func(transfer.StartInput) wire.Reply {
+		return broker.Result(transfer.StartOutput{}, nil)
+	}
+	declaringKeeper := &taskKeeper{}
+	declaringKeeper.setStart(noJobID)
+	declaring, _ := newTaskBridge(t, ctx, declaringKeeper, clock.Now, true, "2026-07-28")
+	plainKeeper := &taskKeeper{}
+	plainKeeper.setStart(noJobID)
+	plain, _ := newTaskBridge(t, ctx, plainKeeper, clock.Now, false, "2026-07-28")
+	declaringResult := callTaskTool(t, ctx, declaring, "remote_upload", args)
+	plainResult := callTaskTool(t, ctx, plain, "remote_upload", args)
+	if declaringResult.IsError {
+		t.Fatalf("a declaring start without a job id was refused: %+v", declaringResult)
+	}
+	if len(declaringResult.Content) != 1 {
+		t.Fatalf("a declaring start without a job id answered %d content blocks, want one: %+v", len(declaringResult.Content), declaringResult)
+	}
+	if got, want := answerText(t, declaringResult), answerText(t, plainResult); got != want {
+		t.Fatalf("a declaring start without a job id answered %q, want the tool's own text %q", got, want)
+	}
+	if started := declaringKeeper.started(); len(started) != 0 {
+		t.Fatalf("the keeper minted %d job ids, want none", len(started))
+	}
+	ops := declaringKeeper.ops()
+	if got := countOps(ops, "transfer_upload"); got != 1 {
+		t.Fatalf("the keeper saw %d uploads, want one: %v", got, ops)
+	}
+	if got := countOps(ops, "transfer_status"); got != 0 {
+		t.Fatalf("a start without a job id read a status: %v", ops)
+	}
 }

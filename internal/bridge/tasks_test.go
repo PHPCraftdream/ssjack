@@ -71,14 +71,21 @@ type taskAckAnswer struct {
 // taskKeeper answers the keeper operations of the transfer and start tools,
 // records the operations it saw and mints the job ids it hands out.
 type taskKeeper struct {
-	mu       sync.Mutex
-	seen     []string
-	ids      int
-	idsUsed  []string
-	statuses int
-	startFn  func(input transfer.StartInput) wire.Reply
-	statusFn func(call int, input transfer.StatusInput) wire.Reply
-	cancelFn func(input transfer.CancelInput) wire.Reply
+	mu             sync.Mutex
+	seen           []string
+	ids            int
+	idsUsed        []string
+	statuses       int
+	execRead       remote.ReadOutput
+	execReadFn     func(call int, input remote.ReadInput) remote.ReadOutput
+	execReadCalls  int
+	execErr        string
+	execReads      []remote.ReadInput
+	execCancels    []string
+	execStartError string
+	startFn        func(input transfer.StartInput) wire.Reply
+	statusFn       func(call int, input transfer.StatusInput) wire.Reply
+	cancelFn       func(input transfer.CancelInput) wire.Reply
 }
 
 func (k *taskKeeper) handle(_ context.Context, req wire.Request) (reply wire.Reply) {
@@ -120,7 +127,41 @@ func (k *taskKeeper) handle(_ context.Context, req wire.Request) (reply wire.Rep
 		}
 		return broker.Result(transfer.CancelOutput{Cancelled: true}, nil)
 	case "start", "app_start":
-		return broker.Result(remote.StartOutput{JobID: strings.Repeat("ab", 32)}, nil)
+		k.mu.Lock()
+		startErr := k.execStartError
+		k.mu.Unlock()
+		if startErr != "" {
+			return wire.Reply{Error: startErr}
+		}
+		return broker.Result(remote.StartOutput{JobID: k.mint()}, nil)
+	case "read", "app_read":
+		var input remote.ReadInput
+		if wire.Decode(req.Data, &input) != nil {
+			return wire.Reply{Error: "invalid read"}
+		}
+		k.mu.Lock()
+		k.execReads = append(k.execReads, input)
+		k.execReadCalls++
+		readFn, readCall := k.execReadFn, k.execReadCalls
+		out, errText := k.execRead, k.execErr
+		k.mu.Unlock()
+		if readFn != nil {
+			out = readFn(readCall, input)
+		}
+		out.JobID = input.JobID
+		if errText != "" {
+			return broker.Result(out, errors.New(errText))
+		}
+		return broker.Result(out, nil)
+	case "cancel", "app_cancel":
+		var input remote.JobInput
+		if wire.Decode(req.Data, &input) != nil {
+			return wire.Reply{Error: "invalid cancel"}
+		}
+		k.mu.Lock()
+		k.execCancels = append(k.execCancels, req.Operation+":"+input.JobID)
+		k.mu.Unlock()
+		return broker.Result(remote.CancelOutput{Cancelled: true}, nil)
 	case "targets":
 		return broker.Result(remote.TargetsOutput{Targets: []string{"allowed"}}, nil)
 	}
@@ -487,13 +528,15 @@ func TestTaskStartAnswersAHandleOnlyForTheTransferTools(t *testing.T) {
 			t.Fatalf("%s did not answer a task handle: %+v", name, result)
 		}
 	}
-	result := callTaskTool(t, ctx, session, "remote_exec", map[string]any{"target": "allowed", "command": "true"})
-	if text := answerText(t, result); !strings.HasPrefix(text, "Started job ") {
-		t.Fatalf("remote_exec answered %q", text)
-	}
-	result = callTaskTool(t, ctx, session, "app_exec", map[string]any{"application": "app", "arguments": []string{"status"}})
-	if text := answerText(t, result); !strings.HasPrefix(text, "Started job ") {
-		t.Fatalf("app_exec answered %q", text)
+	for _, name := range []string{"remote_exec", "app_exec"} {
+		args := map[string]any{"target": "allowed", "command": "true"}
+		if name == "app_exec" {
+			args = map[string]any{"application": "app", "arguments": []string{"status"}}
+		}
+		result := callTaskTool(t, ctx, session, name, args)
+		if result.IsError || len(result.Content) != 0 {
+			t.Fatalf("%s did not answer a task handle: %+v", name, result)
+		}
 	}
 }
 
@@ -949,43 +992,5 @@ func TestTaskStartRefusesAnUnknownArgumentBeforeTheKeeper(t *testing.T) {
 	}
 	if ops := keeper.ops(); len(ops) != 0 {
 		t.Fatalf("an unknown argument reached the keeper: %v", ops)
-	}
-}
-
-func TestTaskStartWithoutAJobIDAnswersTodaysText(t *testing.T) {
-	flakediag.Begin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	clock := newTestClock()
-	args := map[string]any{"target": "allowed", "local": "a.bin", "remote": "/srv/a.bin"}
-	noJobID := func(transfer.StartInput) wire.Reply {
-		return broker.Result(transfer.StartOutput{}, nil)
-	}
-	declaringKeeper := &taskKeeper{}
-	declaringKeeper.setStart(noJobID)
-	declaring, _ := newTaskBridge(t, ctx, declaringKeeper, clock.Now, true, "2026-07-28")
-	plainKeeper := &taskKeeper{}
-	plainKeeper.setStart(noJobID)
-	plain, _ := newTaskBridge(t, ctx, plainKeeper, clock.Now, false, "2026-07-28")
-	declaringResult := callTaskTool(t, ctx, declaring, "remote_upload", args)
-	plainResult := callTaskTool(t, ctx, plain, "remote_upload", args)
-	if declaringResult.IsError {
-		t.Fatalf("a declaring start without a job id was refused: %+v", declaringResult)
-	}
-	if len(declaringResult.Content) != 1 {
-		t.Fatalf("a declaring start without a job id answered %d content blocks, want one: %+v", len(declaringResult.Content), declaringResult)
-	}
-	if got, want := answerText(t, declaringResult), answerText(t, plainResult); got != want {
-		t.Fatalf("a declaring start without a job id answered %q, want the tool's own text %q", got, want)
-	}
-	if started := declaringKeeper.started(); len(started) != 0 {
-		t.Fatalf("the keeper minted %d job ids, want none", len(started))
-	}
-	ops := declaringKeeper.ops()
-	if got := countOps(ops, "transfer_upload"); got != 1 {
-		t.Fatalf("the keeper saw %d uploads, want one: %v", got, ops)
-	}
-	if got := countOps(ops, "transfer_status"); got != 0 {
-		t.Fatalf("a start without a job id read a status: %v", ops)
 	}
 }

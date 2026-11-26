@@ -345,7 +345,7 @@ verified CI receipts for distinct earlier sources; dedicated #359 remains pendin
 
 ## Result text of the ssjack tools
 
-Every tool the ssjack bridge itself offers (`remote_targets`, `remote_exec`,
+On the ordinary/fallback job-ID path, every tool the ssjack bridge itself offers (`remote_targets`, `remote_exec`,
 `remote_read`, `remote_cancel`, `app_list`, `app_exec`, `app_read`,
 `app_cancel`, `remote_upload`, `remote_download`, `transfer_status`,
 `transfer_cancel`, and the declarative `resource_plan` and `plan_apply`)
@@ -358,7 +358,7 @@ names are printed in full and untranslated. The transfer tools are specified in
 `FILE-TRANSFER.md` ("Result text"). The results of tools proxied from a remote
 MCP server are not rewritten by the bridge.
 
-A client that declares the MCP tasks extension (`io.modelcontextprotocol/tasks`) on revision 2026-07-28 receives a task handle for `remote_upload` and `remote_download` and follows it with its own `tasks/get`, `tasks/cancel` and `tasks/update`; the final task result is exactly the `transfer_status` text those tools produce (FILE-TRANSFER.md, "MCP tasks"). `remote_exec` and `app_exec` keep the job-id path described below, and their task path is specified in [MCP-TASKS-EXEC.md](MCP-TASKS-EXEC.md) and is not implemented yet. Every other client, and every tool without a task path, sees the text exactly as specified below. The bridge advertises the extension in `server/discover` (and in a legacy `initialize` answer); a `tasks/get`, `tasks/update` or `tasks/cancel` answers `-32601 method not found` on an earlier revision, and `-32021` when a 2026-07-28 request does not declare the extension.
+A client that declares the MCP tasks extension (`io.modelcontextprotocol/tasks`) on revision 2026-07-28 receives a task handle for `remote_upload` and `remote_download` and follows it with its own `tasks/get`, `tasks/cancel` and `tasks/update`; the final task result is exactly the `transfer_status` text those tools produce (FILE-TRANSFER.md, "MCP tasks"). For `remote_exec` and `app_exec`, a call whose own metadata declares that extension at revision 2026-07-28 or later receives a task handle and follows it with `tasks/get`; every other client keeps the job-id path. The bridge advertises the extension in `server/discover` (and in a legacy `initialize` answer); a `tasks/get`, `tasks/update` or `tasks/cancel` answers `-32601 method not found` on an earlier revision, and `-32021` when a 2026-07-28 request does not declare the extension.
 
 - `remote_targets`: `N approved targets:` (`1 approved target:`) and one
   `- <name>` line per target; `No approved targets.` when empty.

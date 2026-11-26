@@ -156,6 +156,7 @@ func startTool[In any](client *broker.Client, operation, reader string) func(con
 		if err := client.Call(ctx, operation, input, &out); err != nil {
 			return "", err
 		}
+		tasks.CapturedStart(ctx, out.JobID)
 		return renderExecStarted(out.JobID, reader), nil
 	}
 }
@@ -193,7 +194,7 @@ func transferTool(client *broker.Client, operation string) func(context.Context,
 }
 
 // NewFullServer is the full registry of the remote, application and transfer
-// tools, with the MCP tasks extension for the two transfer tools.
+// tools, with the MCP tasks extension for transfer and exec starts.
 func NewFullServer(client *broker.Client) *mcp.Server {
 	return NewFullServerWithClock(client, nil)
 }
@@ -212,7 +213,7 @@ func NewFullServerWithClockAndConfirm(client *broker.Client, now func() time.Tim
 	capabilities := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}
 	capabilities.AddExtension(tasks.Extension, map[string]any{})
 	server := mcp.NewServer(&mcp.Implementation{Name: "ssjack", Version: buildinfo.Version}, &mcp.ServerOptions{Capabilities: capabilities})
-	if err := tasks.NewManager(transferTaskTools{client: client}, now).Install(server); err != nil {
+	if err := tasks.NewManagerWithExec(transferTaskTools{client: client}, execTaskTools{client: client}, now).Install(server); err != nil {
 		// The three task method names are fixed and none of them shadows a
 		// standard method, so registering them cannot fail.
 		panic(err)
@@ -231,7 +232,7 @@ func NewFullServerWithClockAndConfirm(client *broker.Client, now func() time.Tim
 			}
 			return renderTargets(out.Targets), nil
 		})
-	addTextTool(server, &mcp.Tool{Name: "remote_exec", Description: "Start a noninteractive shell command on an approved target. Returns plain text 'Started job <job_id>' and the next step; read output through remote_read (wait_seconds 20 avoids repeated polling). The command has the configured SSH user privileges."},
+	addTextTool(server, &mcp.Tool{Name: "remote_exec", Description: "Start a noninteractive shell command on an approved target. Returns plain text 'Started job <job_id>' and the next step; read output through remote_read (wait_seconds 20 avoids repeated polling). A client declaring the MCP tasks extension (io.modelcontextprotocol/tasks) on revision 2026-07-28 or later receives a task handle; other clients keep the job-ID path. The command has the configured SSH user privileges."},
 		startTool[remote.StartInput](client, "start", "remote_read"))
 	addTextTool(server, &mcp.Tool{Name: "remote_read", Description: "Read stdout/stderr chunks using returned offsets. Returns plain text: 'Job <id>: running' or 'Job <id>: done (exit code N)'; then each non-empty stream verbatim as 'stdout (bytes A-B):', the raw text and an end marker line '[end of stdout]' (numbered, and named in the label, when the text contains it); a 'stdout base64 (bytes A-B): ...' line carries the original bytes when they are not valid UTF-8 and the block shows them replaced; last 'Next: stdout_offset=N stderr_offset=N · more: stdout=yes|no stderr=yes|no · lost: stdout=yes|no stderr=yes|no'. Pass the Next offsets to the following call; done in the first line indicates command completion; drain remaining output while more is yes; lost yes indicates buffer overflow. Offsets count original bytes. The fields are stable and listed in docs/REMOTE-MCP.md. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the command runs and no output beyond the given offsets exists, until new output arrives, the command completes or the wait expires, then returns the normal chunk; prefer one call with wait_seconds 20 over repeated immediate reads."},
 		readTool(client, "read"))
@@ -245,7 +246,7 @@ func NewFullServerWithClockAndConfirm(client *broker.Client, now func() time.Tim
 			}
 			return renderApps(out), nil
 		})
-	addTextTool(server, &mcp.Tool{Name: "app_exec", Description: "Start a finite command in a registered application, named as in app_list. Arguments are passed as argv, never through a local shell. Commands the application did not declare observational require confirm=true and applicable harness authorization; the application may refuse commands. Interactive stdin is never available. Returns plain text 'Started job <job_id>' and the next step: read it with app_read."},
+	addTextTool(server, &mcp.Tool{Name: "app_exec", Description: "Start a finite command in a registered application, named as in app_list. Arguments are passed as argv, never through a local shell. Commands the application did not declare observational require confirm=true and applicable harness authorization; the application may refuse commands. Interactive stdin is never available. Returns plain text 'Started job <job_id>' and the next step: read it with app_read. A client declaring the MCP tasks extension (io.modelcontextprotocol/tasks) on revision 2026-07-28 or later receives a task handle; other clients keep the job-ID path."},
 		startTool[application.Input](client, "app_start", "app_read"))
 	addTextTool(server, &mcp.Tool{Name: "app_read", Description: "Read the registered application operation output using returned offsets; drain both streams until done and no more output remains. Returns the same plain text as remote_read: 'Job <id>: running' or 'Job <id>: done (exit code N)', each non-empty stream verbatim between a 'stdout (bytes A-B):' label and an '[end of stdout]' marker line, a base64 line for bytes that are not valid UTF-8, and 'Next: stdout_offset=N stderr_offset=N · more: ... · lost: ...'; the format is documented in docs/REMOTE-MCP.md. Optional wait_seconds (integer 0 to 25, default 0; larger counts as 25) blocks while the operation runs and no output beyond the given offsets exists, until new output arrives, the operation completes or the wait expires, then returns the normal chunk; prefer one call with wait_seconds 20 over repeated immediate reads."},
 		readTool(client, "app_read"))
@@ -277,6 +278,30 @@ func NewFullServerWithClockAndConfirm(client *broker.Client, now func() time.Tim
 			return renderTransferCancelled(input.JobID, out.Cancelled), nil
 		})
 	return server
+}
+
+// execTaskTools is the tasks package's view of command and application jobs:
+// it routes reads and cancellations to the corresponding keeper operations.
+type execTaskTools struct{ client *broker.Client }
+
+func (t execTaskTools) Read(ctx context.Context, input remote.ReadInput, app bool) (remote.ReadOutput, error) {
+	input.StdoutOffset, input.StderrOffset, input.WaitSeconds = 0, 0, 0
+	operation := "read"
+	if app {
+		operation = "app_read"
+	}
+	var out remote.ReadOutput
+	err := t.client.Call(ctx, operation, input, &out)
+	return out, err
+}
+
+func (t execTaskTools) Cancel(ctx context.Context, input remote.JobInput, app bool) error {
+	operation := "cancel"
+	if app {
+		operation = "app_cancel"
+	}
+	var out remote.CancelOutput
+	return t.client.Call(ctx, operation, input, &out)
 }
 
 // transferTaskTools is the tasks package's view of the transfer tools: their

@@ -26,12 +26,18 @@ var transferTools = map[string]bool{
 	"remote_download": true,
 }
 
+// execTools names the two tools that carry an exec task.
+var execTools = map[string]bool{
+	"remote_exec": true,
+	"app_exec":    true,
+}
+
 // requiredExtension is the error data of a non-declaring client: the extension
 // the request needs.
 var requiredExtension = json.RawMessage(`{"requiredCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}`)
 
-// startCapture is the job id of the transfer start the tool handler made while
-// one tools/call interception watched it.
+// startCapture is the job id of the start the tool handler made while one
+// tools/call interception watched it.
 type startCapture struct{ jobID string }
 
 type startCaptureKey struct{}
@@ -43,7 +49,7 @@ func watchingStart(ctx context.Context) (context.Context, *startCapture) {
 	return context.WithValue(ctx, startCaptureKey{}, capture), capture
 }
 
-// CapturedStart publishes the job id of a started transfer to the task
+// CapturedStart publishes the job id of a started transfer or exec to the task
 // interception that wraps this call, when there is one.
 func CapturedStart(ctx context.Context, jobID string) {
 	if capture, ok := ctx.Value(startCaptureKey{}).(*startCapture); ok {
@@ -152,10 +158,10 @@ func (m *Manager) gate(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
-// intercept answers an eligible transfer start with a task handle instead of
-// today's text; every other call, and every ineligible one, takes today's path.
-// The tool's own handler performs the call, so input-schema validation, the
-// keeper start and the refusal result are exactly the transfer tool's.
+// intercept answers eligible transfer or exec starts with a task handle instead
+// of today's text; every other call, and every ineligible one, takes today's path.
+// The tool's own handler performs the call, so input validation, keeper start
+// and refusal results remain exactly the tool's.
 func (m *Manager) intercept(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if method != toolCall {
@@ -165,13 +171,18 @@ func (m *Manager) intercept(next mcp.MethodHandler) mcp.MethodHandler {
 		if !ok || call == nil || call.Params == nil {
 			return next(ctx, method, req)
 		}
-		if !transferTools[call.Params.Name] || !requestDeclaresTasks(call.Params) {
+		_, transfer := transferTools[call.Params.Name]
+		_, exec := execTools[call.Params.Name]
+		if (!transfer && !exec) || !requestDeclaresTasks(call.Params) {
 			return next(ctx, method, req)
 		}
 		capturedCtx, capture := watchingStart(ctx)
 		result, err := next(capturedCtx, method, req)
 		if err != nil || capture.jobID == "" {
 			return result, err
+		}
+		if exec {
+			return m.CreateExec(capture.jobID, call.Params.Name == "app_exec"), nil
 		}
 		return m.create(capture.jobID), nil
 	}

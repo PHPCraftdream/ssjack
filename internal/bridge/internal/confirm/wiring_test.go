@@ -158,6 +158,7 @@ func (c *wiringRawClient) exchange(t *testing.T, ctx context.Context, payload st
 }
 
 const wiringModernMeta = `,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{}}}}`
+const wiringFormTasksMeta = `,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{}},"extensions":{"io.modelcontextprotocol/tasks":{}}}}`
 
 func (c *wiringRawClient) call(t *testing.T, ctx context.Context, tool, args string, modern bool) []byte {
 	t.Helper()
@@ -165,14 +166,27 @@ func (c *wiringRawClient) call(t *testing.T, ctx context.Context, tool, args str
 	if modern {
 		meta = wiringModernMeta
 	}
+	return c.callMeta(t, ctx, tool, args, meta)
+}
+
+func (c *wiringRawClient) callMeta(t *testing.T, ctx context.Context, tool, args, meta string) []byte {
+	t.Helper()
 	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s%s}}`, c.id, tool, args, meta)
 	c.id++
 	return c.exchange(t, ctx, payload)
 }
 
 func (c *wiringRawClient) callRetry(t *testing.T, ctx context.Context, tool, args, state string) []byte {
+	return c.callRetryAction(t, ctx, tool, args, state, "accept")
+}
+
+func (c *wiringRawClient) callRetryAction(t *testing.T, ctx context.Context, tool, args, state, action string) []byte {
+	return c.callRetryActionMeta(t, ctx, tool, args, state, action, wiringModernMeta)
+}
+
+func (c *wiringRawClient) callRetryActionMeta(t *testing.T, ctx context.Context, tool, args, state, action, meta string) []byte {
 	t.Helper()
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s%s,"inputResponses":{"%s":{"action":"accept"}},"requestState":%q}}`, c.id, tool, args, wiringModernMeta, confirm.RequestKey, state)
+	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s%s,"inputResponses":{"%s":{"action":%q}},"requestState":%q}}`, c.id, tool, args, meta, confirm.RequestKey, action, state)
 	c.id++
 	return c.exchange(t, ctx, payload)
 }
@@ -243,8 +257,112 @@ func TestRegistryConstructorWiring(t *testing.T) {
 		}
 		ops, jobs := keeper.snapshot()
 		if len(ops) != 2 || ops[0] != "app_classify" || ops[1] != "app_start" || jobs != 1 {
-			t.Fatalf("operations %v and jobs %d, want classify then one app_start", ops, jobs)
+			t.Fatalf("operations %v and jobs %d, want app_classify then app_start and one job", ops, jobs)
 		}
+	})
+	t.Run("app_exec_decline_creates_no_job_or_task", func(t *testing.T) {
+		keeper := &wiringKeeper{}
+		server := wiringServer(t, ctx, keeper, nil, true)
+		client := wiringClient(t, ctx, server)
+		args := `{"application":"app","arguments":["status"],"confirm":true}`
+		response := client.call(t, ctx, "app_exec", args, true)
+		var stateFrame struct {
+			Result struct {
+				RequestState string `json:"requestState"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(response, &stateFrame); err != nil || stateFrame.Result.RequestState == "" {
+			t.Fatalf("could not extract requestState: %s", response)
+		}
+		retry := client.callRetryAction(t, ctx, "app_exec", args, stateFrame.Result.RequestState, "decline")
+		var result struct {
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(retry, &result); err != nil || !result.Result.IsError || len(result.Result.Content) != 1 || result.Result.Content[0].Text != "operation was not started: declined" {
+			t.Fatalf("decline response: %s", retry)
+		}
+		ops, jobs := keeper.snapshot()
+		if len(ops) != 1 || ops[0] != "app_classify" || jobs != 0 {
+			t.Fatalf("decline operations %v and jobs %d, want classification only and no job", ops, jobs)
+		}
+	})
+	t.Run("app_exec_form_and_tasks_composition", func(t *testing.T) {
+		args := `{"application":"app","arguments":["status"],"confirm":true}`
+		t.Run("accepted retry returns task handle", func(t *testing.T) {
+			keeper := &wiringKeeper{}
+			client := wiringClient(t, ctx, wiringServer(t, ctx, keeper, nil, true))
+			response := client.callMeta(t, ctx, "app_exec", args, wiringFormTasksMeta)
+			if !wiringIsInputRequired(t, response) {
+				t.Fatalf("expected input_required: %s", response)
+			}
+			var pending struct {
+				Result struct {
+					RequestState string `json:"requestState"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(response, &pending); err != nil || pending.Result.RequestState == "" {
+				t.Fatalf("could not extract requestState: %s", response)
+			}
+			ops, jobs := keeper.snapshot()
+			if len(ops) != 1 || ops[0] != "app_classify" || jobs != 0 {
+				t.Fatalf("initial operations %v and jobs %d, want classification only", ops, jobs)
+			}
+			retry := client.callRetryActionMeta(t, ctx, "app_exec", args, pending.Result.RequestState, "accept", wiringFormTasksMeta)
+			var handle struct {
+				Result struct {
+					TaskID string `json:"taskId"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(retry, &handle); err != nil || handle.Result.TaskID == "" {
+				t.Fatalf("accepted retry did not return task handle: %s", retry)
+			}
+			ops, jobs = keeper.snapshot()
+			if len(ops) != 3 || ops[1] != "app_classify" || ops[2] != "app_start" || jobs != 1 || handle.Result.TaskID != strings.Repeat("a", 64) {
+				t.Fatalf("retry operations %v jobs %d taskId %q, want classify/app_start once and minted job id", ops, jobs, handle.Result.TaskID)
+			}
+		})
+		t.Run("declined retry makes no task", func(t *testing.T) {
+			keeper := &wiringKeeper{}
+			client := wiringClient(t, ctx, wiringServer(t, ctx, keeper, nil, true))
+			response := client.callMeta(t, ctx, "app_exec", args, wiringFormTasksMeta)
+			var pending struct {
+				Result struct {
+					RequestState string `json:"requestState"`
+				} `json:"result"`
+			}
+			if !wiringIsInputRequired(t, response) || json.Unmarshal(response, &pending) != nil || pending.Result.RequestState == "" {
+				t.Fatalf("expected input_required with requestState: %s", response)
+			}
+			retry := client.callRetryActionMeta(t, ctx, "app_exec", args, pending.Result.RequestState, "decline", wiringFormTasksMeta)
+			var result struct {
+				Result struct {
+					IsError bool `json:"isError"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(retry, &result); err != nil || !result.Result.IsError {
+				t.Fatalf("decline response: %s", retry)
+			}
+			ops, jobs := keeper.snapshot()
+			if len(ops) != 1 || ops[0] != "app_classify" || jobs != 0 {
+				t.Fatalf("decline operations %v and jobs %d, want classification only", ops, jobs)
+			}
+			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tasks/get","params":{"taskId":%q,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}`, client.id, strings.Repeat("a", 64))
+			client.id++
+			unknown := client.exchange(t, ctx, payload)
+			var unknownResult struct {
+				Error *struct {
+					Code int `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(unknown, &unknownResult); err != nil || unknownResult.Error == nil || unknownResult.Error.Code != -32602 {
+				t.Fatalf("declined retry tasks/get response: %s, want unknown handle", unknown)
+			}
+		})
 	})
 	t.Run("download_accepted_retry_dispatches_once", func(t *testing.T) {
 		keeper := &wiringKeeper{}

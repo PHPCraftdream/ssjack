@@ -753,7 +753,7 @@ limit.
    `tasks.CapturedStart` in `transferStart`), one sentence in each exec tool
    description. The advertisement already exists and needs no change, so this
    step lands interception and visibility together and a supporting client
-   never sees an advertised exec tool without a task path.
+   never sees an advertised exec tool without a task path. **Landed.**
 4. Acceptance tests: the in-process cases of package `internal/bridge` and
    the launched-bridge cases of `cmd/ssjack/internal/mcptasktest`, with the
    CI wiring following the diff-selection rule (docs/CI.md).
