@@ -1,6 +1,22 @@
 # MCP tasks for the ssjack exec and application tools
 
-Status: design. It specifies the MCP Tasks extension
+Status: implemented (steps 1-4 landed). Live verification on 2026-11-26
+with a real Claude Code client against a keeper and bridge built from
+`e47679b`: `remote_exec` returned a task handle and the client moved it to
+the background, then delivered a completion notification whose result held
+only the `Status:` and `Resume:` lines (`finished · exit code 0`, offsets 0);
+`remote_read` from those offsets returned the full output. A nonzero exit
+(`exit code 7`) and a timeout (`exit code -1` with `Error: context deadline
+exceeded`) both completed the task, not failed it. Stopping a running task
+from the client cancelled the job (`Error: context canceled`); the output
+written before the cancel stayed readable from offset 0. `app_exec` of an
+observational command returned a task handle, completed, and `app_read` from
+the `Resume:` offsets returned its output. Not verified live: the exact
+`tasks/get`/`tasks/cancel` frames the client sends (the client exposes only
+its background-task view), eviction, keeper session loss, binary output and
+the non-declaring client path (covered by CI tests).
+
+It specifies the MCP Tasks extension
 (`io.modelcontextprotocol/tasks`) for `remote_exec` and `app_exec`, the two
 tools that start command and application jobs. It builds on the transfer-task
 design in `docs/MCP-TASKS.md` (structure, record store, extension gate,
