@@ -27,13 +27,14 @@ type Tools interface {
 	CancelledText(string) string
 }
 
-// Manager serves tasks/get, tasks/update and tasks/cancel for the transfer
-// tools of one bridge session over a bounded, RAM-only record set. One lock
-// serialises its operations: a status read holds it for the interval the
+// Manager serves tasks/get, tasks/update and tasks/cancel for transfer and exec
+// tools of one bridge session over a bounded, RAM-only shared record set. One
+// lock serialises its operations: a status read holds it for the interval the
 // shared keeper connection is busy anyway.
 type Manager struct {
-	tools Tools
-	now   func() time.Time
+	tools     Tools
+	execTools ExecTools
+	now       func() time.Time
 
 	mu      sync.Mutex
 	records map[string]*record
@@ -43,10 +44,22 @@ type Manager struct {
 // NewManager builds the task manager of one bridge; now is the clock of the
 // retention rules (nil is the real clock).
 func NewManager(tools Tools, now func() time.Time) *Manager {
+	return NewManagerWithExec(tools, nil, now)
+}
+
+// NewManagerWithExec shares the transfer record store with the exec task seam.
+func NewManagerWithExec(tools Tools, execTools ExecTools, now func() time.Time) *Manager {
 	if now == nil {
 		now = time.Now
 	}
-	return &Manager{tools: tools, now: now, records: make(map[string]*record)}
+	return &Manager{tools: tools, execTools: execTools, now: now, records: make(map[string]*record)}
+}
+
+func (m *Manager) isExecRecord(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.lookupLocked(id)
+	return ok && r.kind != 0
 }
 
 // get answers one poll. While the task is not frozen it performs exactly one
@@ -54,6 +67,9 @@ func NewManager(tools Tools, now func() time.Time) *Manager {
 // when the keeper's record changes, while the first terminal record, a job the
 // keeper no longer knows and a lost keeper attachment freeze it.
 func (m *Manager) get(ctx context.Context, params *GetParams) (*GetResult, error) {
+	if params != nil && m.isExecRecord(params.TaskID) {
+		return m.ReadExec(ctx, params)
+	}
 	taskID := ""
 	if params != nil {
 		taskID = params.TaskID
@@ -94,6 +110,9 @@ func (m *Manager) get(ctx context.Context, params *GetParams) (*GetResult, error
 // cancel passes a cancellation to the keeper. The reply says only that a
 // cancellation was requested; the following status read decides the state.
 func (m *Manager) cancel(ctx context.Context, params *CancelParams) (*Ack, error) {
+	if params != nil && m.isExecRecord(params.TaskID) {
+		return m.CancelExec(ctx, params)
+	}
 	taskID := ""
 	if params != nil {
 		taskID = params.TaskID

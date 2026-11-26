@@ -30,6 +30,8 @@ type record struct {
 	// last is the running status record of the previous poll: the task moves
 	// lastUpdatedAt when the keeper's record changes, not when its text does.
 	last     transfer.StatusOutput
+	lastExec execControl
+	kind     toolKind
 	result   *mcp.CallToolResult
 	frozen   bool
 	frozenAt time.Time
@@ -75,6 +77,11 @@ func (r *record) freeze(status string, at time.Time) {
 // handle. A full set drops the oldest frozen record first and, when none is
 // frozen, the oldest record at all.
 func (m *Manager) create(jobID string) *Handle {
+	return m.createKind(jobID, 0)
+}
+
+// createKind records a task and its tool kind atomically under the store lock.
+func (m *Manager) createKind(jobID string, kind toolKind) *Handle {
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -83,7 +90,7 @@ func (m *Manager) create(jobID string) *Handle {
 	for len(m.records) >= Bounds {
 		m.evictLocked()
 	}
-	rec := &record{id: jobID, createdAt: now, updatedAt: now, status: statusWorking}
+	rec := &record{id: jobID, createdAt: now, updatedAt: now, status: statusWorking, kind: kind}
 	m.records[jobID] = rec
 	m.order = append(m.order, jobID)
 	return rec.handle()

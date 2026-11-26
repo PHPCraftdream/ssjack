@@ -32,8 +32,8 @@ func TestCancelAnswersTruthfully(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.Done || got.ExitCode != -1 || !strings.Contains(got.Error, "canceled") {
-			t.Fatalf("Read() = %+v", got)
+		if !got.Done || got.ExitCode != -1 || got.Error != "context canceled" {
+			t.Fatalf("Read() = %+v, want fixed error text %q", got, "context canceled")
 		}
 	})
 
