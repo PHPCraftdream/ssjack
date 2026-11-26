@@ -788,14 +788,18 @@ func TestDescriptorHash(t *testing.T) {
 	})
 }
 
-// canonicalTemp returns a temp directory in the resolved form the scanner stores (macOS /var and Windows 8.3 names are aliases).
+// canonicalTemp returns a temp directory in the form the scanner stores: its own root resolution (macOS /var links, Windows 8.3 names and final-path case).
 func canonicalTemp(t *testing.T) string {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(t.TempDir())
+	abs, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatal("temp_abs_failed")
+	}
+	resolved, err := resolveRoot(filepath.Clean(abs))
 	if err != nil {
 		t.Fatal("temp_resolve_failed")
 	}
-	return resolved
+	return filepath.Clean(resolved)
 }
 
 func writeDescriptor(t *testing.T, dir, name string) {
