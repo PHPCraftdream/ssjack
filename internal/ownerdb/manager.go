@@ -4,6 +4,7 @@ package ownerdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -43,6 +44,8 @@ type Manager struct {
 	err            error
 	imp            importState
 	importSequence uint64
+	verify         DescriptorVerifier
+	approvalUsed   bool
 	jobs           chan string
 	changed        chan struct{}
 	done           chan struct{}
@@ -128,6 +131,187 @@ func (m *Manager) SnapshotVault() (string, error) {
 		return "", errors.New("database session is not open")
 	}
 	return m.db.SnapshotSaved(m.path)
+}
+
+// approvalSnapshotRetention bounds approval-snapshot files per vault.
+const (
+	approvalSnapshotLabel     = "approval-snapshot"
+	approvalSnapshotRetention = 10
+)
+
+type ApprovalMutation struct {
+	Kind           string
+	Name, Path     string
+	Hash, Replaces string
+}
+
+var ErrApprovalReview = errors.New("owner approval review state changed")
+
+// DescriptorVerifier re-derives the descriptor fingerprint from the file at
+// application_path on the keeper machine (section 4.2.1); slice 3 wires the
+// real verifier from internal/application/discovery.
+type DescriptorVerifier func(path string) (hash string, err error)
+
+// SetDescriptorVerifier installs the keeper-side descriptor fingerprint
+// verifier; call it before the first approval write. Slice 3 wires it at keeper
+// manager construction. It cannot be replaced afterwards; approvals fail closed
+// when no verifier is configured.
+func (m *Manager) SetDescriptorVerifier(verifier DescriptorVerifier) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.approvalUsed || verifier == nil {
+		return errors.New("descriptor verifier must be installed once, before the first approval write")
+	}
+	m.verify = verifier
+	return nil
+}
+
+// ApproveWithSnapshot pins the review and snapshot to the same manager state.
+func (m *Manager) ApproveWithSnapshot(ctx context.Context, expected uint64, mut ApprovalMutation) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.closing || m.busy || m.imp.owns() || m.db == nil || m.rotationBlocksMutation() {
+		return ErrPending
+	}
+	if mut.Kind == "approve" {
+		if m.verify == nil {
+			return ErrApprovalReview
+		}
+		hash, err := m.verify(mut.Path)
+		if err != nil || !lowerHex(hash) || !lowerHex(mut.Hash) || hash != mut.Hash {
+			return ErrApprovalReview
+		}
+	}
+	if err := verifyApprovalReview(m.db, expected, mut); err != nil {
+		return err
+	}
+	if err := vault.PruneSnapshots(m.path, approvalSnapshotLabel, approvalSnapshotRetention-1); err != nil {
+		return err
+	}
+	if _, err := m.db.SnapshotSaved(m.path); err != nil {
+		return err
+	}
+	if err := m.db.ApplyAt(expected, func(v *vault.Vault) error { return applyApprovalMutation(v, mut) }); err != nil {
+		return approvalApplyError(err)
+	}
+	m.approvalUsed = true
+	return m.db.Flush(ctx)
+}
+
+func lowerHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if (s[i] < '0' || s[i] > '9') && (s[i] < 'a' || s[i] > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func verifyApprovalReview(db *vault.Session, expected uint64, mut ApprovalMutation) error {
+	status := db.Status()
+	if expected != status.Revision {
+		return vault.ErrOwnerRevision
+	}
+	metadata, err := db.Metadata()
+	if err != nil {
+		return err
+	}
+	switch mut.Kind {
+	case "approve":
+		if mut.Replaces == "" {
+			return nil
+		}
+		for _, record := range metadata.Approvals {
+			if record.Name == mut.Name && record.Hash == mut.Replaces {
+				return nil
+			}
+		}
+	case "revoke":
+		for _, record := range metadata.Approvals {
+			if record.Name == mut.Name && filepath.Clean(record.Path) == filepath.Clean(mut.Path) && record.Hash == mut.Replaces {
+				return nil
+			}
+		}
+	default:
+		return errors.New("approval mutation kind is invalid")
+	}
+	return fmt.Errorf("%w: reviewed approval state no longer matches the live record", ErrApprovalReview)
+}
+
+func applyApprovalMutation(v *vault.Vault, mut ApprovalMutation) error {
+	switch mut.Kind {
+	case "approve":
+		if vault.ValidateApprovalName(mut.Name) != nil {
+			return errors.New("name_invalid")
+		}
+		if err := validApprovalPath(mut.Path); err != nil {
+			if len(mut.Path) > 512 {
+				return errors.New("path_limit_exceeded")
+			}
+			return errors.New("path_invalid")
+		}
+		return v.ApproveApplication(vault.Approval{Name: mut.Name, Path: mut.Path, Hash: mut.Hash}, mut.Replaces)
+	case "revoke":
+		records, err := vault.ListApplicationApprovals(v)
+		if err != nil {
+			return errors.New("revoke_stale")
+		}
+		found := false
+		for _, record := range records {
+			if record.Name != mut.Name {
+				continue
+			}
+			if filepath.Clean(record.Path) != filepath.Clean(mut.Path) || record.Hash != mut.Replaces {
+				return errors.New("revoke_stale")
+			}
+			found = true
+			break
+		}
+		if !found {
+			return errors.New("revoke_stale")
+		}
+		if err := v.RevokeApplication(mut.Name); err != nil {
+			return errors.New("revoke_failed")
+		}
+		return nil
+	default:
+		return errors.New("mutation_invalid")
+	}
+}
+
+func validApprovalPath(p string) error {
+	if p == "" || len(p) > 512 {
+		return errors.New("path_invalid")
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return errors.New("path_invalid")
+		}
+	}
+	if !filepath.IsAbs(p) || p != filepath.Clean(p) {
+		return errors.New("path_invalid")
+	}
+	return nil
+}
+
+func approvalApplyError(err error) error {
+	if errors.Is(err, vault.ErrOwnerRevision) {
+		return err
+	}
+	switch err.Error() {
+	case "revoke_stale",
+		"application approval already exists; pass the reviewed descriptor hash to replace it",
+		"replaced approval does not match the reviewed descriptor hash",
+		"application approval does not exist":
+		return fmt.Errorf("%w: %s", ErrApprovalReview, err.Error())
+	}
+	return err
 }
 
 // Edit is a trusted owner form callback, not a public model-facing getter.

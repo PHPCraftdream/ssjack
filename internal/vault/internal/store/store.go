@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/keyfile"
@@ -103,6 +105,50 @@ func RecoveryPath(path, label string) (string, error) {
 		return "", errors.New("cannot create recovery snapshot identity")
 	}
 	return fmt.Sprintf("%s.%s-%s-%s.ssjack.ktav", path, label, time.Now().UTC().Format("20060102T150405Z"), hex.EncodeToString(random[:])), nil
+}
+
+// PruneRecovery removes oldest recovery files, keeping the newest keep.
+func PruneRecovery(path, label string, keep int) error {
+	if keep < 0 {
+		keep = 0
+	}
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	prefix, suffix := filepath.Base(path)+"."+label+"-", ".ssjack.ktav"
+	type snapshot struct {
+		name string
+		mod  time.Time
+	}
+	var files []snapshot
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		files = append(files, snapshot{name, info.ModTime()})
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.Before(files[j].mod)
+		}
+		return files[i].name < files[j].name
+	})
+	for _, file := range files[:len(files)-keep] {
+		if err := os.Remove(filepath.Join(dir, file.name)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Snapshot preserves the revision previously authenticated by Load.

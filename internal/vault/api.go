@@ -77,6 +77,11 @@ func RotationAwaitsVerification(phase string) bool { return core.RotationAwaitsV
 
 func RecoveryPath(path, label string) (string, error) { return store.RecoveryPath(path, label) }
 
+// PruneSnapshots removes oldest recovery files, keeping the newest keep.
+func PruneSnapshots(path, label string, keep int) error {
+	return store.PruneRecovery(path, label, keep)
+}
+
 // Backup copies exactly the ciphertext that was authenticated and validated.
 func Backup(ctx context.Context, source, destination string, password []byte) error {
 	return recovery.Backup(ctx, source, destination, password)
