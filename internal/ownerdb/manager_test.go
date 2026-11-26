@@ -405,6 +405,7 @@ var (
 	fakeHashes               = map[string]string{}
 	restartBeforeSaveManager *Manager
 	keptDirs                 []string
+	reopenedManager          *Manager
 )
 
 func TestMain(m *testing.M) {
@@ -414,6 +415,9 @@ func TestMain(m *testing.M) {
 	}
 	if restartBeforeSaveManager != nil {
 		restartBeforeSaveManager.Discard()
+	}
+	if reopenedManager != nil {
+		reopenedManager.Discard()
 	}
 	for _, dir := range keptDirs {
 		_ = os.RemoveAll(dir)
@@ -469,6 +473,23 @@ func clearSnapshots(t *testing.T, vaultPath string) {
 	}
 }
 
+// makeStandins writes n stand-in snapshot files; file i gets the modification time stamp(i).
+func makeStandins(t *testing.T, vaultPath string, n int, stamp func(i int) time.Time) []string {
+	t.Helper()
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("%s.%s-%02d-standin.ssjack.ktav", filepath.Base(vaultPath), approvalSnapshotLabel, i)
+		file := filepath.Join(filepath.Dir(vaultPath), names[i])
+		if err := os.WriteFile(file, []byte("stand-in"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(file, stamp(i), stamp(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return names
+}
+
 func fileDigest(t *testing.T, path string) [32]byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -486,9 +507,10 @@ func holdSaveLock(t *testing.T, vaultPath string) {
 	t.Cleanup(func() { _ = os.Remove(vaultPath + ".lock") })
 }
 
-// KDF budget: TestMain pristine creation 1; sharedManager Open for tests 1-5 1;
-// SnapshotFailure 1; EditAppliedThenSaveFailed 1; RestartBeforeSave reopen 1;
-// TimeoutAfterEnqueue 1; RestartAfterDurableSave Open + reopen 2. Total: 8.
+// KDF budget: pristine creation 1; sharedManager Open (VerifyRefusals through ReplyLost) 1;
+// SnapshotFailure copy+Open 1; EditAppliedThenSaveFailed copy+Open 1; RestartBeforeSave reopen
+// (its manager is reused by TimeoutAfterEnqueue) 1; RestartAfterDurableSave reopen of the shared vault 1.
+// Total: 6. Each operation is four 1 GiB Argon2id runs, 10-15 s under the race detector on CI.
 func pristineFixture() (string, error) {
 	fixtureOnce.Do(func() {
 		pristineDir, pristineErr = os.MkdirTemp("", "ownerdb-pristine-")
@@ -570,17 +592,13 @@ func fakeDescriptor(path string) (string, error) {
 	return "", errors.New("descriptor missing")
 }
 
+// waitDurable polls (bounded): a manager retry is asynchronous, and Session.Flush would return the stale save error before the worker clears it.
 func waitDurable(t *testing.T, m *Manager) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := m.db.Flush(ctx); err != nil {
-		t.Fatalf("database flush = %v", err)
-	}
-	status := m.Status().Database
-	if status.Err != nil || status.Revision != status.SavedRevision || status.Pending {
-		t.Fatalf("database not durable: %+v", status)
-	}
+	flakediag.WaitFor(t, "database becomes durable", 30*time.Second, func() (string, bool) {
+		status := m.Status().Database
+		return fmt.Sprintf("revision=%d saved=%d pending=%v err=%v", status.Revision, status.SavedRevision, status.Pending, status.Err), !status.Pending && status.Err == nil && status.Revision == status.SavedRevision
+	})
 }
 
 func approvalHash(seed byte) string { return fmt.Sprintf("%064x", seed) }
@@ -712,19 +730,8 @@ func TestApprovalSnapshotRetentionBound(t *testing.T) {
 	t.Run("retains newest snapshots", func(t *testing.T) {
 		clearSnapshots(t, path)
 		expected := m.Status().Database.Revision
-		standins := make([]string, 10)
 		baseTime := time.Now()
-		for i := range standins {
-			standins[i] = fmt.Sprintf("%s.%s-%02d-standin.ssjack.ktav", filepath.Base(path), approvalSnapshotLabel, i)
-			p := filepath.Join(dir, standins[i])
-			if err := os.WriteFile(p, []byte("stand-in"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			stamp := baseTime.Add(-time.Duration(100-i) * time.Hour)
-			if err := os.Chtimes(p, stamp, stamp); err != nil {
-				t.Fatal(err)
-			}
-		}
+		standins := makeStandins(t, path, 10, func(i int) time.Time { return baseTime.Add(-time.Duration(100-i) * time.Hour) })
 		for i := 0; i < 2; i++ {
 			name := fmt.Sprintf("app-r%d", i)
 			p := filepath.Join(dir, name)
@@ -793,19 +800,8 @@ func TestApprovalSnapshotRetentionBound(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		standins := make([]string, 9)
 		baseTime := time.Now()
-		for i := range standins {
-			standins[i] = fmt.Sprintf("%s.%s-%02d-standin.ssjack.ktav", filepath.Base(path), approvalSnapshotLabel, i)
-			p := filepath.Join(dir, standins[i])
-			if err := os.WriteFile(p, []byte("stand-in"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			stamp := baseTime.Add(time.Duration(i) * time.Hour)
-			if err := os.Chtimes(p, stamp, stamp); err != nil {
-				t.Fatal(err)
-			}
-		}
+		makeStandins(t, path, 9, func(i int) time.Time { return baseTime.Add(time.Duration(i) * time.Hour) })
 		blocker := filepath.Join(dir, fmt.Sprintf("%s.%s-00-blocker.ssjack.ktav", filepath.Base(path), approvalSnapshotLabel))
 		if err := os.Mkdir(blocker, 0700); err != nil {
 			t.Fatal(err)
@@ -864,11 +860,7 @@ func TestApprovalSaveSucceededReplyLost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := make(chan error, 1)
-	go func() {
-		result <- m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-reply", p, approvalHash(1)))
-	}()
-	if err := <-result; err != nil {
+	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-reply", p, approvalHash(1))); err != nil {
 		t.Fatal(err)
 	}
 	metadata, metadataErr := m.Metadata()
@@ -921,13 +913,12 @@ func TestApprovalRestartBeforeSave(t *testing.T) {
 	}
 	restartBeforeSaveManager = nil
 	path := m.path
-	password := []byte("test-password")
 	m.Discard()
-	reopened, err := Open(context.Background(), path, password)
+	reopened, err := Open(context.Background(), path, []byte("test-password"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(reopened.Discard)
+	reopenedManager = reopened
 	status := reopened.Status().Database
 	metadata, metadataErr := reopened.Metadata()
 	if status.Revision != status.SavedRevision || metadataErr != nil || len(metadata.Approvals) != 0 || len(snapshotFiles(t, path)) != 1 {
@@ -937,7 +928,12 @@ func TestApprovalRestartBeforeSave(t *testing.T) {
 
 func TestApprovalTimeoutAfterEnqueue(t *testing.T) {
 	// Proves operation-failure after enqueue using the .lock seam to make save fail. It cannot pause the worker mid-save, so the timeout branch is not exercised; a queued save may complete after explicit retry, never by replaying the operation.
-	m, path, _ := openCopiedManager(t)
+	// Runs on the manager reopened by TestApprovalRestartBeforeSave (prior durable state, no approvals).
+	m := reopenedManager
+	if m == nil {
+		t.Skip("needs TestApprovalRestartBeforeSave in the same run")
+	}
+	path := m.path
 	setVerifier(t, m, approvalHash(1), nil)
 	holdSaveLock(t, path)
 	before, expected := fileDigest(t, path), m.Status().Database.Revision
@@ -963,19 +959,24 @@ func TestApprovalTimeoutAfterEnqueue(t *testing.T) {
 	}
 }
 
+// TestApprovalRestartAfterDurableSave reopens the shared manager's vault, so it must stay the last test that uses it.
 func TestApprovalRestartAfterDurableSave(t *testing.T) {
-	m, path, password := openCopiedManager(t)
-	setVerifier(t, m, approvalHash(1), nil)
+	m, path, password := sharedManager(t)
+	_ = m.SetDescriptorVerifier(fakeDescriptor) // fails once an earlier scenario already approved; needed only when run alone
+	dir := filepath.Dir(path)
+	appPath := filepath.Join(dir, "app-rd")
+	fakeHashes[appPath] = approvalHash(1)
 	expected := m.Status().Database.Revision
-	appPath := filepath.Join(filepath.Dir(path), "app")
-	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app", appPath, approvalHash(1))); err != nil {
+	if err := m.ApproveWithSnapshot(context.Background(), expected, approveMutation("app-rd", appPath, approvalHash(1))); err != nil {
 		t.Fatal(err)
 	}
 	status := m.Status().Database
 	if status.Revision != expected+1 || status.SavedRevision != expected+1 {
 		t.Fatal("approval was not durable before restart")
 	}
+	want := approvalNames(t, m)
 	m.Discard()
+	shared, sharedErr = nil, errors.New("shared manager was discarded by the restart scenario")
 	reopened, err := Open(context.Background(), path, password)
 	if err != nil {
 		t.Fatal(err)
@@ -983,7 +984,16 @@ func TestApprovalRestartAfterDurableSave(t *testing.T) {
 	t.Cleanup(reopened.Discard)
 	metadata, metadataErr := reopened.Metadata()
 	status = reopened.Status().Database
-	if metadataErr != nil || len(metadata.Approvals) != 1 || metadata.Approvals[0].Name != "app" || metadata.Approvals[0].Path != appPath || metadata.Approvals[0].Hash != approvalHash(1) || status.Revision != status.SavedRevision || len(snapshotFiles(t, path)) != 1 {
-		t.Fatal("restart after durable save lost the approval")
+	got := approvalNames(t, reopened)
+	exact := false
+	for _, approval := range metadata.Approvals {
+		if approval.Name == "app-rd" && approval.Path == appPath && approval.Hash == approvalHash(1) {
+			exact = true
+		}
+	}
+	sort.Strings(want)
+	sort.Strings(got)
+	if metadataErr != nil || !exact || strings.Join(got, ",") != strings.Join(want, ",") || status.Revision != status.SavedRevision || len(snapshotFiles(t, path)) == 0 {
+		t.Fatal("restart after durable save lost an approval or its evidence snapshot")
 	}
 }
