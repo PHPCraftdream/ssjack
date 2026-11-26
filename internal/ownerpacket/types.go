@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/PHPCraftdream/ssjack/internal/mcpdirectory"
@@ -57,6 +59,13 @@ type Inspect struct {
 	Password []byte `json:"password"`
 }
 
+type ApprovalChange struct {
+	ApplicationName string `json:"application_name"`
+	ApplicationPath string `json:"application_path,omitempty"`
+	ReviewedHash    string `json:"reviewed_hash"`
+	ReplacesHash    string `json:"replaces_hash,omitempty"`
+}
+
 // Command is a closed operation union; it cannot ask for a credential getter.
 type Command struct {
 	Operation string           `json:"operation"`
@@ -67,6 +76,7 @@ type Command struct {
 	Export    *Export          `json:"export,omitempty"`
 	Link      *Link            `json:"link,omitempty"`
 	Inspect   *Inspect         `json:"inspect,omitempty"`
+	Approval  *ApprovalChange  `json:"approval,omitempty"`
 	Recovery  string           `json:"recovery,omitempty"`
 	Rotation  *Rotation        `json:"rotation,omitempty"`
 }
@@ -148,13 +158,13 @@ type Reply struct {
 func (c Command) valid() bool {
 	importDecision := c.Operation == "confirm-import" || (c.Operation == "recovery" && (c.Recovery == "resume-import" || c.Recovery == "abort-import"))
 	if c.Operation == "rotation" {
-		return c.Revision != nil && c.Plan == 0 && !importDecision && c.Directory == nil && c.Secret == nil && c.Export == nil && c.Link == nil && c.Inspect == nil && c.Recovery == "" && validRotationCommand(c.Rotation)
+		return c.Revision != nil && c.Plan == 0 && !importDecision && c.Directory == nil && c.Secret == nil && c.Export == nil && c.Link == nil && c.Inspect == nil && c.Approval == nil && c.Recovery == "" && validRotationCommand(c.Rotation)
 	}
 	if c.Rotation != nil || importDecision != (c.Plan != 0) {
 		return false
 	}
 	bodies := 0
-	for _, present := range []bool{c.Directory != nil, c.Secret != nil, c.Export != nil, c.Link != nil, c.Inspect != nil, c.Recovery != ""} {
+	for _, present := range []bool{c.Directory != nil, c.Secret != nil, c.Export != nil, c.Link != nil, c.Inspect != nil, c.Approval != nil, c.Recovery != ""} {
 		if present {
 			bodies++
 		}
@@ -166,6 +176,10 @@ func (c Command) valid() bool {
 		return false
 	}
 	switch c.Operation {
+	case "approve_application":
+		return bodies == 1 && c.Approval != nil && validApproval(c.Approval, true)
+	case "revoke_application":
+		return bodies == 1 && c.Approval != nil && validApproval(c.Approval, false)
 	case "confirm-import":
 		return bodies == 0
 	case "directory":
@@ -292,6 +306,47 @@ func (r Reply) valid() bool {
 }
 
 func (c Command) Valid() bool { return c.valid() }
+
+func (c ApprovalChange) Valid() bool {
+	revision := uint64(0)
+	return (Command{Operation: "approve_application", Revision: &revision, Approval: &c}).valid()
+}
+
+func validApproval(change *ApprovalChange, approve bool) bool {
+	if len(change.ApplicationName) == 0 || len(change.ApplicationName) > 64 {
+		return false
+	}
+	// The all-zero digest is rejected to match the repository's existing digest rule (internal/vault/internal/core/ownerstore.go).
+	hash := func(value string) bool {
+		if len(value) != 64 {
+			return false
+		}
+		decoded, err := hex.DecodeString(value)
+		return err == nil && hex.EncodeToString(decoded) == value && !bytes.Equal(decoded, make([]byte, 32))
+	}
+	if !hash(change.ReviewedHash) {
+		return false
+	}
+	if approve {
+		return validApprovalPath(change.ApplicationPath) && (change.ReplacesHash == "" || hash(change.ReplacesHash))
+	}
+	return change.ApplicationPath == "" && hash(change.ReplacesHash)
+}
+
+func validApprovalPath(value string) bool {
+	if len(value) == 0 || len(value) > 512 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] == 0x7f {
+			return false
+		}
+	}
+	normalized := bytes.ReplaceAll([]byte(value), []byte{'\\'}, []byte{'/'})
+	cleaned := string(normalized)
+	absolute := strings.HasPrefix(cleaned, "/") || len(cleaned) >= 3 && cleaned[1] == ':' && cleaned[2] == '/' && ((cleaned[0] >= 'A' && cleaned[0] <= 'Z') || (cleaned[0] >= 'a' && cleaned[0] <= 'z'))
+	return absolute && path.Clean(cleaned) == cleaned
+}
 
 func (c DirectoryChange) Valid() bool {
 	revision := uint64(0)

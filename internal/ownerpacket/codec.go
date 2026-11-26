@@ -13,7 +13,10 @@ import (
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
 )
 
-const domain = "ssjack/owner-ipc/v1"
+const (
+	domain          = "ssjack/owner-ipc/v1"
+	protocolVersion = 2
+)
 
 type box interface {
 	Seal([]byte) ([]byte, error)
@@ -47,7 +50,7 @@ func seal(key box, packet envelope) ([]byte, error) {
 	if key == nil {
 		return nil, ErrAuthentication
 	}
-	packet.Domain, packet.Version = domain, 1
+	packet.Domain, packet.Version = domain, protocolVersion
 	plaintext, err := json.Marshal(packet)
 	if err != nil || len(plaintext) == 0 || len(plaintext) > keyfile.MaxPlaintext {
 		clear(plaintext)
@@ -87,7 +90,7 @@ func open(key box, encoded []byte) (packet envelope, err error) {
 	}
 	canonical, err := json.Marshal(packet)
 	defer clear(canonical)
-	if err != nil || !bytes.Equal(canonical, plaintext) || packet.Domain != domain || packet.Version != 1 || packet.Binding == ([32]byte{}) || packet.Session == ([32]byte{}) {
+	if err != nil || !bytes.Equal(canonical, plaintext) || packet.Domain != domain || packet.Version != protocolVersion || packet.Binding == ([32]byte{}) || packet.Session == ([32]byte{}) {
 		packet.clear()
 		return envelope{}, ErrProtocol
 	}

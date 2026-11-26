@@ -38,7 +38,7 @@ type RotationMetadata struct {
 
 func validCode(code string) bool {
 	switch code {
-	case "", "invalid", "busy", "stale", "unsupported", "authentication", "archive", "uncertain", "rotation-uncertain", "operation", "pending":
+	case "", "invalid", "busy", "stale", "unsupported", "authentication", "archive", "uncertain", "rotation-uncertain", "operation", "pending", "review":
 		return true
 	default:
 		return false

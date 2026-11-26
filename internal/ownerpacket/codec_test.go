@@ -110,7 +110,7 @@ func TestOwnerProtocolRefusesReplayReflectionCrossBindingAndMalformedPayload(t *
 			server, client, key := unitPeers(t)
 			handshake(t, server, client)
 			packet := client.peer.packet("command", "client", 1)
-			packet.Domain, packet.Version, packet.Command = domain, 1, &Command{Operation: "snapshot"}
+			packet.Domain, packet.Version, packet.Command = domain, 2, &Command{Operation: "snapshot"}
 			switch mode {
 			case "domain":
 				packet.Domain = "storage"
@@ -139,7 +139,7 @@ func TestOwnerProtocolRefusesReplayReflectionCrossBindingAndMalformedPayload(t *
 			}
 			switch mode {
 			case "duplicate":
-				data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+				data = bytes.Replace(data, []byte(`"version":2`), []byte(`"version":2,"version":2`), 1)
 			case "unknown":
 				data = append(data[:len(data)-1], []byte(`,"unknown":true}`)...)
 			case "trailing":
@@ -319,6 +319,235 @@ func TestOwnerMCPExportBindingsAreBoundedExactAndExplicit(t *testing.T) {
 		if command.Valid() {
 			t.Fatal("malformed, stale, duplicate or oversized MCP binding admitted")
 		}
+	}
+}
+
+// These frozen v1 helpers exercise mixed-version refusal; they are not compatibility support.
+func sealV1(key box, packet envelope) ([]byte, error) {
+	if key == nil {
+		return nil, ErrAuthentication
+	}
+	packet.Domain, packet.Version = domain, 1
+	plaintext, err := json.Marshal(packet)
+	if err != nil || len(plaintext) == 0 || len(plaintext) > keyfile.MaxPlaintext {
+		clear(plaintext)
+		return nil, ErrProtocol
+	}
+	defer clear(plaintext)
+	encoded, err := key.Seal(plaintext)
+	if err != nil || len(encoded) == 0 || len(encoded) > MaxWire {
+		clear(encoded)
+		return nil, ErrAuthentication
+	}
+	return encoded, nil
+}
+
+func openV1(key box, encoded []byte) (packet envelope, err error) {
+	if key == nil || len(encoded) == 0 || len(encoded) > MaxWire {
+		return packet, ErrAuthentication
+	}
+	plaintext, err := key.Open(encoded)
+	defer clear(plaintext)
+	if err != nil {
+		return packet, ErrAuthentication
+	}
+	if len(plaintext) == 0 || len(plaintext) > keyfile.MaxPlaintext {
+		return packet, ErrProtocol
+	}
+	decoder := json.NewDecoder(bytes.NewReader(plaintext))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&packet) != nil {
+		packet.clear()
+		return envelope{}, ErrProtocol
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		packet.clear()
+		return envelope{}, ErrProtocol
+	}
+	canonical, err := json.Marshal(packet)
+	defer clear(canonical)
+	if err != nil || !bytes.Equal(canonical, plaintext) || packet.Domain != domain || packet.Version != 1 || packet.Binding == ([32]byte{}) || packet.Session == ([32]byte{}) {
+		packet.clear()
+		return envelope{}, ErrProtocol
+	}
+	return packet, nil
+}
+
+func TestApprovalChangeWireRoundTrip(t *testing.T) {
+	for _, operation := range []string{"approve_application", "revoke_application"} {
+		server, client, _ := unitPeers(t)
+		handshake(t, server, client)
+		revision := uint64(9)
+		change := ApprovalChange{ApplicationName: "editor", ReviewedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+		if operation == "approve_application" {
+			change.ApplicationPath = "/opt/editor"
+		} else {
+			change.ReplacesHash = change.ReviewedHash
+		}
+		request := Command{Operation: operation, Revision: &revision, Approval: &change}
+		if !request.Valid() {
+			t.Fatal("valid approval command rejected")
+		}
+		encoded, err := client.Command(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command, err := server.OpenCommand(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(*command, request) {
+			command.Clear()
+			t.Fatal("approval command changed on wire")
+		}
+		command.Clear()
+		if *command.Approval != change {
+			t.Fatal("clear changed string-only approval body")
+		}
+	}
+}
+
+func TestApprovalChangeRejectsOversizedPath(t *testing.T) {
+	revision := uint64(1)
+	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	long := "/" + string(bytes.Repeat([]byte{'x'}, 512))
+	edge := "/" + string(bytes.Repeat([]byte{'x'}, 511))
+	approve := func(path string) Command {
+		return Command{Operation: "approve_application", Revision: &revision, Approval: &ApprovalChange{ApplicationName: "editor", ApplicationPath: path, ReviewedHash: hash}}
+	}
+	if approve(long).valid() || !approve(edge).valid() {
+		t.Fatal("approval path bound is not exactly 512 bytes")
+	}
+	decode := func(path string) (*Command, error, bool) {
+		server, client, key := unitPeers(t)
+		handshake(t, server, client)
+		packet := client.peer.packet("command", "client", 1)
+		packet.Domain, packet.Version = domain, protocolVersion
+		command := approve(path)
+		packet.Command = &command
+		plaintext, err := json.Marshal(packet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := key.Seal(plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened, err := server.OpenCommand(encoded)
+		return opened, err, server.peer.closed
+	}
+	opened, err, closed := decode(edge)
+	if err != nil || opened == nil || closed {
+		t.Fatalf("512-byte approval path decode error = %v, peer closed = %v", err, closed)
+	}
+	opened.Clear()
+	if _, err, closed := decode(long); !errors.Is(err, ErrAuthentication) || !closed {
+		t.Fatalf("513-byte approval path decode error = %v, peer closed = %v", err, closed)
+	}
+	change := ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: hash, ReplacesHash: hash}
+	if (Command{Operation: "revoke_application", Revision: &revision, Approval: &change}).valid() {
+		t.Fatal("revoke with application path accepted")
+	}
+}
+
+func TestApprovalChangePathCanonicalisation(t *testing.T) {
+	revision := uint64(1)
+	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, path := range []string{"/opt/editor", "C:/opt/editor", "C:\\opt\\editor"} {
+		change := ApprovalChange{ApplicationName: "editor", ApplicationPath: path, ReviewedHash: hash}
+		if !(Command{Operation: "approve_application", Revision: &revision, Approval: &change}).Valid() {
+			t.Errorf("canonical approval path %q rejected", path)
+		}
+	}
+	for _, path := range []string{"/a/../b", "/a//b", "/a/", "/a/./b", "opt/editor", "/opt/\x01editor"} {
+		change := ApprovalChange{ApplicationName: "editor", ApplicationPath: path, ReviewedHash: hash}
+		if (Command{Operation: "approve_application", Revision: &revision, Approval: &change}).Valid() {
+			t.Errorf("noncanonical approval path %q accepted", path)
+		}
+	}
+}
+
+func TestOwnerOperationsRejectMixedApprovalBodies(t *testing.T) {
+	revision := uint64(1)
+	valid := ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	rotation := Command{Operation: "rotation", Revision: &revision, Rotation: &Rotation{Action: "prepare", ServerID: "00000000000000000000000000000001", Account: "owner"}}
+	if !rotation.valid() {
+		t.Fatal("valid prepare rotation rejected")
+	}
+	rotation.Approval = &valid
+	if rotation.valid() {
+		t.Fatal("rotation command with approval body accepted")
+	}
+	for _, body := range []Command{
+		{Directory: &DirectoryChange{}}, {Secret: &SecretChange{}}, {Export: &Export{}},
+		{Link: &Link{}}, {Inspect: &Inspect{}}, {Recovery: "retry-db"}, {Rotation: &Rotation{}},
+	} {
+		body.Operation, body.Revision, body.Approval = "approve_application", &revision, &valid
+		if body.valid() {
+			t.Errorf("approval command with extra body accepted: %+v", body)
+		}
+	}
+}
+
+func TestApprovalOperationsRejectNonzeroPlan(t *testing.T) {
+	revision := uint64(1)
+	valid := ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	for _, operation := range []string{"approve_application", "revoke_application"} {
+		change := valid
+		if operation == "revoke_application" {
+			change.ApplicationPath, change.ReplacesHash = "", change.ReviewedHash
+		}
+		if (Command{Operation: operation, Revision: &revision, Approval: &change, Plan: 17}).Valid() {
+			t.Errorf("%s accepted nonzero plan", operation)
+		}
+	}
+}
+
+func TestOwnerProtocolRejectsVersion1PacketInVersion2Codec(t *testing.T) {
+	server, client, key := unitPeers(t)
+	handshake(t, server, client)
+	revision := uint64(1)
+	request := Command{Operation: "approve_application", Revision: &revision, Approval: &ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+	packet := client.peer.packet("command", "client", 1)
+	packet.Command = &request
+	encoded, err := sealV1(key, packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open(key, encoded); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("v2 open error = %v, want ErrProtocol", err)
+	}
+
+	server, client, key = unitPeers(t)
+	if _, err := server.Hello(); err != nil {
+		t.Fatal(err)
+	}
+	legacyHello, err := sealV1(key, server.peer.packet("hello", "server", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := client.AcceptHello(legacyHello)
+	if !errors.Is(err, ErrAuthentication) || len(auth) != 0 || !client.peer.closed {
+		t.Fatal("v1 hello did not close the client without producing auth")
+	}
+	if _, err := client.Command(Command{Operation: "snapshot"}); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("command after rejected hello error = %v, want ErrAuthentication", err)
+	}
+	// Connection closure and the keeper leaving its wait for Auth are observed in internal/ownerrpc and ownercontrol (later slices).
+}
+
+func TestOwnerProtocolRejectsVersion2PacketInVersion1Decoder(t *testing.T) {
+	server, client, key := unitPeers(t)
+	handshake(t, server, client)
+	revision := uint64(1)
+	encoded, err := client.Command(Command{Operation: "approve_application", Revision: &revision, Approval: &ApprovalChange{ApplicationName: "editor", ApplicationPath: "/opt/editor", ReviewedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is refusal, not compatibility.
+	if _, err := openV1(key, encoded); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("v1 open error = %v, want ErrProtocol", err)
 	}
 }
 

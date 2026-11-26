@@ -284,7 +284,7 @@ ApprovalChange {
 |---|---|---|---|---|
 | `operation` | op-name bound (types.go:181-214) | `approve_application` | `revoke_application` | `invalid` |
 | `revision` | uint64, must match current owner revision | yes | yes | `stale` (vault.ErrOwnerRevision) |
-| `plan` | uint64 | yes (existing plan semantics) | yes | per existing plan handling |
+| `plan` | uint64 | no: plan is used only by import decisions and must be 0 | no: plan is used only by import decisions and must be 0 | `invalid` |
 | `application_name` | existing name bound; non-empty | yes | yes | `invalid` |
 | `application_path` | ≤ 512 bytes, canonical/cleaned | yes | **must be absent** | `invalid` |
 | `reviewed_hash` | exactly 64 lowercase hex chars (sha256 hex, controller.go:178 format) | yes | yes | `invalid` |
@@ -709,24 +709,13 @@ Merge-order guarantees:
 - After forwarding and TUI changes, approval operations execute only between matching v2 peers.
 - E2E profile tests extend existing files and introduce no new package files.
 
-## 10. Open questions for the owner
+## 10. Decisions
 
-Only these design choices remain owner decisions. Protocol version 2 and refusal of mixed
-old/new builds are final decisions, not open questions.
+1. Retention: N=10, pruned at snapshot time only (fail closed on prune failure).
+2. Operations: two operations, `approve_application` and `revoke_application`; no `action` field.
+3. Wire error: new code `review`, non-retryable-as-is.
 
-1. **Retention N.** §4.6 defines a hard bound, pruned at snapshot time inside the composite
-   critical section; prune failure refuses the write. Context: the bound must limit disk growth
-   while preserving useful crash-recovery snapshots. Options: N=10, N=5, or additionally prune
-   on rotation. Recommendation: N=10, snapshot-time only.
-2. **One operation with an `action` field, or two operations?** Context: two operations
-   (`approve_application`, `revoke_application`) align with the existing closed operation union
-   and localize validation; one operation saves an operation name but adds an action discriminator.
-   Options: one operation plus action / two operations. Recommendation: two operations.
-3. **New wire error code `review` for keeper re-verification refusal, or reuse an existing code?**
-   Context: `stale` means owner-revision conflict and invites refresh/retry, while retrying a
-   review-stale approval could perform an unreviewed write; `invalid` conflates changed review
-   state with malformed input. Options: add `review` / reuse `stale` / reuse `invalid`.
-   Recommendation: add `review` with non-retryable-as-is semantics and a specific TUI message.
+Protocol version 2 and refusal of mixed old/new builds are final decisions.
 
 ## 11. Explicit non-goals
 
