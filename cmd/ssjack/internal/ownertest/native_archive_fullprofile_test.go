@@ -350,7 +350,7 @@ func nativeArchiveCommand(t *testing.T, ctx context.Context, database, label str
 			input := append(bytes.Clone(step.value), '\r')
 			trace.write(t, step.stage+"-secret-value", input)
 			trace.expectText(t, lifetime, step.stage+"-secret-entered", step.marker+" <hidden; entered>", "native archive command did not display the entered secret field")
-			trace.write(t, step.stage+"-apply-secret", []byte{'\t', '\r'})
+			nativeArchiveWriteKeys(t, trace, lifetime, step.stage+"-apply-secret", []byte{'\t', '\r'})
 			continue
 		}
 		if len(step.value) != 0 {

@@ -938,7 +938,7 @@ func nativeInteractiveAcceptance(t *testing.T, diagnostics *testing.T, ctx conte
 		if mode == "cancel" {
 			trace.write(t, "cancel-and-close", []byte{3, 3})
 		} else {
-			trace.write(t, "apply", []byte{'\t', '\t', '\r'})
+			nativeArchiveWriteKeys(t, trace, lifetime, "apply", []byte{'\t', '\t', '\r'})
 			trace.expectText(t, lifetime, "persistence-receipt", "Change applied. Check persistence status below.", "actual interactive navigation did not reach: Change applied. Check persistence status below.")
 			trace.write(t, "close", []byte{3})
 		}
