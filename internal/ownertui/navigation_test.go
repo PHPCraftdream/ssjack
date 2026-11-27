@@ -13,6 +13,7 @@ import (
 
 	"github.com/PHPCraftdream/ssjack/internal/application/discovery"
 	"github.com/PHPCraftdream/ssjack/internal/ownerarchive"
+	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerpacket"
 	"github.com/PHPCraftdream/ssjack/internal/vault"
@@ -810,4 +811,60 @@ func TestBubbleTeaProgramShowsFixedMessageForWrongPasswordAndEscapeAbortsOnce(t 
 	send(program, tea.KeyPressMsg{Code: 27}, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	wait()
 	check(t, strings.Join(b.calls, ",") != "inspect,abort", "Escape on the preview did not abort exactly once without confirming")
+}
+
+func TestCommandFailureTraceNamesKeysAndSecretEvents(t *testing.T) {
+	names := func(trace string) []string {
+		var out []string
+		for _, event := range strings.Split(trace, ",") {
+			name, millis, ok := strings.Cut(event, "@")
+			if !ok || millis == "" {
+				t.Fatalf("trace event %q has no time", event)
+			}
+			out = append(out, name)
+		}
+		return out
+	}
+	m := &Model{ctx: context.Background(), backend: &fakeBackend{}, ready: true, command: &ownercommand.State{}}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m.Update(secretReadMsg{err: secretCancelError{"esc"}})
+	m.working = true
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.working = false
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	var cancel ownercommand.CancelError
+	err := m.CommandResult()
+	if !errors.Is(err, ownercommand.ErrCancelled) || !errors.As(err, &cancel) || cancel.Cause != "esc" {
+		t.Fatalf("CommandResult()=%#v want an explicit esc cancel", err)
+	}
+	want := []string{"tab", "key", "secret-cancel-esc", "tab!", "esc"}
+	if got := names(cancel.Trace); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("trace names %v want %v", got, want)
+	}
+	if strings.Contains(cancel.Trace, "a@") {
+		t.Fatalf("trace kept printable key text: %q", cancel.Trace)
+	}
+}
+
+func TestSecretEventNamesEveryOutcomeWithAFixedLabel(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{nil, "secret-ok"},
+		{errSecretDrainFailed, "secret-drain-failed"},
+		{secretCancelError{"tab"}, "secret-cancel-tab"},
+		{errSecretCancelled, "secret-cancel"},
+		{errors.New("raw failure text"), "secret-error"},
+	} {
+		if got := secretEvent(tc.err); got != tc.want {
+			t.Fatalf("secretEvent(%v)=%q want %q", tc.err, got, tc.want)
+		}
+	}
+	for name, want := range map[string]string{"tab": "tab", "ctrl+c": "ctrl+c", "enter": "enter", "x": "key", "A": "key", "space": "key"} {
+		if got := keyEvent(name); got != want {
+			t.Fatalf("keyEvent(%q)=%q want %q", name, got, want)
+		}
+	}
 }

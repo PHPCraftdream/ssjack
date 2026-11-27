@@ -1,6 +1,7 @@
 package ownertest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/credential"
 	"github.com/PHPCraftdream/ssjack/cmd/ssjack/internal/testsupport/sshfixture"
 	"github.com/PHPCraftdream/ssjack/internal/flakediag"
+	"github.com/PHPCraftdream/ssjack/internal/ownercommand"
 	"github.com/PHPCraftdream/ssjack/internal/ownercontrol"
 	"github.com/PHPCraftdream/ssjack/internal/ownerdb"
 	"github.com/PHPCraftdream/ssjack/internal/ownerlocal"
@@ -37,6 +39,63 @@ const (
 	nativeInteractiveSaveFailure     nativeChildFailure = "interactive-cli-save"
 	nativeInteractiveUnlockFailure   nativeChildFailure = "interactive-cli-unlock"
 )
+
+// nativeChildTrace returns the fixed-vocabulary event trace of a cancelled or
+// unfinished owner command, restricted to the characters that vocabulary uses.
+func nativeChildTrace(err error) string {
+	var cancel ownercommand.CancelError
+	var incomplete ownercommand.IncompleteError
+	trace := ""
+	switch {
+	case errors.As(err, &cancel):
+		trace = cancel.Trace
+	case errors.As(err, &incomplete):
+		trace = incomplete.Trace
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || strings.ContainsRune("+-@,!", r) {
+			return r
+		}
+		return -1
+	}, trace)
+}
+
+// nativeTraceLine returns the child's printed event trace from the capture, bounded, or "".
+// The terminal may wrap a long line with a carriage return and line feed, which are dropped.
+func nativeTraceLine(data []byte) string {
+	const prefix = "[native-child-trace:"
+	start := bytes.Index(data, []byte(prefix))
+	if start < 0 {
+		return ""
+	}
+	end := bytes.IndexByte(data[start:], ']')
+	if end < 0 || end > 1024 {
+		return ""
+	}
+	line := strings.NewReplacer("\r", "", "\n", "").Replace(string(data[start : start+end+1]))
+	return "capture-trace=" + line + "\n"
+}
+
+func TestNativeFailureTraceReachesTheParentReport(t *testing.T) {
+	wrapped := []byte("frame [native-child-failure:apply-cli-cancel-esc-moves-0] text [native-child-trace:tab@0,secre\r\nt-ok@12,esc@30] tail")
+	if got, want := nativeTraceLine(wrapped), "capture-trace=[native-child-trace:tab@0,secret-ok@12,esc@30]\n"; got != want {
+		t.Fatalf("nativeTraceLine=%q want %q", got, want)
+	}
+	for _, none := range []string{"no trace here", "[native-child-trace:unterminated"} {
+		if got := nativeTraceLine([]byte(none)); got != "" {
+			t.Fatalf("nativeTraceLine(%q)=%q want empty", none, got)
+		}
+	}
+	if got := nativeChildTrace(ownercommand.CancelError{Cause: "esc", Trace: "tab@0,a B;@3"}); got != "tab@0,a@3" {
+		t.Fatalf("nativeChildTrace kept characters outside the vocabulary: %q", got)
+	}
+	if got := nativeChildTrace(ownercommand.IncompleteError{Trace: "enter@4"}); got != "enter@4" {
+		t.Fatalf("nativeChildTrace(incomplete)=%q", got)
+	}
+	if got := nativeChildTrace(errors.New("raw failure text")); got != "" {
+		t.Fatalf("nativeChildTrace(other error)=%q want empty", got)
+	}
+}
 
 func (trace *nativeTerminalTrace) addInteractiveCLIFailureMarkers() {
 	trace.addChildFailureMarkers(nativeInteractiveCodeFailure, nativeInteractiveErrorFailure,

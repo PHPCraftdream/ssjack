@@ -320,6 +320,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = "Exit stopped: save or reconcile pending changes, then retry."
 		return m, nil
 	case secretReadMsg:
+		m.note(secretEvent(msg.err))
 		if errors.Is(msg.err, errSecretDrainFailed) {
 			clear(msg.value)
 			if m.form != nil {
@@ -357,6 +358,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.PasteMsg:
+		m.note("paste")
 		if m.working {
 			return m, nil
 		}
@@ -489,11 +491,45 @@ func (m *Model) moved() {
 	}
 }
 
+// note records an event of a fixed vocabulary in the command's failure trace.
+func (m *Model) note(event string) {
+	if m.command != nil {
+		m.command.Note(event)
+	}
+}
+
+// keyEvent names a key for the failure trace; printable keys never keep their text.
+func keyEvent(name string) string {
+	switch name {
+	case "tab", "shift+tab", "enter", "esc", "escape", "ctrl+c", "left", "right", "up", "down", "backspace":
+		return name
+	}
+	return "key"
+}
+
+// secretEvent names the outcome of a hidden secret read for the failure trace.
+func secretEvent(err error) string {
+	var cancel secretCancelError
+	switch {
+	case err == nil:
+		return "secret-ok"
+	case errors.Is(err, errSecretDrainFailed):
+		return "secret-drain-failed"
+	case errors.As(err, &cancel):
+		return "secret-cancel-" + cancel.reason
+	case errors.Is(err, errSecretCancelled):
+		return "secret-cancel"
+	}
+	return "secret-error"
+}
+
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	name := key.String()
 	if m.working {
+		m.note(keyEvent(name) + "!")
 		return m, nil
 	}
-	name := key.String()
+	m.note(keyEvent(name))
 	if m.command != nil && (name == "ctrl+c" || name == "esc" || name == "escape" || (name == "left" && m.form == nil) || (name == "enter" && m.form != nil && m.form.focus == len(m.form.fields)+1)) {
 		trigger := "ctrl-c"
 		switch name {
@@ -535,6 +571,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else if m.form.focus == len(m.form.fields) {
 				return m, m.applyForm()
 			} else if m.form.fields[m.form.focus].secret {
+				m.note("secret-start")
 				return m, secretReadCommand(m.form, m.form.focus, m.form.fields[m.form.focus].limit, m.readSecret)
 			} else {
 				m.form.move(1)

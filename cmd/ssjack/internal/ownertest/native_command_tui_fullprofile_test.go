@@ -85,7 +85,7 @@ func ownerCommandPTYChild(t *testing.T) {
 		case errors.Is(err, ownercommand.ErrIncomplete):
 			class = applyChildCLIIncomplete
 		}
-		nativeChildFatal(t, class, "confirmed owner command returned an unexpected CLI code: got=%d want=0", code)
+		nativeChildFatal(t, class, "confirmed owner command returned an unexpected CLI code: got=%d want=0 [native-child-trace:%s]", code, nativeChildTrace(err))
 	}
 	if err != nil {
 		nativeChildFatal(t, applyChildCLIError, "confirmed owner command returned an error")
@@ -200,7 +200,7 @@ func (trace *nativeTerminalTrace) failureEvidence(label string, full bool) strin
 				len(data), total, overflow, flakediag.Short(data))
 			for _, marker := range trace.failureMarkers {
 				if bytes.Contains(data, []byte(marker.text)) {
-					endpoint += "capture-class=" + marker.class + "\n"
+					endpoint += "capture-class=" + marker.class + "\n" + nativeTraceLine(data)
 				}
 			}
 			if full {
