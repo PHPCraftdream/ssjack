@@ -232,7 +232,7 @@ func (m *Model) activate(selected item, enter bool) tea.Cmd {
 	case "import-cancel":
 		m.back()
 		if m.command != nil {
-			m.command.Err = ownercommand.ErrCancelled
+			m.command.Cancel("import")
 			return tea.Quit
 		}
 	case "":

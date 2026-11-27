@@ -329,7 +329,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			clear(msg.value)
 			if m.command != nil {
 				m.back()
-				m.command.Err = ownercommand.ErrCancelled
+				m.command.Cancel("secret")
 				return m, tea.Quit
 			}
 			m.message = "Secret entry cancelled; the value was not changed. Press Enter to retry."
@@ -464,14 +464,30 @@ func (m *Model) handleApprovalsKey(name string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// moved counts a form focus move for the command's failure report.
+func (m *Model) moved() {
+	if m.command != nil {
+		m.command.Moves++
+	}
+}
+
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.working {
 		return m, nil
 	}
 	name := key.String()
 	if m.command != nil && (name == "ctrl+c" || name == "esc" || name == "escape" || (name == "left" && m.form == nil) || (name == "enter" && m.form != nil && m.form.focus == len(m.form.fields)+1)) {
+		trigger := "ctrl-c"
+		switch name {
+		case "esc", "escape":
+			trigger = "esc"
+		case "left":
+			trigger = "left"
+		case "enter":
+			trigger = "cancel-button"
+		}
 		m.back()
-		m.command.Err = ownercommand.ErrCancelled
+		m.command.Cancel(trigger)
 		return m, tea.Quit
 	}
 	if name == "ctrl+c" {
@@ -487,8 +503,10 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.back()
 		case "tab", "down":
 			m.form.move(1)
+			m.moved()
 		case "shift+tab", "up":
 			m.form.move(-1)
+			m.moved()
 		case "backspace":
 			if m.form.focus >= len(m.form.fields) || !m.form.fields[m.form.focus].secret {
 				m.form.backspace()
@@ -502,6 +520,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, secretReadCommand(m.form, m.form.focus, m.form.fields[m.form.focus].limit, m.readSecret)
 			} else {
 				m.form.move(1)
+				m.moved()
 			}
 		default:
 			if m.form.focus >= len(m.form.fields) || !m.form.fields[m.form.focus].secret {

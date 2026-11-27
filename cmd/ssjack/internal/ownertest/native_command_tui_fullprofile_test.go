@@ -77,7 +77,11 @@ func ownerCommandPTYChild(t *testing.T) {
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			class = applyChildCLIContext
 		case errors.Is(err, ownercommand.ErrCancelled):
+			var cancel ownercommand.CancelError
 			class = applyChildCLICancelled
+			if errors.As(err, &cancel) {
+				class = nativeCancelClass(cancel.Cause, cancel.Moves)
+			}
 		case errors.Is(err, ownercommand.ErrIncomplete):
 			class = applyChildCLIIncomplete
 		}
@@ -150,11 +154,21 @@ func (trace *nativeTerminalTrace) addChildFailureMarkers(classes ...nativeChildF
 	}
 }
 
+// nativeCancelClass names a deliberate cancel by its trigger and the focus moves seen before it.
+func nativeCancelClass(trigger string, moves int) nativeChildFailure {
+	return nativeChildFailure(fmt.Sprintf("apply-cli-cancel-%s-moves-%d", trigger, min(moves, 9)))
+}
+
 func (trace *nativeTerminalTrace) addOwnerCommandChildFailureMarkers() {
 	trace.addChildFailureMarkers(ownerChildStdinNotTTY, ownerChildStdoutNotTTY, ownerChildRawSetup,
 		cancelChildCLICode, cancelChildCLIVerdict, applyChildCLICode, applyChildCLIError,
 		applyChildCLIControl, applyChildCLIOperation, applyChildCLIContext,
 		applyChildCLICancelled, applyChildCLIIncomplete)
+	for _, trigger := range []string{"ctrl-c", "esc", "left", "cancel-button", "import", "secret"} {
+		for moves := 0; moves <= 9; moves++ {
+			trace.addChildFailureMarkers(nativeCancelClass(trigger, moves))
+		}
+	}
 }
 
 func (trace *nativeTerminalTrace) addInteractiveTerminalFailureMarkers() {
