@@ -128,6 +128,18 @@ jobs:
             echo 'Owner approval acceptance reported a skip'
             exit 1
           fi
+      - name: Native owner approval profile with production KDF
+        shell: bash
+        env:
+          SSJACK_TEST_FULL_KDF: '1'
+        run: |
+          set -o pipefail
+          go test -v -mod=readonly -p 1 -run '^TestNativeOwnerApprovalProfile$' -count=1 -timeout 900s ./internal/nativeownercheck | tee "$RUNNER_TEMP/native-owner-approval-profile.log"
+          grep -q '^--- PASS: TestNativeOwnerApprovalProfile ' "$RUNNER_TEMP/native-owner-approval-profile.log" || { echo 'Native owner approval profile did not report PASS'; exit 1; }
+          if grep -Eq '^[[:space:]]*--- SKIP: TestNativeOwnerApprovalProfile([[:space:]]|$)' "$RUNNER_TEMP/native-owner-approval-profile.log"; then
+            echo 'Native owner approval profile reported SKIP'
+            exit 1
+          fi
       - name: File transfer acceptance on the real stack (Linux)
         if: runner.os == 'Linux'
         shell: bash
