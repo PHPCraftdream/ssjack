@@ -153,6 +153,12 @@ func encodeSnapshot(s ownerdb.Snapshot, err error) ownerpacket.Reply {
 		store := ownerpacket.Store(*s.Directory.OwnerStore)
 		r.Metadata.OwnerStore = &store
 	}
+	if s.Directory.Approvals != nil {
+		r.Metadata.Approvals = make([]ownerpacket.ApprovalRecord, 0, len(s.Directory.Approvals))
+	}
+	for _, record := range s.Directory.Approvals {
+		r.Metadata.Approvals = append(r.Metadata.Approvals, ownerpacket.ApprovalRecord{Name: record.Name, Path: record.Path, Hash: record.Hash})
+	}
 	if s.Directory.Servers != nil {
 		r.Metadata.Servers = make([]ownerpacket.ServerMetadata, 0, len(s.Directory.Servers))
 	}
@@ -192,6 +198,12 @@ func decodeSnapshot(r ownerpacket.Reply) (ownerdb.Snapshot, error) {
 	if r.Metadata.OwnerStore != nil {
 		store := vault.OwnerStoreMetadata(*r.Metadata.OwnerStore)
 		s.Directory.OwnerStore = &store
+	}
+	if r.Metadata.Approvals != nil {
+		s.Directory.Approvals = make([]vault.Approval, 0, len(r.Metadata.Approvals))
+	}
+	for _, record := range r.Metadata.Approvals {
+		s.Directory.Approvals = append(s.Directory.Approvals, vault.Approval{Name: record.Name, Path: record.Path, Hash: record.Hash})
 	}
 	if r.Metadata.Servers != nil {
 		s.Directory.Servers = make([]vault.ServerMetadata, 0, len(r.Metadata.Servers))

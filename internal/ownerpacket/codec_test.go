@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +232,129 @@ func (c *frameConnection) Write(_ context.Context, p []byte) (int, error) {
 	return c.Buffer.Write(p)
 }
 func (c *frameConnection) Close() error { return nil }
+
+func TestApprovalMetadataReplyRoundTripAndValidation(t *testing.T) {
+	server, client, _ := unitPeers(t)
+	handshake(t, server, client)
+	encodedCommand, err := client.Command(Command{Operation: "snapshot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.OpenCommand(encodedCommand); err != nil {
+		t.Fatal(err)
+	}
+	want := []ApprovalRecord{{Name: "alpha", Path: "/tmp/alpha", Hash: strings.Repeat("ab", 32)}, {Name: "beta-2", Path: "/tmp/beta", Hash: strings.Repeat("cd", 32)}}
+	encodedReply, err := server.Reply(Reply{Metadata: Metadata{Approvals: want}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.OpenReply(encodedReply)
+	if err != nil || !reflect.DeepEqual(got.Metadata.Approvals, want) {
+		t.Fatalf("approval reply changed: %#v, %v", got.Metadata.Approvals, err)
+	}
+	if !validApprovalRecords(nil) || !validApprovalRecords([]ApprovalRecord{}) {
+		t.Fatal("empty approval metadata was rejected")
+	}
+}
+
+func TestApprovalMetadataRejectsMalformedRecords(t *testing.T) {
+	valid := ApprovalRecord{Name: "alpha", Path: "/tmp/alpha", Hash: strings.Repeat("ab", 32)}
+	cases := []ApprovalRecord{
+		{Name: "Alpha", Path: valid.Path, Hash: valid.Hash},
+		{Name: valid.Name, Path: "relative", Hash: valid.Hash},
+		{Name: valid.Name, Path: "/tmp//alpha", Hash: valid.Hash},
+		{Name: valid.Name, Path: "/" + strings.Repeat("x", 512), Hash: valid.Hash},
+		{Name: valid.Name, Path: "/tmp/\x01alpha", Hash: valid.Hash},
+		{Name: valid.Name, Path: valid.Path, Hash: strings.Repeat("a", 63)},
+		{Name: valid.Name, Path: valid.Path, Hash: strings.Repeat("AB", 32)},
+	}
+	for _, record := range cases {
+		if validApprovalRecords([]ApprovalRecord{record}) {
+			t.Fatalf("accepted malformed approval %#v", record)
+		}
+	}
+	if validApprovalRecords([]ApprovalRecord{valid, valid}) || validApprovalRecords(make([]ApprovalRecord, MaxApprovals+1)) {
+		t.Fatal("accepted duplicate or oversized approval metadata")
+	}
+	if (Reply{Metadata: Metadata{Approvals: []ApprovalRecord{valid, valid}}}).valid() {
+		t.Fatal("Reply.valid accepted duplicate approval names")
+	}
+}
+
+func TestApprovalMetadataMaximalReplyFitsPacketBounds(t *testing.T) {
+	records := make([]ApprovalRecord, MaxApprovals)
+	for i := range records {
+		name := string(rune('a' + i))
+		if i >= 26 {
+			name = "a" + string(rune('a'+i-26))
+		}
+		path := "/opt/" + strings.Repeat("x", 507)
+		records[i] = ApprovalRecord{Name: name, Path: path, Hash: fmt.Sprintf("%064x", i+1)}
+		if len(path) != 512 {
+			t.Fatalf("path length = %d, want 512", len(path))
+		}
+	}
+	reply := Reply{
+		Metadata: Metadata{
+			Approvals:  records,
+			Servers:    []ServerMetadata{{ID: "server-a", Name: "production", Address: "host.invalid:22"}, {ID: "server-b", Name: "staging", Address: "staging.invalid:22"}},
+			Secrets:    map[string]Binding{"alias": {Name: "token", ServerID: "server-a", Ref: "reference"}},
+			OwnerStore: &Store{Directory: "store", StoreID: "store-id", PendingID: "pending", PendingPhase: "prepared"},
+		},
+		Import: ImportStatus{Phase: "staged", Published: 1, Total: 2, Preview: Preview{Servers: []ServerMetadata{{ID: "preview", Name: "preview"}}}, Conflicts: []Conflict{{Kind: "destination", Subject: "current"}}},
+	}
+	if !reply.valid() {
+		t.Fatal("maximal bounded metadata was invalid")
+	}
+	server, client, key := unitPeers(t)
+	handshake(t, server, client)
+	if _, err := client.Command(Command{Operation: "snapshot"}); err != nil {
+		t.Fatal(err)
+	}
+	packet := server.peer.packet("reply", "server", client.waiting)
+	packet.Reply = &reply
+	plaintext, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plaintext) > keyfile.MaxPlaintext {
+		t.Fatalf("plaintext size %d exceeds %d", len(plaintext), keyfile.MaxPlaintext)
+	}
+	sealed, err := seal(key, packet)
+	if err != nil || len(sealed) > MaxWire {
+		t.Fatalf("sealed size %d exceeds %d or failed: %v", len(sealed), MaxWire, err)
+	}
+}
+
+func TestInvalidApprovalReplyReturnsProtocolErrorAndClosesClient(t *testing.T) {
+	server, client, key := unitPeers(t)
+	handshake(t, server, client)
+	if _, err := client.Command(Command{Operation: "snapshot"}); err != nil {
+		t.Fatal(err)
+	}
+	packet := server.peer.packet("reply", "server", client.waiting)
+	packet.Reply = &Reply{Metadata: Metadata{Approvals: []ApprovalRecord{
+		{Name: "alpha", Path: "/opt/alpha", Hash: strings.Repeat("ab", 32)},
+		{Name: "alpha", Path: "/opt/beta", Hash: strings.Repeat("cd", 32)},
+	}}}
+	plaintext, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := key.Seal(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.OpenReply(encoded); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("invalid reply error = %v, want ErrProtocol", err)
+	}
+	if !client.peer.closed {
+		t.Fatal("invalid reply did not close the client peer")
+	}
+	if _, err := client.Command(Command{Operation: "snapshot"}); err == nil {
+		t.Fatal("closed peer accepted another command")
+	}
+}
 func TestOwnerMCPReplyBounds(t *testing.T) {
 	for _, metadata := range []mcpdirectory.Metadata{
 		{Servers: make([]mcpdirectory.ServerMetadata, 33)},

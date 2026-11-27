@@ -45,6 +45,29 @@ func snapshotFixture() ownerdb.Snapshot {
 	}
 }
 
+func TestSnapshotApprovalProjectionPreservesOrderAndCarrySet(t *testing.T) {
+	original := ownerdb.Snapshot{Directory: vault.DirectoryMetadata{Approvals: []vault.Approval{
+		{Name: "alpha", Path: "/opt/alpha", Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Route: "route-a"},
+		{Name: "beta", Path: "/opt/beta", Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Route: "route-b"},
+	}}}
+	reply := encodeSnapshot(original, nil)
+	if len(reply.Metadata.Approvals) != 2 || reply.Metadata.Approvals[0].Name != "alpha" || reply.Metadata.Approvals[1].Name != "beta" || reply.Metadata.Approvals[0].Hash != original.Directory.Approvals[0].Hash {
+		t.Fatal("encoded approvals changed order or values")
+	}
+	decoded, err := decodeSnapshot(reply)
+	if err != nil || len(decoded.Directory.Approvals) != 2 {
+		t.Fatalf("decoded approvals missing: %#v, %v", decoded.Directory.Approvals, err)
+	}
+	for i := range original.Directory.Approvals {
+		want := original.Directory.Approvals[i]
+		want.Route = ""
+		if decoded.Directory.Approvals[i] != want {
+			t.Fatalf("decoded approval %d = %#v, want %#v", i, decoded.Directory.Approvals[i], want)
+		}
+	}
+
+}
+
 func TestSnapshotProjectionPreservesAllMetadataAndEvidence(t *testing.T) {
 	for _, original := range []ownerdb.Snapshot{{}, snapshotFixture(), {Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{}, Secrets: map[string]vault.SecretBinding{}, RemoteMCP: mcpdirectory.Metadata{Servers: []mcpdirectory.ServerMetadata{}, Accounts: []mcpdirectory.AccountMetadata{}, Last: map[string][]mcpdirectory.Binding{}}}}} {
 		encoded, err := json.Marshal(encodeSnapshot(original, nil))

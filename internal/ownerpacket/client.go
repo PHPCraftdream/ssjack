@@ -97,8 +97,12 @@ func (c *Client) OpenReply(encoded []byte) (Reply, error) {
 	}
 	packet, err := open(c.peer.key, encoded)
 	defer packet.clear()
-	if err != nil || !c.peer.matches(packet, "reply", "server", c.waiting) || packet.Command != nil || packet.Reply == nil || !packet.Reply.valid() {
+	if err != nil || !c.peer.matches(packet, "reply", "server", c.waiting) || packet.Command != nil || packet.Reply == nil {
 		return Reply{}, c.peer.fail()
+	}
+	if !packet.Reply.valid() {
+		c.peer.closed = true
+		return Reply{}, ErrProtocol
 	}
 	c.waiting = 0
 	return *packet.Reply, nil

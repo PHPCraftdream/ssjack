@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	MaxWire     = 256 << 10
-	MaxMessages = 4096
-	Lease       = 10 * time.Minute
+	MaxWire      = 256 << 10
+	MaxMessages  = 4096
+	MaxApprovals = 32 // Mirrors vault.MaxApplicationApprovals.
+	Lease        = 10 * time.Minute
 )
 
 var (
@@ -113,11 +114,17 @@ type ServerMetadata struct {
 }
 type Binding struct{ Name, ServerID, Ref string }
 type Store struct{ Directory, StoreID, PendingID, PendingPhase string }
+type ApprovalRecord struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
 type Metadata struct {
 	Servers    []ServerMetadata
 	Secrets    map[string]Binding
 	OwnerStore *Store
 	RemoteMCP  mcpdirectory.Metadata
+	Approvals  []ApprovalRecord
 }
 type Status struct {
 	Revision, SavedRevision                       uint64
@@ -260,7 +267,7 @@ func (c Command) valid() bool {
 }
 
 func (r Reply) valid() bool {
-	if !validCode(r.ErrorCode) || !validCode(r.Import.ErrorCode) || !validRotationMetadata(r.Rotation) || len(r.Metadata.Servers) > 64 || len(r.Metadata.Secrets) > 128 || len(r.Import.Preview.Servers) > 64 || len(r.Import.Preview.Secrets) > 128 || len(r.Import.Conflicts) > 512 || len(r.Import.Preview.Conflicts) > 512 {
+	if !validCode(r.ErrorCode) || !validCode(r.Import.ErrorCode) || !validRotationMetadata(r.Rotation) || len(r.Metadata.Servers) > 64 || len(r.Metadata.Secrets) > 128 || !validApprovalRecords(r.Metadata.Approvals) || len(r.Import.Preview.Servers) > 64 || len(r.Import.Preview.Secrets) > 128 || len(r.Import.Conflicts) > 512 || len(r.Import.Preview.Conflicts) > 512 {
 		return false
 	}
 	switch r.Import.Phase {
@@ -311,6 +318,43 @@ func (c Command) Valid() bool { return c.valid() }
 func (c ApprovalChange) Valid() bool {
 	revision := uint64(0)
 	return (Command{Operation: "approve_application", Revision: &revision, Approval: &c}).valid()
+}
+
+func validApprovalRecords(records []ApprovalRecord) bool {
+	if len(records) > MaxApprovals {
+		return false
+	}
+	seen := make(map[string]bool, len(records))
+	for _, record := range records {
+		if len(record.Name) == 0 || len(record.Name) > 32 || record.Name[0] < 'a' || record.Name[0] > 'z' || seen[record.Name] || len(record.Path) == 0 || len(record.Path) > 512 || len(record.Hash) != 64 {
+			return false
+		}
+		seen[record.Name] = true
+		for i := 1; i < len(record.Name); i++ {
+			c := record.Name[i]
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+		for i := 0; i < len(record.Path); i++ {
+			if record.Path[i] < 0x20 || record.Path[i] == 0x7f {
+				return false
+			}
+		}
+		normalized := bytes.ReplaceAll([]byte(record.Path), []byte{'\\'}, []byte{'/'})
+		cleaned := string(normalized)
+		absolute := strings.HasPrefix(cleaned, "/") || len(cleaned) >= 3 && cleaned[1] == ':' && cleaned[2] == '/' && ((cleaned[0] >= 'A' && cleaned[0] <= 'Z') || (cleaned[0] >= 'a' && cleaned[0] <= 'z'))
+		if !absolute || path.Clean(cleaned) != cleaned {
+			return false
+		}
+		for i := 0; i < len(record.Hash); i++ {
+			c := record.Hash[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validApproval(change *ApprovalChange, approve bool) bool {

@@ -24,6 +24,7 @@ type remoteRecorder struct {
 	plan      uint64
 	closed    int
 	failure   error
+	approvals []vault.Approval
 }
 
 func (r *remoteRecorder) Close() { r.closed++ }
@@ -51,11 +52,25 @@ func (r *remoteRecorder) Execute(ctx context.Context, command ownerpacket.Comman
 			imports.Phase = ownerdb.ImportStaged
 		}
 		return ownerdb.Snapshot{
-			Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Address: "synthetic.invalid:22"}}},
+			Directory: vault.DirectoryMetadata{Servers: []vault.ServerMetadata{{ID: "server", Name: "production", Address: "synthetic.invalid:22"}}, Approvals: r.approvals},
 			Import:    imports,
 			Status:    ownerdb.Status{Database: vault.SessionStatus{Revision: revision}}}, r.failure
 	}
 	return ownerdb.Snapshot{}, r.failure
+}
+
+func TestRemoteMetadataSurfacesApprovalRecords(t *testing.T) {
+	want := []vault.Approval{{Name: "alpha", Path: "/opt/alpha", Hash: strings.Repeat("ab", 32)}, {Name: "beta", Path: "/opt/beta", Hash: strings.Repeat("cd", 32)}}
+	r := &remoteRecorder{approvals: want}
+	b := (&Remote{ctx: context.Background(), client: r}).AtRevision(1).(*Remote)
+	metadata, err := b.Metadata()
+	if err != nil || !reflect.DeepEqual(metadata.Approvals, want) {
+		t.Fatalf("remote metadata approvals = %#v, want %#v (err %v)", metadata.Approvals, want, err)
+	}
+	directory, _, _, err := b.OwnerSnapshot()
+	if err != nil || !reflect.DeepEqual(directory.Approvals, want) {
+		t.Fatalf("remote owner snapshot approvals = %#v, want %#v (err %v)", directory.Approvals, want, err)
+	}
 }
 
 func TestRemoteApprovalWriteForwardedWithRevision(t *testing.T) {
