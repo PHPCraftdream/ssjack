@@ -121,7 +121,7 @@ jobs:
         run: |
           set -o pipefail
           go test -v -mod=readonly -p 1 -run '^TestApproval' -count=1 -timeout 900s ./internal/ownerdb | tee "$RUNNER_TEMP/owner-approval.log"
-          for name in TestApprovalVerifyRefusals TestApprovalSnapshotThenApplyAtomic TestApprovalSnapshotFailureKeepsVaultUnchanged TestApprovalSnapshotRetentionBound TestApprovalSnapshotSucceededEditRejected TestApprovalSaveSucceededReplyLost TestApprovalEditAppliedThenSaveFailed TestApprovalRestartBeforeSave TestApprovalTimeoutAfterEnqueue TestApprovalRestartAfterDurableSave; do
+          for name in TestApprovalVerifyRefusals TestApprovalSnapshotThenApplyAtomic TestApprovalSnapshotFailureKeepsVaultUnchanged TestApprovalSnapshotRetentionBound TestApprovalSnapshotSucceededEditRejected TestApprovalSaveSucceededReplyLost TestApprovalEditAppliedThenSaveFailed TestApprovalRestartBeforeSave TestApprovalTimeoutAfterEnqueue TestApprovalRestartAfterDurableSave TestApprovalReplacesHashPreflight TestApprovalFirstApprovalWithoutReplacesSucceeds; do
             grep -q -- "^--- PASS: $name " "$RUNNER_TEMP/owner-approval.log" || { echo "Owner approval acceptance did not report PASS: $name"; exit 1; }
           done
           if grep -Eq '^[[:space:]]*--- SKIP: TestApproval' "$RUNNER_TEMP/owner-approval.log"; then

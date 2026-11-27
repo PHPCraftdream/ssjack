@@ -224,13 +224,14 @@ func verifyApprovalReview(db *vault.Session, expected uint64, mut ApprovalMutati
 	}
 	switch mut.Kind {
 	case "approve":
-		if mut.Replaces == "" {
-			return nil
-		}
+		live := ""
 		for _, record := range metadata.Approvals {
-			if record.Name == mut.Name && record.Hash == mut.Replaces {
-				return nil
+			if record.Name == mut.Name {
+				live = record.Hash
 			}
+		}
+		if live == "" && mut.Replaces == "" || live != "" && mut.Replaces != "" && mut.Replaces == live {
+			return nil
 		}
 	case "revoke":
 		for _, record := range metadata.Approvals {
