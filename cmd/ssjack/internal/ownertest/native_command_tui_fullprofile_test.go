@@ -164,7 +164,7 @@ func (trace *nativeTerminalTrace) addOwnerCommandChildFailureMarkers() {
 		cancelChildCLICode, cancelChildCLIVerdict, applyChildCLICode, applyChildCLIError,
 		applyChildCLIControl, applyChildCLIOperation, applyChildCLIContext,
 		applyChildCLICancelled, applyChildCLIIncomplete)
-	for _, trigger := range []string{"ctrl-c", "esc", "left", "cancel-button", "import", "secret"} {
+	for _, trigger := range []string{"ctrl-c", "esc", "left", "cancel-button", "import", "secret", "secret-esc", "secret-ctrl-c", "secret-tab", "secret-control", "secret-limit", "secret-utf8"} {
 		for moves := 0; moves <= 9; moves++ {
 			trace.addChildFailureMarkers(nativeCancelClass(trigger, moves))
 		}

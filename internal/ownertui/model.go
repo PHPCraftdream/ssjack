@@ -185,12 +185,15 @@ func readHiddenLineRaw(limit int) ([]byte, error) {
 		case '\r', '\n':
 			if !utf8.Valid(value) {
 				clear(value)
-				return failSecretDrain()
+				return failSecretDrain("utf8")
 			}
 			return value, nil
-		case 0x1b, 0x03:
+		case 0x1b:
 			clear(value)
-			return failSecretDrain()
+			return failSecretDrain("esc")
+		case 0x03:
+			clear(value)
+			return failSecretDrain("ctrl-c")
 		case 0x08, 0x7f:
 			if len(value) > 0 {
 				_, size := utf8.DecodeLastRune(value)
@@ -201,21 +204,31 @@ func readHiddenLineRaw(limit int) ([]byte, error) {
 		default:
 			if one[0] < 0x20 || one[0] == 0x7f {
 				clear(value)
-				return failSecretDrain()
+				if one[0] == 0x09 {
+					return failSecretDrain("tab")
+				}
+				return failSecretDrain("control")
 			}
 			if len(value) == limit {
 				clear(value)
-				return failSecretDrain()
+				return failSecretDrain("limit")
 			}
 			value = append(value, one[0])
 		}
 	}
 }
-func failSecretDrain() ([]byte, error) {
+
+// secretCancelError is errSecretCancelled plus the fixed reason the hidden read stopped; it never carries input.
+type secretCancelError struct{ reason string }
+
+func (e secretCancelError) Error() string        { return errSecretCancelled.Error() }
+func (e secretCancelError) Is(target error) bool { return target == errSecretCancelled }
+
+func failSecretDrain(reason string) ([]byte, error) {
 	if err := stdindrain.DrainStdin(); err != nil {
 		return nil, errSecretDrainFailed
 	}
-	return nil, errSecretCancelled
+	return nil, secretCancelError{reason}
 }
 
 func ReadHiddenLine(limit int) ([]byte, error) { return readHiddenLine(limit) }
@@ -329,7 +342,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			clear(msg.value)
 			if m.command != nil {
 				m.back()
-				m.command.Cancel("secret")
+				trigger := "secret"
+				var cancel secretCancelError
+				if errors.As(msg.err, &cancel) {
+					trigger += "-" + cancel.reason
+				}
+				m.command.Cancel(trigger)
 				return m, tea.Quit
 			}
 			m.message = "Secret entry cancelled; the value was not changed. Press Enter to retry."
