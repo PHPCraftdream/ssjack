@@ -50,12 +50,18 @@ func resolveRoot(path string) (string, error) {
 	if err != nil || length == 0 || int(length) >= len(buffer) {
 		return "", errors.New("final path unavailable")
 	}
-	final := windows.UTF16ToString(buffer[:length])
+	return filepath.Clean(trimExtendedPrefix(windows.UTF16ToString(buffer[:length]))), nil
+}
+
+// trimExtendedPrefix turns the \\?\ and \\?\UNC\ forms that GetFinalPathNameByHandle
+// returns into ordinary drive and UNC paths, which the owner wire format accepts.
+func trimExtendedPrefix(final string) string {
+	const unc, extended = `\\?\UNC\`, `\\?\`
 	switch {
-	case strings.HasPrefix(final, `\?\UNC\`):
-		final = `\` + final[len(`\?\UNC\`):]
-	case strings.HasPrefix(final, `\?\`):
-		final = final[len(`\?\`):]
+	case strings.HasPrefix(final, unc):
+		return `\\` + final[len(unc):]
+	case strings.HasPrefix(final, extended):
+		return final[len(extended):]
 	}
-	return filepath.Clean(final), nil
+	return final
 }
