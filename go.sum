@@ -1,5 +1,7 @@
 charm.land/bubbletea/v2 v2.0.10 h1:oolvo20VBpI0PfqE7iFjkZ1bx0WpmXGfnKz5Yldjq5o=
 charm.land/bubbletea/v2 v2.0.10/go.mod h1:QOatcnhOjYIfxzUSTz6raF7Ex4R/rIuHa3SnBdCCpMc=
+github.com/PHPCraftdream/mcp-jack v0.0.0-20261126204253-12fd955893d5 h1:l0cR61yHWkrrAYxJB8Y0RFqgu1I4vzbvcL5Z+puc2TU=
+github.com/PHPCraftdream/mcp-jack v0.0.0-20261126204253-12fd955893d5/go.mod h1:6xV3UkYRr3nYsiW1AA1KGl9OEQEIBrbpH3uH/QRBHCM=
 github.com/aymanbagabas/go-udiff v0.2.0 h1:TK0fH4MteXUDspT88n8CKzvK0X9O2xu9yQjWpi6yML8=
 github.com/aymanbagabas/go-udiff v0.2.0/go.mod h1:RE4Ex0qsGkTAJoQdQQCA0uG+nAzJO/pI/QwceO5fgrA=
 github.com/charmbracelet/colorprofile v0.4.3 h1:QPa1IWkYI+AOB+fE+mg/5/4HRMZcaXex9t5KX76i20Q=

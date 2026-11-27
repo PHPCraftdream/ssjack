@@ -52,12 +52,21 @@ def validate(inventories, notices, policy, license_texts, embedded_texts, embed_
     for path, entry in policy["modules"].items():
         if entry.get("source_review") != "verified" or not entry.get("source"):
             raise ValueError(f"dependency source review is incomplete: {path}")
+        if path == "github.com/PHPCraftdream/mcp-jack" and entry.get("license_expression") != "MIT OR Apache-2.0":
+            raise ValueError(f"dependency license expression mismatch: {path}")
+        if entry.get("license_expression") and not (path == "github.com/PHPCraftdream/mcp-jack" and entry["license_expression"] == "MIT OR Apache-2.0"):
+            raise ValueError(f"unknown dependency license expression: {path}")
         text = license_texts[path]
         if digest(text) != entry["license_sha256"]:
             raise ValueError(f"dependency notice digest mismatch: {path}")
         if source_digest(text) != entry["source_sha256"]:
             raise ValueError(f"dependency source digest mismatch: {path}")
         expected_blocks.append((entry["notice_heading"], text.replace("\r\n", "\n").strip()))
+        if path == "github.com/PHPCraftdream/mcp-jack":
+            apache = license_texts[path + ":APACHE"]
+            if source_digest(apache) != entry["apache_source_sha256"] or digest(apache) != entry["apache_license_sha256"]:
+                raise ValueError(f"dependency alternate license digest mismatch: {path}")
+            expected_blocks.append((entry["apache_notice_heading"], apache.replace("\r\n", "\n").strip()))
         if path in X_MODULES:
             patent = license_texts[path + ":PATENTS"]
             if source_digest(patent) != entry["patents_source_sha256"] or digest(patent) != entry["patents_sha256"]:
@@ -122,14 +131,21 @@ def main():
                 entry = POLICY["modules"].get(path)
                 if entry:
                     licenses[path] = (pathlib.Path(mod["Dir"]) / entry["license_file"]).read_bytes().decode("utf-8")
+                    if path == "github.com/PHPCraftdream/mcp-jack":
+                        licenses[path + ":APACHE"] = (pathlib.Path(mod["Dir"]) / entry["apache_license_file"]).read_bytes().decode("utf-8")
                     if path in X_MODULES:
                         licenses[path + ":PATENTS"] = (pathlib.Path(mod["Dir"]) / "PATENTS").read_bytes().decode("utf-8")
         inventories.append(inventory)
     for path, entry in POLICY["modules"].items():
         if not entry.get("release", True):
+            selected = subprocess.run(["go", "list", "-m", "-f", "{{.Version}}", path], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+            if selected != entry["version"]:
+                raise ValueError(f"non-release dependency version differs from go.mod: {path}: policy {entry['version']}, selected {selected}")
             raw = subprocess.run(["go", "mod", "download", "-json", path + "@" + entry["version"]], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
             directory = pathlib.Path(json.loads(raw)["Dir"])
             licenses[path] = (directory / entry["license_file"]).read_bytes().decode("utf-8")
+            if path == "github.com/PHPCraftdream/mcp-jack":
+                licenses[path + ":APACHE"] = (directory / entry["apache_license_file"]).read_bytes().decode("utf-8")
             if path in X_MODULES:
                 licenses[path + ":PATENTS"] = (directory / "PATENTS").read_bytes().decode("utf-8")
     root = pathlib.Path(subprocess.run(["go", "env", "GOROOT"], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout.strip())
