@@ -100,10 +100,10 @@ func TestScanRejectsDirectoryJunction(t *testing.T) {
 
 func TestTrimExtendedPrefix(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
-		"drive":     {`\?\C:\Users\runner\app`, `C:\Users\runner\app`},
-		"unc":       {`\?\UNC\server\share\app`, `\server\share\app`},
+		"drive":     {`\\?\C:\Users\runner\app`, `C:\Users\runner\app`},
+		"unc":       {`\\?\UNC\server\share\app`, `\\server\share\app`},
 		"plain":     {`C:\Users\runner\app`, `C:\Users\runner\app`},
-		"plain unc": {`\server\share\app`, `\server\share\app`},
+		"plain unc": {`\\server\share\app`, `\\server\share\app`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := trimExtendedPrefix(tc.in); got != tc.want {
@@ -118,7 +118,7 @@ func TestResolveRootHasNoExtendedPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resolved) >= 4 && resolved[:4] == `\?\` {
+	if len(resolved) >= 4 && resolved[:4] == `\\?\` {
 		t.Fatalf("resolved root keeps the extended prefix: %q", resolved)
 	}
 	if !filepath.IsAbs(resolved) {
