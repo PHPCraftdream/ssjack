@@ -122,9 +122,11 @@ still fails at model.go:420.
 - **Least exposure.** The owner client must never read or transfer vault ciphertext; only the
   keeper holds it. Any option that ships ciphertext (or its bytes) over the owner channel to
   let the client verify a snapshot violates this.
-- **Path and digest knowledge stay keeper-side.** The vault path, the in-memory `savedCipher`
-  digest, and the recovery-file naming all live in the keeper process. The client needs to
-  learn only success/failure — not the path, not the digest, not the file layout.
+- **Path and file-layout knowledge stay keeper-side.** The vault and snapshot filesystem
+  paths and the recovery-file naming live in the keeper process. The client learns success or
+  a typed failure, the ciphertext digest already carried on every owner reply (§4.3.1), and
+  bounded, authenticated, owner-only approval records that the owner already sees; no secret
+  values or key material, and no agent channel can read this metadata.
 
 ## 3. Options and decision
 
@@ -135,7 +137,7 @@ still fails at model.go:420.
 | # | Option | Atomicity | What the client learns | Authorization | Protocol surface | Failure modes | Verdict |
 |---|---|---|---|---|---|---|---|
 | a | New owner-protocol operation `snapshot_vault`, called by the client before it writes | None across the two steps: a concurrent keeper writer can change the vault between the snapshot reply and the write | Snapshot success/failure only; write result separately | Snapshot op must be gated to the same approval-write authorization, or it becomes a standalone vault-integrity oracle | One new operation + retention policy for keeper-side snapshot files + a second round trip | Race window between snapshot and write; snapshot may be for stale ciphertext; retention orphans if the write fails | REJECTED — insufficient on its own |
-| b | Keeper-side **composite** approval-write operation(s): snapshot on the keeper and apply the revision-pinned approval mutation atomically in one operation | Serialized manager transaction through the durability point (§4.3.1), not atomic filesystem publication or rollback of the standalone snapshot file | Success/failure of the whole approval write; snapshot failure is a distinct, typed error | Reuses the existing mutating-operation authorization path (closed change bodies, revision pinning) | New closed change type + new operation(s); follows the `DirectoryChange`/`SecretChange` pattern (internal/ownerpacket/types.go:28-43) | Single operation, single error surface; snapshot-for-stale-ciphertext is caught by the same freshness check as the write; durability is confirmed before the reply | **RECOMMENDED** |
+| b | Keeper-side **composite** approval-write operation(s): snapshot on the keeper and apply the revision-pinned approval mutation atomically in one operation | Serialized manager transaction through the durability point (§4.3.1), not atomic filesystem publication or rollback of the standalone snapshot file | Success/failure of the whole approval write; snapshot failure is a distinct, typed error; reply also carries bounded, authenticated owner-display approval metadata (types.go:117-127,323-358; snapshot.go:138-143) | Reuses the existing mutating-operation authorization path (closed change bodies, revision pinning) | New closed change type + new operation(s); follows the `DirectoryChange`/`SecretChange` pattern (internal/ownerpacket/types.go:28-43) | Single operation, single error surface; snapshot-for-stale-ciphertext is caught by the same freshness check as the write; durability is confirmed before the reply | **RECOMMENDED** |
 | c | Leave approvals unavailable on Remote, with a clearer error message | N/A — nothing runs | A distinct refusal | Unchanged | No new operation; error-mapping change only | Approvals remain unusable over Remote | **REJECTED** as end state; standalone `SnapshotVault` refusal remains; mixed builds refuse at handshake (§5) |
 
 ### 3.2 Option (a): client-initiated `snapshot_vault` — rejected
@@ -176,8 +178,11 @@ Arguments `[ssjack code]` unless noted:
   `DirectoryChange` and `SecretChange` (internal/ownerpacket/types.go:28-43) are small closed
   structs serialized into sealed canonical JSON. An `ApprovalChange` fits the same shape:
   action (`approve`/`revoke`), name, path, hash, optional replaced-approval reference.
-- **No new client-visible vault knowledge:** the client learns success or a typed failure;
-  paths, digests, and file layout stay keeper-side, per section 2.
+- **Bounded owner-only metadata:** the client learns operation success or a typed failure,
+  plus authenticated, bounded approval records (name, path, hash) that the owner already sees;
+  no secret values, key material, or metadata readable by an agent channel. Vault and snapshot
+  filesystem paths and file layout stay keeper-side; the ciphertext digest is the pre-existing
+  bounded disclosure of §4.3.1.
 - **The existing approval-write semantics are pure vault mutations** and serialize cleanly:
   `ApplyVerified` verifies revocations against the live record then applies
   (internal/ownertui/internal/approvals/controller.go:318-328), and `ApplyMutation` validates
@@ -357,22 +362,26 @@ single manager critical section:
 **Failure after enqueue:** if `ApplyAt` has enqueued the new save and the context expires or the save reports an error, return the `operation` error class. The in-memory mutation remains; there is no rollback claim. On context timeout the queued save may still complete after the method returns, so the reply must not claim rolled-back state. The owner must re-read state after any operation error at or after enqueue, and must never replay that operation. A save error leaves the mutation unsaved/error state; a timeout leaves the durable outcome uncertain until re-read.
 
 **Reply path: RECOMMENDED NO.** The reply reuses `Reply` unchanged — `error`, `metadata`,
-`status` (`[ssjack code]` internal/ownerpacket/types.go:140-146) — which states it carries
+`status` (`[ssjack code]` internal/ownerpacket/types.go:129-134,157-164,323-358; internal/ownerrpc/snapshot.go:156-161; internal/ownerpacket/codec.go:49-97) — which states it carries
 "metadata and persistence evidence only, never stored values" (types.go:139). The client learns
-success/failure only. The TUI discards the snapshot path today (`[ssjack code]`
-internal/ownertui/model.go:359-362). An absolute keeper path would leak deployment topology.
+operation success or a typed failure, plus bounded, authenticated approval records already
+visible to the owner; no secret values or key material are disclosed, and no agent channel can
+read this metadata. The TUI discards the snapshot path today (`[ssjack code]` internal/ownertui/model.go:378-392). An absolute keeper path would leak deployment topology.
 
 **Never sent on the wire:** vault ciphertext or key material; plaintext digests; absolute keeper
-filesystem path of the snapshot; approval fingerprint hex beyond what the TUI already displays;
-raw keeper error text. Errors cross as typed wire codes only (§4.4).
+filesystem path of the snapshot; raw keeper error text. Errors cross as typed wire codes only (§4.4).
+Approval-record paths and hashes are bounded owner-only metadata, not keeper filesystem paths
+or plaintext digests; the owner UI shows a hash prefix and uses the full hash to pin a revocation.
 
 **Bounded disclosure — `Status.CipherDigest` crosses.** The reply unavoidably carries
 `Reply.Status.CipherDigest`, a `[32]byte` ciphertext digest present on every reply today
-(`[ssjack code]` internal/ownerpacket/types.go:111-115,139-146; set at
-internal/ownerrpc/snapshot.go:138), because the reply type is shared and
+(`[ssjack code]` internal/ownerpacket/types.go:129-134,157-164,323-358; internal/ownerrpc/snapshot.go:138-143; internal/ownerpacket/codec.go:49-97), because the reply type is shared and
 `codeError`/`decodeSnapshot` reuse it (snapshot.go:173). It is sha256 of already-encrypted
 ciphertext and reveals nothing about plaintext or keys; any owner peer can already obtain the
-same value from `snapshot`. It is not a new disclosure.
+same value from `snapshot`. This is not a new disclosure. Approvals add no ciphertext or plaintext digest: approval-record
+hashes are application fingerprints in owner-only metadata (`[ssjack code]`
+internal/ownerpacket/types.go:117-127,323-358). The shared reply's existing import and rotation
+projection (internal/ownerrpc/snapshot.go:110-118,175-179) is unchanged by approvals.
 
 ### 4.4 Error classes
 
@@ -490,11 +499,11 @@ internal/ownerdispatch/peer.go:68-91: closed/dead peer → `ErrAuthentication`, 
 ### 6.2 Attacker controlling the agent (not the owner channel)
 
 Cannot invoke the operation: commands originate only from the authenticated owner peer, and
-the agent never holds owner-channel credentials. The attacker sees no new data — the reply
-carries no ciphertext, no plaintext digest, no paths (§4.3.1; the only digest on any reply is
-the pre-existing `Status.CipherDigest` of ciphertext, §4.3.1 bounded disclosure). Approval
-writes were already impossible for such an attacker before this change; nothing widens their
-position.
+the agent never holds owner-channel credentials. The agent channel receives no new data: the
+reply carries no ciphertext, plaintext digest, or keeper filesystem path; bounded approval
+records are authenticated owner-only metadata, not readable by an agent channel (§4.3.1).
+Approval writes were already impossible for such an attacker before this change; nothing widens
+their position.
 
 ### 6.3 Attacker who can talk to the owner socket
 
@@ -535,13 +544,12 @@ ops, or quotas are needed; the disk bound plus serialized dispatch contains the 
 Restated as a hard invariant for review: the reply for `approve_application` /
 `revoke_application` contains no vault ciphertext, no key material, no plaintext digest, no
 absolute keeper filesystem path, and no raw keeper error text — only the existing `error` /
-`metadata` / `status` projection of `Reply` (`[ssjack code]` internal/ownerpacket/types.go:139-146).
-`status` reflects the new approval state as metadata only.
+`metadata` / `status` projection of `Reply` (`[ssjack code]` internal/ownerpacket/types.go:117-127,157-164,323-358; internal/ownertui/model.go:378-392).
+No agent channel can read those records or any secret values. `status` reflects the new
+approval state as metadata only.
 
 **Bounded disclosure:** `Status.CipherDigest` — the sha256 of already-encrypted ciphertext —
-crosses the wire as it already does on every owner reply today (`[ssjack code]`
-internal/ownerpacket/types.go:114); the justification is in §4.3.1. This is the only digest
-that crosses; no plaintext digest is added.
+crosses the wire as it already does on every owner reply today (`[ssjack code]` internal/ownerpacket/types.go:129-134); the justification is in §4.3.1. Approvals add no other digest: approval-record hashes are application fingerprints in bounded owner-only metadata, not ciphertext or plaintext digests (`[ssjack code]` internal/ownerpacket/types.go:117-127,323-358).
 
 ## 7. Error-behaviour table
 
