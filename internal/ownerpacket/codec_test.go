@@ -337,11 +337,7 @@ func TestInvalidApprovalReplyReturnsProtocolErrorAndClosesClient(t *testing.T) {
 		{Name: "alpha", Path: "/opt/alpha", Hash: strings.Repeat("ab", 32)},
 		{Name: "alpha", Path: "/opt/beta", Hash: strings.Repeat("cd", 32)},
 	}}}
-	plaintext, err := json.Marshal(packet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := key.Seal(plaintext)
+	encoded, err := seal(key, packet)
 	if err != nil {
 		t.Fatal(err)
 	}
